@@ -138,6 +138,10 @@ export const FONT_FAMILY = {
   "Comic Shanns": 8,
   "Liberation Sans": 9,
   Assistant: 10,
+  Hannotate: 11,
+  "Patrick Hand": 12,
+  "Hannotate Bold": 13,
+  "Shantell Sans": 14,
 };
 
 // Segoe UI Emoji fails to properly fallback for some glyphs: ∞, ∫, ≠
