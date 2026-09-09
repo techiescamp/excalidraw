@@ -14,14 +14,17 @@ import type {
   ExcalidrawFreeDrawElement,
   ExcalidrawLinearElement,
   ExcalidrawTextElement,
+  FractionalIndex,
 } from "@excalidraw/element/types";
 import type { NormalizedZoomValue } from "@excalidraw/excalidraw/types";
 
 import { API } from "../helpers/api";
 import * as restore from "../../data/restore";
 import { getDefaultAppState } from "../../appState";
+import { serializeAsJSON } from "../../data/json";
 
 import type { ImportedDataState } from "../../data/types";
+import type { LibraryItem, LibraryItem_v1, LibraryItems } from "../../types";
 
 describe("restoreElements", () => {
   const mockSizeHelper = vi.spyOn(sizeHelpers, "isInvisiblySmallElement");
@@ -41,6 +44,50 @@ describe("restoreElements", () => {
 
     const restoredElements = restore.restoreElements(elements, null);
     expect(restoredElements.length).toBe(elements.length);
+  });
+
+  it.each([123, 0, null, undefined])(
+    "restores created=%s without substituting load or last-update time",
+    (created) => {
+      const element = {
+        ...API.createElement({
+          type: "rectangle",
+          index: "a0" as FractionalIndex,
+        }),
+        created,
+        updated: 456,
+      };
+      // JSON removes undefined, matching files from clients predating created.
+      const input: ImportedDataState = JSON.parse(
+        JSON.stringify({ elements: [element] }),
+      );
+      const restored = restore.restoreElements(input.elements, null);
+
+      expect(restored[0]).toMatchObject({
+        id: element.id,
+        created: created ?? null,
+        updated: 456,
+      });
+
+      const exported: ImportedDataState = JSON.parse(
+        serializeAsJSON(restored, getDefaultAppState(), {}, "local"),
+      );
+      expect(exported.elements?.[0]).toHaveProperty("created", created ?? null);
+      expect(restore.restoreElements(exported.elements, null)).toEqual(
+        restored,
+      );
+    },
+  );
+
+  it("preserves creation metadata when repairing duplicate element IDs", () => {
+    const element = API.createElement({ type: "rectangle", created: 123 });
+    const restored = restore.restoreElements(
+      [element, { ...element, created: null }],
+      null,
+    );
+
+    expect(restored.map(({ created }) => created)).toEqual([123, null]);
+    expect(restored[0].id).not.toBe(restored[1].id);
   });
 
   it("when imported data state is null it should return an empty array of elements", () => {
@@ -158,6 +205,86 @@ describe("restoreElements", () => {
       seed: expect.any(Number),
       versionNonce: expect.any(Number),
     });
+  });
+
+  it("should restore only valid freedraw points and keep pressures aligned", () => {
+    const freedrawElement = API.createElement({
+      type: "freedraw",
+      id: "id-freedraw-invalid-points",
+      points: [pointFrom(0, 0), pointFrom(10, 10)],
+    });
+
+    const restoredFreedraw = restore.restoreElements(
+      [
+        {
+          ...freedrawElement,
+          simulatePressure: false,
+          points: [
+            pointFrom(0, 0),
+            [Infinity, 10],
+            null,
+            pointFrom(20, 20),
+            [NaN, 30],
+            [40, null],
+          ],
+          pressures: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        } as any,
+      ],
+      null,
+    )[0] as ExcalidrawFreeDrawElement;
+
+    expect(restoredFreedraw.points).toEqual([
+      pointFrom(0, 0),
+      pointFrom(20, 20),
+    ]);
+    expect(restoredFreedraw.pressures).toEqual([0.1, 0.4]);
+  });
+
+  it("should restore freedraw stroke variability", () => {
+    const freedrawElement = API.createElement({
+      type: "freedraw",
+      id: "id-freedraw-mode",
+      points: [pointFrom(0, 0), pointFrom(10, 10)],
+    });
+
+    const [missing, bogusString, bogusNumber, valid, variable] =
+      restore.restoreElements(
+        [
+          { ...freedrawElement, id: "missing", strokeOptions: undefined },
+          {
+            ...freedrawElement,
+            id: "bogusString",
+            strokeOptions: { variability: "scribble" },
+          },
+          {
+            ...freedrawElement,
+            id: "bogusNumber",
+            strokeOptions: { variability: 42 },
+          },
+          {
+            ...freedrawElement,
+            id: "valid",
+            strokeOptions: { variability: "constant", streamline: 0.8 },
+          },
+          {
+            ...freedrawElement,
+            id: "variable",
+            strokeOptions: { variability: "variable", streamline: 0.8 },
+          },
+        ] as any,
+        null,
+      ) as ExcalidrawFreeDrawElement[];
+
+    expect(missing.strokeOptions?.variability).toBe("variable");
+    expect(bogusString.strokeOptions?.variability).toBe("variable");
+    expect(bogusNumber.strokeOptions?.variability).toBe("variable");
+    expect(valid.strokeOptions?.variability).toBe("constant");
+    expect(variable.strokeOptions?.variability).toBe("variable");
+    expect(missing.strokeOptions?.streamline).toBe(0.5);
+    expect(bogusString.strokeOptions?.streamline).toBe(0.5);
+    expect(bogusNumber.strokeOptions?.streamline).toBe(0.5);
+    expect(valid.strokeOptions?.streamline).toBe(0.8);
+    expect(variable.strokeOptions?.streamline).toBe(0.8);
   });
 
   it("should restore line and draw elements correctly", () => {
@@ -400,6 +527,99 @@ describe("restoreElements", () => {
     expect(restoredLine.points).toMatchObject(expectedLinePoints);
   });
 
+  it("should restore only valid linear points", () => {
+    const lineElement: any = API.createElement({
+      type: "line",
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 200,
+    });
+    const arrowElement: any = API.createElement({
+      type: "arrow",
+      width: 100,
+      height: 200,
+    });
+
+    lineElement.points = [
+      [2, 3],
+      null,
+      [Infinity, 4],
+      [5, 7],
+      [NaN, 8],
+      [9, null],
+    ];
+    arrowElement.points = [
+      [null, 0],
+      [Infinity, 4],
+    ];
+
+    const restoredElements = restore.restoreElements(
+      [lineElement, arrowElement],
+      null,
+    );
+    const restoredLine = restoredElements[0] as ExcalidrawLinearElement;
+    const restoredArrow = restoredElements[1] as ExcalidrawArrowElement;
+
+    expect(restoredLine.points).toEqual([pointFrom(0, 0), pointFrom(3, 4)]);
+    expect(restoredLine.x).toBe(12);
+    expect(restoredLine.y).toBe(23);
+    expect(restoredLine.width).toBe(3);
+    expect(restoredLine.height).toBe(4);
+
+    expect(restoredArrow.points).toEqual([
+      pointFrom(0, 0),
+      pointFrom(100, 200),
+    ]);
+  });
+
+  it("should mark extremely large linear elements as deleted to avoid freezing", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    // a degenerate line with astronomical coordinates (see #11497)
+    const hugeLine: any = API.createElement({
+      type: "line",
+      x: 419048829414166,
+      y: 8484,
+    });
+    hugeLine.points = [
+      [0, 0],
+      [-302985021938436, 0],
+      [-838097658820234, 30],
+    ];
+
+    const hugeArrow: any = API.createElement({ type: "arrow" });
+    hugeArrow.points = [
+      [0, 0],
+      [900000, 0],
+    ];
+
+    const normalLine: any = API.createElement({ type: "line" });
+    normalLine.points = [
+      [0, 0],
+      [100, 200],
+    ];
+
+    const [restoredLine, restoredArrow, restoredNormal] =
+      restore.restoreElements([hugeLine, hugeArrow, normalLine], null);
+
+    expect(restoredLine.isDeleted).toBe(true);
+    expect(restoredLine.width).toBe(100);
+    expect(restoredLine.height).toBe(100);
+
+    expect(restoredArrow.isDeleted).toBe(true);
+    expect(restoredArrow.width).toBe(100);
+    expect(restoredArrow.height).toBe(100);
+
+    expect(restoredNormal.isDeleted).toBe(false);
+    expect(restoredNormal.width).toBe(100);
+    expect(restoredNormal.height).toBe(200);
+
+    consoleError.mockRestore();
+  });
+
   it("when the number of points of a line is greater or equal 2", () => {
     const lineElement_0 = API.createElement({
       type: "line",
@@ -500,7 +720,9 @@ describe("restoreElements", () => {
   it("bump versions of local duplicate elements when supplied", () => {
     const rectangle = API.createElement({ type: "rectangle" }); // version=1
     const ellipse = API.createElement({ type: "ellipse" });
-    const rectangle_modified = newElementWith(rectangle, { isDeleted: true }); // version=2
+    const rectangle_modified = newElementWith(rectangle as ExcalidrawElement, {
+      isDeleted: true,
+    }); // version=2
 
     const restoredElements = restore.bumpElementVersions(
       restore.restoreElements([rectangle, ellipse], null),
@@ -561,6 +783,21 @@ describe("restoreElements", () => {
 });
 
 describe("restoreAppState", () => {
+  it("should restore freedraw mode app state values", () => {
+    expect(
+      restore.restoreAppState(
+        { currentItemStrokeVariability: "constant" } as any,
+        null,
+      ).currentItemStrokeVariability,
+    ).toBe("constant");
+    expect(
+      restore.restoreAppState(
+        { currentItemStrokeVariability: "variable" } as any,
+        null,
+      ).currentItemStrokeVariability,
+    ).toBe("variable");
+  });
+
   it("when appState is null it should return the local app state property", () => {
     const stubLocalAppState = getDefaultAppState();
     stubLocalAppState.cursorButton = "down";
@@ -607,6 +844,21 @@ describe("restoreAppState", () => {
     );
     expect(restoredAppState.cursorButton).toBe("up");
     expect(restoredAppState.name).toBe(stubImportedAppState.name);
+  });
+
+  it("should migrate legacy current item stroke width to stroke width key", () => {
+    const stubImportedAppState = {
+      ...getDefaultAppState(),
+      currentItemStrokeWidth: 4,
+      currentItemStrokeWidthKey: undefined,
+    } as any;
+
+    const restoredAppState = restore.restoreAppState(
+      stubImportedAppState,
+      null,
+    );
+
+    expect(restoredAppState.currentItemStrokeWidthKey).toBe("bold");
   });
 
   it("should restore with current app state when imported data state is undefined", () => {
@@ -767,6 +1019,41 @@ describe("restoreAppState", () => {
 });
 
 describe("repairing bindings", () => {
+  it.each(["arrow", "rectangle"] as const)(
+    "should repair bound %s label order and fractional index",
+    (containerType) => {
+      const container = API.createElement({
+        type: containerType,
+        id: "container",
+        index: "b2f" as ExcalidrawElement["index"],
+        boundElements: [{ type: "text", id: "label" }],
+      });
+      const label = API.createElement({
+        type: "text",
+        id: "label",
+        index: "b2a" as ExcalidrawElement["index"],
+        containerId: container.id,
+      });
+
+      const restoredElements = restore.restoreElements(
+        [label, container],
+        null,
+        {
+          repairBindings: true,
+        },
+      );
+
+      expect(restoredElements.map((element) => element.id)).toEqual([
+        container.id,
+        label.id,
+      ]);
+      expect(restoredElements[0].index).toBe(container.index);
+      expect(restoredElements[1].index! > restoredElements[0].index!).toBe(
+        true,
+      );
+    },
+  );
+
   it("should strip arrow binding if repair throws", () => {
     const container = API.createElement({
       type: "rectangle",
@@ -1060,4 +1347,49 @@ describe("repairing bindings", () => {
       }),
     ]);
   });
+});
+
+describe("restoreLibraryItems creation timestamps", () => {
+  it.each([1, 2])(
+    "accepts v%s input with missing creation metadata",
+    (version) => {
+      const { created, ...legacyElement } = API.createElement({
+        type: "rectangle",
+      });
+      // models library data persisted before `created` existed; the declared
+      // input type is a complete element, restore fills the field at runtime
+      const elements = [
+        legacyElement,
+        API.createElement({ type: "rectangle", created: 123 }),
+        API.createElement({ type: "rectangle", created: null }),
+      ] as unknown as LibraryItem["elements"];
+      const legacyItem: LibraryItem_v1 = elements;
+      const currentItem: LibraryItem = {
+        id: "library-item",
+        status: "unpublished",
+        created: 456,
+        elements,
+      };
+      const imported: ImportedDataState = {
+        libraryItems: version === 1 ? [legacyItem] : [currentItem],
+      };
+
+      const restoredItems: LibraryItems = restore.restoreLibraryItems(
+        imported.libraryItems,
+        "unpublished",
+      );
+
+      expect(restoredItems).toHaveLength(1);
+      expect(
+        restoredItems[0].elements.map((element) => element.created),
+      ).toEqual([null, 123, null]);
+      expect(restoredItems[0].elements.map((element) => element.id)).toEqual(
+        elements.map((element) => element.id),
+      );
+      expect(legacyElement).not.toHaveProperty("created");
+      if (version === 2) {
+        expect(restoredItems[0].created).toBe(456);
+      }
+    },
+  );
 });

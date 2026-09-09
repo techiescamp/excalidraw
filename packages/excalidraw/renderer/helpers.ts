@@ -1,7 +1,19 @@
-import { THEME, applyDarkModeFilter } from "@excalidraw/common";
+import { COLOR_WHITE, THEME, applyDarkModeFilter } from "@excalidraw/common";
 
 import type { StaticCanvasRenderConfig } from "../scene/types";
 import type { AppState, StaticCanvasAppState } from "../types";
+
+export const DEFAULT_SELECTION_COLOR = "#6965db";
+
+/**
+ * Returns the theme's selection color (`--color-selection`), read from the
+ * computed style of any element inside the editor container so that host
+ * overrides are respected. Falls back to the default when unavailable.
+ */
+export const getSelectionColor = (element: Element | null | undefined) =>
+  (element &&
+    getComputedStyle(element).getPropertyValue("--color-selection").trim()) ||
+  DEFAULT_SELECTION_COLOR;
 
 export const fillCircle = (
   context: CanvasRenderingContext2D,
@@ -53,21 +65,31 @@ export const bootstrapCanvas = ({
 
   // Paint background
   if (typeof viewBackgroundColor === "string") {
-    const hasTransparence =
-      viewBackgroundColor === "transparent" ||
-      viewBackgroundColor.length === 5 || // #RGBA
-      viewBackgroundColor.length === 9 || // #RRGGBBA
-      /(hsla|rgba)\(/.test(viewBackgroundColor);
-    if (hasTransparence) {
+    // An opaque fill repaints every pixel, so clearRect would be redundant.
+    // For anything else — transparency, or a value we can't be certain about
+    // (e.g. corrupted persisted state like "0000") — clear first so the
+    // previous frame can't bleed through.
+    //
+    // We skip opaque #RRGGBB and #RGB hex colors as a quick optimization.
+    const isOpaque = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(viewBackgroundColor);
+
+    if (!isOpaque) {
       context.clearRect(0, 0, normalizedWidth, normalizedHeight);
     }
-    context.save();
-    context.fillStyle =
-      theme === THEME.DARK
-        ? applyDarkModeFilter(viewBackgroundColor)
-        : viewBackgroundColor;
-    context.fillRect(0, 0, normalizedWidth, normalizedHeight);
-    context.restore();
+
+    if (viewBackgroundColor !== "transparent") {
+      context.save();
+      // The canvas silently ignores an invalid fillStyle, which would leave a
+      // stale color from a previous draw. Seed a sane default so corrupted
+      // values fall back to white instead of painting garbage.
+      context.fillStyle = COLOR_WHITE;
+      context.fillStyle = applyDarkModeFilter(
+        viewBackgroundColor,
+        theme === THEME.DARK,
+      );
+      context.fillRect(0, 0, normalizedWidth, normalizedHeight);
+      context.restore();
+    }
   } else {
     context.clearRect(0, 0, normalizedWidth, normalizedHeight);
   }

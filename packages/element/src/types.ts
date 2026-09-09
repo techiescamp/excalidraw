@@ -76,6 +76,11 @@ type _ExcalidrawElementBase = Readonly<{
   boundElements: readonly BoundElement[] | null;
   /** epoch (ms) timestamp of last element update */
   updated: number;
+  /** Client wall-clock creation time in epoch milliseconds; null if unknown.
+      Preserved for this element's lifetime, including edits and undo/redo,
+      and excluded from `ElementUpdate` (mutateElement / newElementWith).
+      Duplicating an element starts a new lifetime. Not an ordering clock. */
+  created: number | null;
   link: string | null;
   locked: boolean;
   customData?: Record<string, any>;
@@ -227,7 +232,7 @@ export type Ordered<TElement extends ExcalidrawElement> = TElement & {
 export type OrderedExcalidrawElement = Ordered<ExcalidrawElement>;
 
 export type NonDeleted<TElement extends ExcalidrawElement> = TElement & {
-  isDeleted: boolean;
+  isDeleted: false;
 };
 
 export type NonDeletedExcalidrawElement = NonDeleted<ExcalidrawElement>;
@@ -254,6 +259,13 @@ export type ExcalidrawTextElement = _ExcalidrawElementBase &
      *  with font size (using `getLineHeightInPx` helper).
      */
     lineHeight: number & { _brand: "unitlessLineHeight" };
+    /**
+     * Position of text bound to a linear element (such as an arrow),
+     * expressed as a normalized arc-length parameter (0–1) along the
+     * container's whole path. Independent of how the path is segmented,
+     * so it survives midpoint insertion and other geometry changes.
+     * */
+    labelPosition?: number | null;
   }>;
 
 export type ExcalidrawBindableElement =
@@ -384,12 +396,20 @@ export type ExcalidrawElbowArrowElement = Merge<
   }
 >;
 
+export type StrokeVariability = "variable" | "constant";
+
+export type StrokeOptions = Readonly<{
+  variability: StrokeVariability;
+  streamline: number;
+}>;
+
 export type ExcalidrawFreeDrawElement = _ExcalidrawElementBase &
   Readonly<{
     type: "freedraw";
     points: readonly LocalPoint[];
     pressures: readonly number[];
     simulatePressure: boolean;
+    strokeOptions: StrokeOptions;
   }>;
 
 export type FileId = string & { _brand: "FileId" };
@@ -436,6 +456,10 @@ export type NonDeletedSceneElementsMap = Map<
 export type ElementsMapOrArray =
   | readonly ExcalidrawElement[]
   | Readonly<ElementsMap>;
+
+export type NonDeletedElementsMapOrArray =
+  | readonly NonDeletedExcalidrawElement[]
+  | Readonly<NonDeletedElementsMap | NonDeletedSceneElementsMap>;
 
 export type ExcalidrawLinearElementSubType =
   | "line"
