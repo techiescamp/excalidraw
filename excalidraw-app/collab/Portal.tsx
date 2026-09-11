@@ -1,3 +1,4 @@
+import { getWorkspacePermissions } from "../data/workspaceScene";
 import { CaptureUpdateAction } from "@excalidraw/excalidraw";
 import { trackEvent } from "@excalidraw/excalidraw/analytics";
 import { encryptData } from "@excalidraw/excalidraw/data/encryption";
@@ -87,6 +88,9 @@ class Portal {
     volatile: boolean = false,
     roomId?: string,
   ) {
+    if (getWorkspacePermissions()?.["drawing.edit"] === false) {
+      return;
+    }
     if (this.isOpen()) {
       const json = JSON.stringify(data);
       const encoded = new TextEncoder().encode(json);
@@ -102,6 +106,9 @@ class Portal {
   }
 
   queueFileUpload = throttle(async () => {
+    if (getWorkspacePermissions()?.["drawing.edit"] === false) {
+      return;
+    }
     try {
       await this.collab.fileManager.saveFiles({
         elements: this.collab.excalidrawAPI.getSceneElementsIncludingDeleted(),

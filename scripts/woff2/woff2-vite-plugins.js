@@ -1,13 +1,23 @@
 // define `EXCALIDRAW_ASSET_PATH` as a SSOT
-const OSS_FONTS_CDN = "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/";
+const DEFAULT_OSS_FONTS_CDN =
+  "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/";
 const OSS_FONTS_FALLBACK = "/";
 
 /**
  * Custom vite plugin for auto-prefixing `EXCALIDRAW_ASSET_PATH` woff2 fonts in `excalidraw-app`.
  *
+ * @param {string} [fontsCdn] Base URL to serve fonts from. Self-hosted deployments
+ *   pass "/" (via VITE_APP_FONTS_CDN) so fonts come from the same origin instead of
+ *   the upstream CDN, which does not carry locally-added font families.
  * @returns {import("vite").PluginOption}
  */
-module.exports.woff2BrowserPlugin = () => {
+module.exports.woff2BrowserPlugin = (fontsCdn) => {
+  const OSS_FONTS_CDN = fontsCdn || DEFAULT_OSS_FONTS_CDN;
+  // Vite emits the Assistant faces referenced by fonts.css at the build root,
+  // not under fonts/Assistant/. Upstream only hits that path on its CDN, so a
+  // self-hosted build must point at where the files actually land.
+  const selfHosted = Boolean(fontsCdn);
+  const ASSISTANT = `${OSS_FONTS_CDN}fonts/Assistant/`;
   let isDev;
 
   return {
@@ -24,9 +34,9 @@ module.exports.woff2BrowserPlugin = () => {
 
       @font-face {
         font-family: "Assistant";
-        src: url(${OSS_FONTS_CDN}fonts/Assistant/Assistant-Regular.woff2)
-            format("woff2"),
-          url(./Assistant-Regular.woff2) format("woff2");
+        src: ${selfHosted
+          ? `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2")`
+          : `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2"), url(./Assistant-Regular.woff2) format("woff2")`};
         font-weight: 400;
         style: normal;
         display: swap;
@@ -34,9 +44,9 @@ module.exports.woff2BrowserPlugin = () => {
 
       @font-face {
         font-family: "Assistant";
-        src: url(${OSS_FONTS_CDN}fonts/Assistant/Assistant-Medium.woff2)
-            format("woff2"),
-          url(./Assistant-Medium.woff2) format("woff2");
+        src: ${selfHosted
+          ? `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2")`
+          : `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2"), url(./Assistant-Medium.woff2) format("woff2")`};
         font-weight: 500;
         style: normal;
         display: swap;
@@ -44,9 +54,9 @@ module.exports.woff2BrowserPlugin = () => {
 
       @font-face {
         font-family: "Assistant";
-        src: url(${OSS_FONTS_CDN}fonts/Assistant/Assistant-SemiBold.woff2)
-            format("woff2"),
-          url(./Assistant-SemiBold.woff2) format("woff2");
+        src: ${selfHosted
+          ? `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2")`
+          : `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2"), url(./Assistant-SemiBold.woff2) format("woff2")`};
         font-weight: 600;
         style: normal;
         display: swap;
@@ -54,9 +64,9 @@ module.exports.woff2BrowserPlugin = () => {
 
       @font-face {
         font-family: "Assistant";
-        src: url(${OSS_FONTS_CDN}fonts/Assistant/Assistant-Bold.woff2)
-            format("woff2"),
-          url(./Assistant-Bold.woff2) format("woff2");
+        src: ${selfHosted
+          ? `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2")`
+          : `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2"), url(./Assistant-Bold.woff2) format("woff2")`};
         font-weight: 700;
         style: normal;
         display: swap;
@@ -92,7 +102,7 @@ module.exports.woff2BrowserPlugin = () => {
       />
       <link
         rel="preload"
-        href="${OSS_FONTS_CDN}fonts/Assistant/Assistant-SemiBold.woff2"
+        href="${ASSISTANT}Assistant-SemiBold.woff2"
         as="font"
         type="font/woff2"
         crossorigin="anonymous"

@@ -139,7 +139,7 @@ export default defineConfig(({ mode }) => {
         // its static in public folder
         generateRobotsTxt: false,
       }),
-      woff2BrowserPlugin(),
+      woff2BrowserPlugin(envVars.VITE_APP_FONTS_CDN),
       react(),
       checker({
         typescript: true,
@@ -162,6 +162,23 @@ export default defineConfig(({ mode }) => {
         },
 
         workbox: {
+          // The SPA's navigation fallback otherwise claims every path under "/",
+          // including the workspace dashboard and the API, and serves them the
+          // editor shell from cache.
+          // The editor lives at /editor. Every other path is an application
+          // page served by the API, so the SPA's navigation fallback must not
+          // answer them from cache.
+          navigateFallbackDenylist: [
+            /^\/$/,
+            /^\/login/,
+            /^\/dashboard/,
+            /^\/admin/,
+            /^\/account/,
+            /^\/forgot-password/,
+            /^\/reset-password/,
+            /^\/set-password/,
+            /^\/api\//,
+          ],
           // don't precache fonts, locales and separate chunks
           globIgnores: [
             "fonts.css",

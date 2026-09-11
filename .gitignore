@@ -27,3 +27,14 @@ dev-dist
 html
 meta*.json
 .claude
+
+# planning notes, specs and research (not part of the application)
+BUILD_PROGRESS.md
+deploy-spec.md
+excalidraw-auth-admin-prompt.md
+excalidraw-collections-spec.md
+excalidraw-plus-audit.md
+*-spec.md
+
+# the API deploy runs `npm ci`, which requires its lockfile
+!server/package-lock.json

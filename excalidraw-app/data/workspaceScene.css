@@ -1,0 +1,374 @@
+.workspace-save-status a {
+  color: #6965db;
+  text-decoration: none;
+}
+.workspace-scenes-button {
+  background: #f1efff;
+  border: 0;
+  border-radius: 5px;
+  color: #5753b8;
+  font: inherit;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.workspace-dialog {
+  border: 1px solid #e4e1ed;
+  border-radius: 12px;
+  padding: 28px;
+  width: 450px;
+  max-width: calc(100vw - 32px);
+  background: #fff;
+  color: #292733;
+  font: 16px Assistant, system-ui;
+  box-shadow: 0 20px 80px #17132930;
+}
+.workspace-dialog::backdrop {
+  background: #15102640;
+}
+.workspace-dialog h2 {
+  font-size: 22px;
+  margin: 0 0 24px;
+}
+.workspace-dialog label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.workspace-dialog input {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid #d8d5e2;
+  border-radius: 7px;
+}
+.workspace-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.workspace-dialog button {
+  padding: 9px 16px;
+  border: 1px solid #e4e1ed;
+  background: white;
+  color: #292733;
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-dialog button.primary {
+  background: #6965db;
+  color: white;
+  border-color: #6965db;
+}
+.workspace-dialog [role="alert"] {
+  color: #b52f40;
+  font-size: 14px;
+}
+.workspace-scenes-panel {
+  position: fixed;
+  top: 64px;
+  bottom: 70px;
+  left: 12px;
+  width: 244px;
+  z-index: 1001;
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #292733);
+  border: 1px solid #dcd8e8;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 6px 24px #24203918;
+  font: 14px Assistant, system-ui;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.workspace-scenes-panel h2 {
+  font: 600 18px Assistant, system-ui;
+  margin: 0;
+  padding-right: 22px;
+}
+.workspace-scenes-panel > .workspace-panel-close {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  color: inherit;
+  cursor: pointer;
+}
+.workspace-scenes-panel nav {
+  flex: 1;
+  overflow: auto;
+}
+.workspace-scenes-panel a {
+  display: block;
+  padding: 10px;
+  border-radius: 7px;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-scenes-panel nav a:hover,
+.workspace-scenes-panel a[aria-current] {
+  background: #eeecff;
+  color: #6965db;
+}
+.workspace-scenes-panel > button:not(.workspace-panel-close) {
+  padding: 9px;
+  border: 1px dashed #c7c2e7;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.workspace-dialog :focus-visible,
+.workspace-scenes-panel :focus-visible {
+  outline: 2px solid #6965db;
+  outline-offset: 2px;
+}
+.workspace-save-status {
+  position: fixed;
+  top: 16px;
+  left: 62px;
+  z-index: 1000;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--island-bg-color, #fff);
+  color: var(--text-primary-color, #292733);
+  font: 14px Assistant, system-ui;
+  height: 36px;
+}
+.workspace-save-status > a {
+  display: none;
+}
+.workspace-save-status > [role="status"] {
+  position: fixed;
+  bottom: 22px;
+  right: 64px;
+  font-size: 11px;
+  color: #777382;
+}
+.workspace-save-status.has-error {
+  top: auto;
+  bottom: 64px;
+  left: 50% !important;
+  transform: translateX(-50%);
+  height: auto;
+  max-width: 90vw;
+  flex-wrap: wrap;
+  padding: 12px;
+  border: 1px solid #d66;
+  border-radius: 8px;
+}
+.workspace-save-status.has-error > [role="status"] {
+  position: static;
+  color: #b52f40;
+}
+.workspace-sidebar-open .workspace-save-status {
+  left: 334px;
+}
+.workspace-sidebar-open #root {
+  margin-left: 272px;
+  width: calc(100% - 272px);
+}
+.workspace-scenes-panel {
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: 260px;
+  border-color: #efedf5;
+  box-shadow: none;
+  padding: 16px 10px;
+  border-radius: 12px;
+  gap: 14px;
+}
+.workspace-scenes-panel h2 {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 6px;
+}
+.workspace-panel-name {
+  font-size: 17px;
+  padding: 10px 28px 20px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-scenes-panel input {
+  font: inherit;
+  border: 0;
+  background: #f6f5fa;
+  border-radius: 7px;
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  color: #292733;
+}
+.workspace-scenes-panel nav a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 8px;
+  min-height: 52px;
+}
+.workspace-scenes-panel nav a img {
+  width: 42px;
+  height: 42px;
+  background: white;
+  object-fit: contain;
+  border-radius: 2px;
+}
+.workspace-scenes-panel nav a span {
+  min-width: 0;
+}
+.workspace-scenes-panel nav a strong {
+  display: block;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.workspace-scenes-panel nav a small {
+  display: block;
+  font-size: 11px;
+  margin-top: 5px;
+  opacity: 0.7;
+}
+.workspace-scenes-panel nav a[aria-current] {
+  background: #7262d6;
+  color: white;
+}
+.workspace-panel-account {
+  border-top: 1px solid #efedf5;
+  padding: 16px 8px !important;
+  font-weight: 600;
+}
+.workspace-scenes-panel nav [hidden] {
+  display: none;
+}
+@media (max-width: 899px) {
+  .workspace-sidebar-open #root {
+    margin-left: 0;
+    width: 100%;
+  }
+  .workspace-sidebar-open .workspace-save-status {
+    left: 62px;
+  }
+  .workspace-scenes-panel {
+    box-shadow: 0 8px 32px #24203922;
+    z-index: 1002;
+  }
+  .workspace-save-status {
+    top: 64px;
+    left: 16px;
+  }
+  .workspace-sidebar-open .workspace-save-status {
+    left: 16px;
+  }
+  .workspace-save-status > .workspace-scene-title {
+    max-width: 180px !important;
+  }
+  .workspace-save-status > [role="status"] {
+    bottom: 66px;
+    right: 16px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1199px) {
+  .workspace-sidebar-open .excalidraw .HintViewer {
+    margin-top: 2.5rem;
+  }
+  .workspace-sidebar-open .workspace-save-status {
+    top: 64px;
+    left: 288px;
+  }
+  .workspace-sidebar-open .workspace-save-status .workspace-scene-title {
+    max-width: 180px !important;
+  }
+}
+
+.workspace-editor a[href*="/blog/end-to-end-encryption"] {
+  display: none;
+}
+
+.workspace-scenes-panel {
+  box-sizing: border-box;
+  z-index: 2;
+}
+.workspace-save-status {
+  z-index: 3;
+}
+.workspace-editor .excalidraw-modal-container {
+  z-index: 1005 !important;
+}
+
+/* one-click way back, visible whenever the scene list is closed */
+.workspace-save-status > a.workspace-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 22px;
+  line-height: 1;
+  color: #5753b8;
+  background: #f1efff;
+}
+.workspace-save-status > a.workspace-back:hover {
+  background: #e6e3ff;
+}
+.workspace-sidebar-open .workspace-save-status > a.workspace-back {
+  display: none;
+}
+
+/* title renamed in place, as in Excalidraw+ */
+.workspace-scene-title-input {
+  font: inherit;
+  color: inherit;
+  width: 220px;
+  max-width: 40vw;
+  padding: 4px 8px;
+  border: 1px solid #6965db;
+  border-radius: 6px;
+  background: var(--island-bg-color, #fff);
+  outline: none;
+  box-shadow: 0 0 0 3px #6965db26;
+}
+
+/* "‹ Collection name" header in the scene list */
+.workspace-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.workspace-panel-header h2 {
+  margin: 0 !important;
+  flex: 1;
+  min-width: 0;
+}
+.workspace-scenes-panel a.workspace-panel-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 22px;
+  line-height: 1;
+}
+.workspace-scenes-panel a.workspace-panel-back:hover {
+  background: #eeecff;
+  color: #6965db;
+}

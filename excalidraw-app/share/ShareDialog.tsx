@@ -26,6 +26,7 @@ import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
 
+const workspaceSharing = Boolean(import.meta.env.VITE_APP_API_URL);
 type OnExportToBackend = () => void;
 type ShareDialogType = "share" | "collaborationOnly";
 
@@ -153,9 +154,15 @@ const ActiveRoomDialog = ({
           >
             🔒{" "}
           </span>
-          {t("roomDialog.desc_privacy")}
+          {workspaceSharing
+            ? "Only signed-in people with access to this scene can join. Workspace and team permissions still apply."
+            : t("roomDialog.desc_privacy")}
         </p>
-        <p>{t("roomDialog.desc_exitSession")}</p>
+        <p>
+          {workspaceSharing
+            ? "Leaving disconnects this tab. The drawing stays saved in your workspace, and other collaborators can continue."
+            : t("roomDialog.desc_exitSession")}
+        </p>
       </div>
 
       <div className="ShareDialog__active__actions">
@@ -191,7 +198,9 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
       <div className="ShareDialog__picker__description">
         <div style={{ marginBottom: "1em" }}>{t("roomDialog.desc_intro")}</div>
-        {t("roomDialog.desc_privacy")}
+        {workspaceSharing
+          ? "Only signed-in people with access to this scene can join. Workspace and team permissions still apply."
+          : t("roomDialog.desc_privacy")}
       </div>
 
       <div className="ShareDialog__picker__button">
@@ -206,7 +215,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         />
       </div>
 
-      {props.type === "share" && (
+      {props.type === "share" && !workspaceSharing && (
         <div className="ShareDialog__separator">
           <span>{t("shareDialog.or")}</span>
         </div>
@@ -218,7 +227,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
     <>
       {startCollabJSX}
 
-      {props.type === "share" && (
+      {props.type === "share" && !workspaceSharing && (
         <>
           <div className="ShareDialog__picker__header">
             {t("exportDialog.link_title")}

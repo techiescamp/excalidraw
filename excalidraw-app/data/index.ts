@@ -1,3 +1,4 @@
+import { workspaceEditorLocation } from "./workspaceScene";
 import {
   compressData,
   decompressData,
@@ -160,7 +161,8 @@ export const getCollaborationLink = (data: {
   roomId: string;
   roomKey: string;
 }) => {
-  return `${window.location.origin}${window.location.pathname}#room=${data.roomId},${data.roomKey}`;
+  const location = workspaceEditorLocation() || window.location;
+  return `${location.origin}${location.pathname}${location.search}#room=${data.roomId},${data.roomKey}`;
 };
 
 /**

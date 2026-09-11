@@ -32,6 +32,15 @@ import type { ValueOf } from "@excalidraw/common/utility-types";
 import type { Scene } from "@excalidraw/element";
 
 import { CascadiaFontFaces } from "./Cascadia";
+import { DMSansFontFaces } from "./DMSans";
+import { IBMPlexSansFontFaces } from "./IBMPlexSans";
+import { InterFontFaces } from "./Inter";
+import { ManropeFontFaces } from "./Manrope";
+import { NunitoSansFontFaces } from "./NunitoSans";
+import { PlaypenSansFontFaces } from "./PlaypenSans";
+import { PlusJakartaSansFontFaces } from "./PlusJakartaSans";
+import { RobotoFontFaces } from "./Roboto";
+import { SourceSans3FontFaces } from "./SourceSans3";
 import { ComicShannsFontFaces } from "./ComicShanns";
 import { EmojiFontFaces } from "./Emoji";
 import { ExcalidrawFontFace } from "./ExcalidrawFontFace";
@@ -412,6 +421,15 @@ export class Fonts {
     init("Hannotate Bold", ...HannotateBoldFontFaces);
     init("Patrick Hand", ...PatrickHandFontFaces);
     init("Shantell Sans", ...ShantellSansFontFaces);
+    init("Inter", ...InterFontFaces);
+    init("Roboto", ...RobotoFontFaces);
+    init("IBM Plex Sans", ...IBMPlexSansFontFaces);
+    init("Source Sans 3", ...SourceSans3FontFaces);
+    init("Manrope", ...ManropeFontFaces);
+    init("DM Sans", ...DMSansFontFaces);
+    init("Plus Jakarta Sans", ...PlusJakartaSansFontFaces);
+    init("Nunito Sans", ...NunitoSansFontFaces);
+    init("Playpen Sans", ...PlaypenSansFontFaces);
 
     // fallback font faces
     init(CJK_HAND_DRAWN_FALLBACK_FONT, ...XiaolaiFontFaces);

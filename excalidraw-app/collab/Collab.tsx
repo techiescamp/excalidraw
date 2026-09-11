@@ -1,4 +1,10 @@
 import {
+  bindWorkspaceRoom,
+  getWorkspacePermissions,
+  getWorkspaceSceneId,
+  workspaceEditorWindow,
+} from "../data/workspaceScene";
+import {
   CaptureUpdateAction,
   getSceneVersion,
   restoreElements,
@@ -323,6 +329,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   saveCollabRoomToFirebase = async (
     syncableElements: readonly SyncableExcalidrawElement[],
   ) => {
+    if (getWorkspacePermissions()?.["drawing.edit"] === false) {
+      return;
+    }
     syncableElements = cloneJSON(syncableElements);
     try {
       const storedElements = await saveToFirebase(
@@ -381,6 +390,16 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
 
+    const ownerWindow = workspaceEditorWindow();
+    if (keepRemoteState && ownerWindow && getWorkspaceSceneId()) {
+      this.destroySocketClient();
+      ownerWindow.history.replaceState(
+        {},
+        APP_NAME,
+        ownerWindow.location.pathname + ownerWindow.location.search,
+      );
+      return;
+    }
     if (!keepRemoteState) {
       LocalData.fileStorage.reset();
       this.destroySocketClient();
@@ -499,6 +518,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ({ roomId, roomKey } = existingRoomLinkData);
     } else {
       ({ roomId, roomKey } = await generateCollaborationLinkData());
+      ({ roomId, roomKey } = await bindWorkspaceRoom(roomId, roomKey));
       window.history.pushState(
         {},
         APP_NAME,
@@ -533,6 +553,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       this.portal.socket = this.portal.open(
         socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
           transports: ["websocket", "polling"],
+          withCredentials: true,
         }),
         roomId,
         roomKey,

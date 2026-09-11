@@ -73,9 +73,18 @@ const getFontFamilyIcon = (fontFamily: FontFamilyValues): JSX.Element => {
   switch (fontFamily) {
     case FONT_FAMILY.Excalifont:
     case FONT_FAMILY.Virgil:
+    case FONT_FAMILY["Playpen Sans"]:
       return FreedrawIcon;
     case FONT_FAMILY.Nunito:
     case FONT_FAMILY.Helvetica:
+    case FONT_FAMILY.Inter:
+    case FONT_FAMILY.Roboto:
+    case FONT_FAMILY["IBM Plex Sans"]:
+    case FONT_FAMILY["Source Sans 3"]:
+    case FONT_FAMILY.Manrope:
+    case FONT_FAMILY["DM Sans"]:
+    case FONT_FAMILY["Plus Jakarta Sans"]:
+    case FONT_FAMILY["Nunito Sans"]:
       return FontFamilyNormalIcon;
     case FONT_FAMILY["Lilita One"]:
       return FontFamilyHeadingIcon;

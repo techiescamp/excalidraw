@@ -13,7 +13,15 @@ export const AppWelcomeScreen: React.FC<{
   const { t } = useI18n();
   let headingContent;
 
-  if (isExcalidrawPlusSignedUser) {
+  if (import.meta.env.VITE_APP_API_URL) {
+    headingContent = (
+      <>
+        Your ideas, all in one place.
+        <br />
+        Changes save automatically to your workspace.
+      </>
+    );
+  } else if (isExcalidrawPlusSignedUser) {
     headingContent = t("welcomeScreen.app.center_heading_plus")
       .split(/(Excalidraw\+)/)
       .map((bit, idx) => {
@@ -64,7 +72,14 @@ export const AppWelcomeScreen: React.FC<{
               onSelect={() => props.onCollabDialogOpen()}
             />
           )}
-          {!isExcalidrawPlusSignedUser && (
+          <WelcomeScreen.Center.MenuItemLink
+            href="/dashboard/"
+            shortcut={null}
+            icon={loginIcon}
+          >
+            Dashboard
+          </WelcomeScreen.Center.MenuItemLink>
+          {!isExcalidrawPlusSignedUser && import.meta.env.VITE_APP_PLUS_LP && (
             <WelcomeScreen.Center.MenuItemLink
               href={`${
                 import.meta.env.VITE_APP_PLUS_LP

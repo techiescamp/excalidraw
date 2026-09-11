@@ -142,6 +142,15 @@ export const FONT_FAMILY = {
   "Patrick Hand": 12,
   "Hannotate Bold": 13,
   "Shantell Sans": 14,
+  Inter: 15,
+  Roboto: 16,
+  "IBM Plex Sans": 17,
+  "Source Sans 3": 18,
+  Manrope: 19,
+  "DM Sans": 20,
+  "Plus Jakarta Sans": 21,
+  "Nunito Sans": 22,
+  "Playpen Sans": 23,
 };
 
 // Segoe UI Emoji fails to properly fallback for some glyphs: ∞, ∫, ≠
