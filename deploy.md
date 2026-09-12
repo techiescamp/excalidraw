@@ -23,14 +23,14 @@ This document describes the procedure that was actually executed on
 2. [Before you start](#2-before-you-start)
 3. [Base system and hardening](#3-base-system-and-hardening)
 4. [Runtimes](#4-runtimes)
-5. [PostgreSQL and the schema](#5-postgresql-and-the-schema)
+5. [PostgreSQL, schema and migrations](#5-postgresql-and-the-schema)
 6. [Object storage — DigitalOcean Spaces](#6-object-storage--digitalocean-spaces)
 7. [The API service](#7-the-api-service)
-8. [The collaboration server](#8-the-collaboration-server)
+8. [Collaboration](#8-collaboration)
 9. [Building the frontend](#9-building-the-frontend)
 10. [The dashboard](#10-the-dashboard)
 11. [nginx and TLS](#11-nginx-and-tls)
-12. [First admin and passwords](#12-first-admin-and-passwords)
+12. [First administrator and passwords](#12-first-administrator-and-passwords)
 13. [Verification](#13-verification)
 14. [Backups](#14-backups)
 15. [Upgrades and rollback](#15-upgrades-and-rollback)
@@ -43,35 +43,42 @@ This document describes the procedure that was actually executed on
 ```
                      ┌──────────────────────────────────┐
    browser ──────────┤ nginx (443, TLS)                 │
-                     │  /            → editor SPA       │
-                     │  /dashboard/  → workspace UI     │
-                     │  /api/        → :4000 API        │
-                     │  /socket.io/  → :3002 collab     │
-                     └──────┬─────────────┬─────────────┘
-                            │             │
-                ┌───────────▼──┐    ┌─────▼─────────────┐
-                │ excalidraw-  │    │ excalidraw-room   │
-                │ api  :4000   │    │ :3002 (socket.io) │
-                └──┬────────┬──┘    └───────────────────┘
-                   │        │
-          ┌────────▼─┐   ┌──▼──────────────────┐
-          │ Postgres │   │ Spaces (or local    │
-          │ 16       │   │ disk until keys set)│
-          └──────────┘   └─────────────────────┘
+                     │  /editor      → editor build     │
+                     │  /assets /fonts → static files   │
+                     │  everything else → :4000         │
+                     └──────────────┬───────────────────┘
+                                    │
+                      ┌─────────────▼──────────────────┐
+                      │ excalidraw-api  :4000          │
+                      │  • login, dashboard, admin     │
+                      │  • REST API under /api         │
+                      │  • socket.io collaboration     │
+                      │  • serves dashboard/ statics   │
+                      └───────┬──────────────┬─────────┘
+                              │              │
+                   ┌──────────▼──┐   ┌───────▼─────────────┐
+                   │ PostgreSQL  │   │ Spaces (or local    │
+                   │ 16          │   │ disk until keys set)│
+                   └─────────────┘   └─────────────────────┘
 ```
 
 | Unit | Runs as | Bind | Purpose |
 |---|---|---|---|
-| `nginx` | `www-data` | `0.0.0.0:80,443` | TLS, static files, reverse proxy |
-| `excalidraw-api` | `excalidraw` | `127.0.0.1:4000` | accounts, workspaces, collections, scenes, storage |
-| `excalidraw-room` | `excalidraw` | `*:3002` | live collaboration relay |
-| `postgresql` | `postgres` | `127.0.0.1:5432` | metadata and permissions |
+| `nginx` | `www-data` | `0.0.0.0:80,443` | TLS, the editor build, reverse proxy |
+| `excalidraw-api` | `excalidraw` | `127.0.0.1:4000` | application, API, collaboration, dashboard statics |
+| `postgresql` | `postgres` | `127.0.0.1:5432` | accounts, workspaces, collections, scene metadata |
 
-Upstream Excalidraw stores collaborative scenes in Firebase. This deployment
-replaces that with the API above; the change is a **fork-local modification**
-that must be re-applied after every upstream rebase (§9.3).
+**Collaboration runs inside the API process** (socket.io on the same port),
+authenticated with the caller's session. There is no separate room service:
+the upstream `excalidraw-room` project is not used, and nginx forwards
+`/socket.io/` to `:4000`.
 
----
+The editor is served at **`/editor`**. Every other path — `/`, `/login`,
+`/dashboard`, `/admin/*`, `/account/*`, `/api/*` — is answered by the API.
+
+Upstream Excalidraw stores scenes in Firebase. This deployment replaces that
+with the API above; the change is a **fork-local modification** that must be
+re-applied after every upstream rebase (§9.2).
 
 ## 2. Before you start
 
@@ -273,41 +280,47 @@ ssh -i $KEY deploy@$HOST '
 '
 ```
 
-### 5.3 Schema
+### 5.3 Schema and migrations
 
-The schema lives in the repo at [`server/schema.sql`](server/schema.sql) and
-[`server/migration-002-collections.sql`](server/migration-002-collections.sql).
-Copy and apply them:
+Migrations live in [`server/`](server/) and are applied by
+[`server/bin/migrate.mjs`](server/bin/migrate.mjs). The runner is transactional,
+takes an advisory lock, records what it applied in an `app_migrations` table,
+and **adopts** a schema that was already created by hand instead of failing.
+
+Copy the server tree first (§7.1), then run it. It must run as a database
+superuser over the local socket, because it alters tables owned by `postgres`:
 
 ```bash
-scp -i $KEY server/schema.sql server/migration-002-collections.sql deploy@$HOST:/tmp/
 ssh -i $KEY deploy@$HOST '
-  sudo -u postgres psql -d excalidraw -q -f /tmp/schema.sql
-  sudo -u postgres psql -d excalidraw -q -f /tmp/migration-002-collections.sql
-  rm -f /tmp/schema.sql /tmp/migration-002-collections.sql
-  sudo -u postgres psql -d excalidraw -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='"'"'public'"'"';"
+  cd /opt/excalidraw/api
+  sudo -u postgres env "DATABASE_URL=postgresql://postgres@/excalidraw?host=/var/run/postgresql" \
+    node bin/migrate.mjs
+  sudo -u postgres psql -d excalidraw -q -c \
+    "GRANT ALL ON ALL TABLES IN SCHEMA public TO excalidraw;
+     GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO excalidraw;"
 '
 ```
 
-Expect **13 tables**:
+> The `GRANT` is not optional. Tables created by the superuser are unusable by
+> the application role otherwise, and every request that touches a new table
+> fails with `permission denied`.
 
-| Table | Holds |
+Expect **8 applied migrations and 28 tables**:
+
+| Migration | Adds |
 |---|---|
-| `users` | accounts, argon2 hashes, superadmin flag |
-| `workspaces`, `workspace_members`, `workspace_invites` | teams and the user-add flow |
-| `collections` | the dashboard's Collections sidebar |
-| `scenes` | drawing metadata, `s3_key` pointer, `collection_id` |
-| `scene_versions` | one immutable row per save |
-| `scene_permissions` | per-user **edit / view** grants |
-| `share_links`, `shared_scenes` | link sharing |
-| `scene_files` | image assets |
-| `refresh_tokens`, `audit_log` | sessions and audit trail |
+| `schema.sql` | users, workspaces, scenes, permissions, audit log |
+| `migration-002-collections.sql` | collections |
+| `migration-003-settings.sql` | `app_settings` (runtime storage configuration) |
+| `migration-004-username.sql` | usernames replace e-mail identity |
+| `migration-005-private-workspaces.sql` | sessions, password tokens, reset requests, permission overrides, collection↔drawing membership |
+| `migration-006-workspace-experience.sql` | scene visits, workspace activity |
+| `migration-007-team-access.sql` | teams and per-collection access |
+| `migration-008-collaboration-keys.sql` | encrypted collaboration room keys |
 
 **Effective permission** on a scene resolves in this order: superadmin → owner →
-explicit `scene_permissions` row → workspace role (`owner`/`admin`/`editor` =
-edit, `viewer` = view) → otherwise 403.
+explicit `scene_permissions` row → team/workspace role → otherwise 403.
 
----
 
 ## 6. Object storage — DigitalOcean Spaces
 
@@ -389,20 +402,27 @@ incomplete multipart uploads aborted after 7).
 
 ### 7.1 Install
 
-The service source is in the repo at [`server/`](server/).
+The service is the [`server/`](server/) directory of this repository. It is
+deployed **flat** into `/opt/excalidraw/api` — `server.js` at the top with
+`lib/`, `bin/` and the `.sql` files beside it — because the code resolves the
+dashboard as `../dashboard`.
 
 ```bash
-scp -i $KEY server/server.js server/package.json deploy@$HOST:/tmp/
-scp -i $KEY server/bin/set-password.mjs deploy@$HOST:/tmp/
+rsync -az --exclude node_modules --exclude test \
+  server/server.js server/package.json server/package-lock.json \
+  server/lib server/bin server/*.sql \
+  -e "ssh -i $KEY" deploy@$HOST:/tmp/api/
+
 ssh -i $KEY deploy@$HOST '
-  sudo install -o excalidraw -g excalidraw -m 644 /tmp/server.js  /opt/excalidraw/api/src/server.js
-  sudo install -o excalidraw -g excalidraw -m 644 /tmp/package.json /opt/excalidraw/api/package.json
-  sudo install -o excalidraw -g excalidraw -m 755 /tmp/set-password.mjs /opt/excalidraw/api/bin/set-password.mjs
-  rm -f /tmp/server.js /tmp/package.json /tmp/set-password.mjs
+  sudo rsync -a /tmp/api/ /opt/excalidraw/api/ && rm -rf /tmp/api
+  sudo chown -R excalidraw:excalidraw /opt/excalidraw/api
   cd /opt/excalidraw/api
-  sudo -u excalidraw env HOME=/opt/excalidraw npm i --no-fund --no-audit
+  sudo -u excalidraw env HOME=/opt/excalidraw npm ci --no-fund --no-audit
 '
 ```
+
+`npm ci` needs `server/package-lock.json`, which is committed for this reason —
+the repository's `.gitignore` otherwise excludes every lockfile.
 
 ### 7.2 Configuration
 
@@ -421,14 +441,12 @@ DATABASE_URL=postgres://excalidraw:\${DB_PASS}@127.0.0.1:5432/excalidraw
 AWS_REGION=sfo3
 S3_BUCKET=excalidraw-data
 S3_ENDPOINT=https://sfo3.digitaloceanspaces.com
-S3_FORCE_PATH_STYLE=false
 AWS_ACCESS_KEY_ID=<20-char Spaces key id>
 AWS_SECRET_ACCESS_KEY=<43-char Spaces secret>
 
 JWT_SECRET=\${JWT}
 COOKIE_SECURE=true
 PRESIGN_TTL_SECONDS=300
-ALLOW_SIGNUP=false
 LOCAL_STORAGE_ROOT=/opt/excalidraw/storage
 EOF
     chown root:excalidraw /etc/excalidraw-api.env
@@ -439,46 +457,29 @@ EOF
 
 | Variable | Purpose |
 |---|---|
-| `APP_ORIGIN` | cookie domain, invite links, and the base for local-driver blob URLs |
-| `DATABASE_URL` | loopback Postgres |
-| `AWS_*` / `S3_*` | Spaces; leave the key as `REPLACE_ME` to run on local disk (§7.3) |
-| `JWT_SECRET` | session signing; rotating it invalidates every session |
-| `PRESIGN_TTL_SECONDS` | presigned URL lifetime, 300 |
-| `ALLOW_SIGNUP` | `true` only while creating the first admin |
+| `APP_ORIGIN` | required; used for cookies, CSRF origin checks and generated links |
+| `DATABASE_URL` | loopback PostgreSQL |
+| `AWS_*` / `S3_*` | object storage; omit or leave a placeholder key to run on local disk |
+| `JWT_SECRET` | signs sessions **and** derives the key that encrypts the stored Spaces secret — changing it logs everyone out and makes the saved storage secret unreadable |
+| `LOCAL_STORAGE_ROOT` | where the local-disk driver writes |
+| `PASSWORD_BLOCKLIST_FILE` | optional; offline SHA-1 corpus of leaked passwords |
 
-> This file holds the database password, the session signing key and the Spaces
-> secret. Keep it `0640 root:excalidraw`, never commit it, and rotate the Spaces
-> key if it is ever exposed.
+> Storage can also be configured from **Administration → Storage** in the app.
+> A configuration saved there lives in `app_settings`, with the secret encrypted
+> (AES-256-GCM), and **takes precedence over these environment variables**.
 
 ### 7.3 The storage driver
 
-The API picks its storage backend at startup:
+The API picks its backend at startup: **Spaces/S3** when a real access key is
+present, **local disk** under `LOCAL_STORAGE_ROOT` otherwise. Both expose
+presigned PUT/GET, so the browser upload path is identical; the local driver
+signs `/api/blob/<key>` URLs with an HMAC scoped to one key, one method and a
+five-minute expiry.
 
-- **Spaces** when `AWS_ACCESS_KEY_ID` is set to a real value.
-- **Local disk** under `LOCAL_STORAGE_ROOT` otherwise.
-
-Both expose presigned PUT/GET, so the browser upload path is identical. The
-local driver signs `/api/blob/<key>?exp=…&sig=…` with an HMAC of `JWT_SECRET`,
-scoped to one key, one method and a 5-minute expiry — a tampered or expired URL
-returns 403.
-
-This means the instance is fully usable before object storage exists. Adding the
-key and restarting switches every future write to Spaces; **existing objects are
-not migrated automatically** — copy `/opt/excalidraw/storage/` into the bucket if
-you have live data:
-
-```bash
-ssh -i $KEY deploy@$HOST '
-  sudo -u excalidraw aws --endpoint-url https://sfo3.digitaloceanspaces.com \
-    s3 sync /opt/excalidraw/storage/ s3://excalidraw-data/
-'
-```
-
-Check which driver is live:
-
-```bash
-curl -sS -b cookies https://$APP_DOMAIN/api/storage-info   # {"driver":"s3"} or {"driver":"local"}
-```
+Switching to Spaces does **not** move existing objects. Use
+**Administration → Storage → Copy files from server disk**, or `aws s3 sync`, and
+verify afterwards — a scene whose object is missing still lists but fails to
+open.
 
 ### 7.4 systemd unit
 
@@ -496,7 +497,7 @@ User=excalidraw
 Group=excalidraw
 WorkingDirectory=/opt/excalidraw/api
 EnvironmentFile=/etc/excalidraw-api.env
-ExecStart=/usr/bin/node src/server.js
+ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
@@ -515,57 +516,28 @@ EOF
 '
 ```
 
-`ReadWritePaths=/opt/excalidraw` is required — `ProtectSystem=strict` otherwise
-makes the local storage root read-only.
+`ExecStart` is `server.js`, not `src/server.js`. `ReadWritePaths=/opt/excalidraw`
+is required — `ProtectSystem=strict` otherwise makes the storage root read-only.
 
----
+## 8. Collaboration
 
-## 8. The collaboration server
+Collaboration is part of the API process — socket.io attached to the same HTTP
+server on `:4000`. **Nothing extra to install.**
 
-Stateless socket.io relay. Scene persistence is the API, not this service.
+- Connections are authenticated with the caller's session cookie and rejected
+  unless the `Origin` matches `APP_ORIGIN`.
+- A viewer cannot mutate a scene through a collaboration message.
+- Room keys are stored encrypted (`scene_room_keys`), so a reload rejoins the
+  same room; restoring an older version invalidates the old room.
+- nginx forwards `/socket.io/` to `:4000` with a one-hour idle timeout (§11).
+
+The standalone `excalidraw-room` service from earlier revisions of this document
+is **no longer used**. If it is still installed from a previous deployment,
+disable it:
 
 ```bash
-ssh -i $KEY deploy@$HOST '
-  sudo -u excalidraw git clone -q --depth 1 \
-    https://github.com/excalidraw/excalidraw-room.git /opt/excalidraw/room
-  sudo -u excalidraw env HOME=/opt/excalidraw yarn --cwd /opt/excalidraw/room install --frozen-lockfile
-  sudo -u excalidraw env HOME=/opt/excalidraw yarn --cwd /opt/excalidraw/room build
-
-  sudo tee /etc/systemd/system/excalidraw-room.service >/dev/null <<EOF
-[Unit]
-Description=Excalidraw collaboration server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=excalidraw
-Group=excalidraw
-WorkingDirectory=/opt/excalidraw/room
-Environment=NODE_ENV=production
-Environment=PORT=3002
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now excalidraw-room
-  sleep 2 && curl -sS -o /dev/null -w "room %{http_code}\n" http://127.0.0.1:3002/
-'
+ssh -i $KEY deploy@$HOST 'sudo systemctl disable --now excalidraw-room'
 ```
-
-> The room server binds `*:3002`, not loopback — it has no bind-address option.
-> `ufw` is what keeps it private, so §3.2 is load-bearing here.
-
----
 
 ## 9. Building the frontend
 
@@ -642,38 +614,38 @@ symlink swap and an nginx reload.
 
 ## 10. The dashboard
 
-The workspace UI — Dashboard, Collections, Team members, Trash — is a
-dependency-free static app in [`dashboard/`](dashboard/).
+The workspace UI — sign-in, dashboard, collections, Trash, account and
+administration — is a dependency-free static app in [`dashboard/`](dashboard/).
+It is **served by the API**, not by nginx, from `/opt/excalidraw/dashboard`
+(`../dashboard` relative to `server.js`).
 
 ```bash
-ssh -i $KEY deploy@$HOST 'sudo install -d -o excalidraw -g excalidraw -m 755 /opt/excalidraw/app/dashboard'
-rsync -az --delete --rsync-path="sudo rsync" -e "ssh -i $KEY" \
-  dashboard/ deploy@$HOST:/opt/excalidraw/app/dashboard/
+rsync -az --delete --exclude node_modules --exclude package.json \
+  -e "ssh -i $KEY" dashboard/ deploy@$HOST:/tmp/dashboard/
+
 ssh -i $KEY deploy@$HOST '
-  sudo chown -R excalidraw:excalidraw /opt/excalidraw/app/dashboard
-  sudo find /opt/excalidraw/app/dashboard -type f -exec chmod 644 {} +
+  sudo rsync -a --delete /tmp/dashboard/ /opt/excalidraw/dashboard/
+  rm -rf /tmp/dashboard
+  sudo chown -R excalidraw:excalidraw /opt/excalidraw/dashboard
+  sudo find /opt/excalidraw/dashboard -type f -exec chmod 644 {} +
+  sudo find /opt/excalidraw/dashboard -type d -exec chmod 755 {} +
 '
 ```
 
-It is deployed separately from the editor because it has no build step and
-changes independently.
-
-**What it does:** lists drawings as cards with author and relative time; creates,
-renames, moves, trashes and restores them; creates collections (optionally
-private to you); adds workspace members and produces invite links; shows
-workspace settings including the active storage driver. Clicking a card opens
-`/?scene=<uuid>`, which the editor loads from the database and autosaves back to
-(debounced 1.5 s). A `view`-only grant opens the editor in view mode.
-
----
+No build step and no service restart: the files are read per request. The API
+serves `/dashboard/*` as static assets and returns the same `index.html` for the
+application routes (`/`, `/login`, `/forgot-password`, `/reset-password`,
+`/set-password`, `/dashboard`, `/account/change-password`, `/admin/*`).
 
 ## 11. nginx and TLS
 
-### 11.1 Site configuration
+nginx terminates TLS, serves the editor build, and proxies everything else to
+the API.
+
+### 11.1 Security headers
 
 ```bash
 ssh -i $KEY deploy@$HOST '
-  sudo rm -f /etc/nginx/sites-enabled/default
   sudo tee /etc/nginx/snippets/excalidraw-security.conf >/dev/null <<EOF
 add_header X-Content-Type-Options nosniff always;
 add_header X-Frame-Options SAMEORIGIN always;
@@ -683,21 +655,21 @@ EOF
 '
 ```
 
-> nginx `add_header` **does not inherit** into any block that defines its own.
-> The security snippet must be included again inside every `location` that sets
-> a header of its own, or those responses silently ship without them.
+> nginx `add_header` **does not inherit** into a block that sets a header of its
+> own, so the snippet is included again inside every such `location`.
 
-```bash
-ssh -i $KEY deploy@$HOST '
-  sudo tee /etc/nginx/sites-available/excalidraw >/dev/null <<"NGINX"
+### 11.2 Site
+
+```nginx
 map $http_upgrade $connection_upgrade { default upgrade; "" close; }
 
 server {
     listen 80;
     listen [::]:80;
     server_name draw.devopsproject.dev 139.59.41.208;
+
+    # only the editor build is served from disk
     root /opt/excalidraw/app/current;
-    index index.html;
 
     client_max_body_size 25m;
     gzip on;
@@ -706,6 +678,12 @@ server {
 
     include snippets/excalidraw-security.conf;
 
+    location = /editor {
+        include snippets/excalidraw-security.conf;
+        add_header Cache-Control "no-store";
+        try_files /index.html =404;
+    }
+
     location /assets/ {
         expires 1y;
         include snippets/excalidraw-security.conf;
@@ -713,20 +691,35 @@ server {
         try_files $uri =404;
     }
 
-    location = /index.html {
+    location /fonts/ {
+        expires 1y;
         include snippets/excalidraw-security.conf;
-        add_header Cache-Control "no-store";
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
     }
 
-    location /dashboard/ {
-        alias /opt/excalidraw/app/dashboard/;
+    # editor support files that must come from the build, not the API
+    location ~ ^/(sw\.js|registerSW\.js|workbox-[^/]+\.js|manifest\.webmanifest|favicon\.ico|apple-touch-icon\.png|android-chrome-[^/]+\.png|favicon-[^/]+\.png|safari-pinned-tab\.svg|browserconfig\.xml|site\.webmanifest|robots\.txt|Assistant-[^/]+\.woff2|Virgil\.woff2|Cascadia\.woff2)$ {
         include snippets/excalidraw-security.conf;
-        add_header Cache-Control "no-store";
-        try_files $uri $uri/ /dashboard/index.html;
+        try_files $uri =404;
     }
-    location = /dashboard { return 301 /dashboard/; }
 
-    location /api/ {
+    # collaboration, in-process on the API
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # login, dashboard, admin, account, API
+    location / {
         proxy_pass http://127.0.0.1:4000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -735,96 +728,80 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 60s;
     }
-
-    location /socket.io/ {
-        proxy_pass http://127.0.0.1:3002;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-
-    location / { try_files $uri $uri/ /index.html; }
 }
-NGINX
-  sudo ln -sfn /etc/nginx/sites-available/excalidraw /etc/nginx/sites-enabled/excalidraw
-  sudo nginx -t && sudo systemctl reload nginx
-'
 ```
 
-The WebSocket `proxy_read_timeout 3600s` is what keeps collaboration sessions
-alive; anything shorter drops idle collaborators.
-
-### 11.2 Certificate
+Enable it, then let certbot add TLS and the HTTP redirect:
 
 ```bash
 ssh -i $KEY deploy@$HOST '
+  sudo ln -sfn /etc/nginx/sites-available/excalidraw /etc/nginx/sites-enabled/excalidraw
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo nginx -t && sudo systemctl reload nginx
   sudo certbot --nginx -d draw.devopsproject.dev \
     --agree-tos -m you@example.com --no-eff-email --redirect --non-interactive
-  systemctl is-active certbot.timer
 '
 ```
 
-Certbot rewrites the server block to listen on 443 and adds the HTTP redirect.
-Renewal runs from `certbot.timer`.
+The redirect matches on `server_name`, so it applies to the domain. A plain
+request to the bare IP returns 404, which is expected.
 
----
+The application also sends its own `Cache-Control`, `Referrer-Policy` and
+`X-*` headers, so some responses carry two values for the same header. Harmless,
+but worth consolidating.
 
-## 12. First admin and passwords
+## 12. First administrator and passwords
 
-```bash
-ssh -i $KEY deploy@$HOST '
-  sudo sed -i "s/^ALLOW_SIGNUP=.*/ALLOW_SIGNUP=true/" /etc/excalidraw-api.env
-  sudo systemctl restart excalidraw-api && sleep 3
-
-  sudo bash -c "
-    PASS=\$(openssl rand -base64 30 | tr -dc A-Za-z0-9 | head -c 28)
-    curl -sS -X POST http://127.0.0.1:4000/api/auth/signup \
-      -H \"content-type: application/json\" \
-      -d \"{\\\"email\\\":\\\"you@example.com\\\",\\\"password\\\":\\\"\$PASS\\\",\\\"name\\\":\\\"Admin\\\"}\"
-    install -m 600 /dev/null /root/.excalidraw-admin-pass
-    printf \"email: you@example.com\npassword: %s\n\" \"\$PASS\" > /root/.excalidraw-admin-pass
-  "
-
-  sudo sed -i "s/^ALLOW_SIGNUP=.*/ALLOW_SIGNUP=false/" /etc/excalidraw-api.env
-  sudo systemctl restart excalidraw-api
-  sudo -u postgres psql -d excalidraw -q -c "UPDATE users SET is_superadmin=true WHERE email='"'"'you@example.com'"'"';"
-'
-```
-
-> Leaving `ALLOW_SIGNUP=true` lets anyone on the internet create an account.
-> Turn it off as soon as the first admin exists; add everyone else through the
-> dashboard's **Team members → Add member**, which produces an invite link.
-
-Read the generated password, then change it to one you choose:
+There is **no public sign-up and no signup endpoint**. The first account is
+created on the host with the bootstrap command, which prompts for the password
+with the echo turned off so it never reaches argv, shell history or logs:
 
 ```bash
-ssh -i $KEY deploy@$HOST 'sudo cat /root/.excalidraw-admin-pass'
-
 ssh -t -i $KEY deploy@$HOST '
-  sudo bash -c "set -a; . /etc/excalidraw-api.env; set +a; \
-    cd /opt/excalidraw/api && node bin/set-password.mjs you@example.com"
+  sudo bash -c "set -a; . /etc/excalidraw-api.env; set +a;
+    cd /opt/excalidraw/api && node bin/set-password.mjs --bootstrap admin"
 '
 ```
 
-`set-password.mjs` prompts for the password with echo disabled, so it never
-appears in argv, shell history or logs. Sign-in accepts **either the email or the
-display name** as the username.
+`--bootstrap` creates the user, makes it a superadmin, creates a workspace and
+adds the account to it. It **refuses to run once an active administrator
+exists**, so it cannot be used to take over a live instance.
 
----
+The `-t` flag is required: the script insists on a terminal for the prompt.
+
+**Everyone else** is created from **Administration → Users**, which issues a
+one-time setup link to hand to the person. Accounts stay `pending_setup` and
+cannot sign in until they set their own password.
+
+**If an administrator is locked out**, run the same script without
+`--bootstrap`:
+
+```bash
+ssh -t -i $KEY deploy@$HOST '
+  sudo bash -c "set -a; . /etc/excalidraw-api.env; set +a;
+    cd /opt/excalidraw/api && node bin/set-password.mjs admin"
+'
+```
+
+Both forms revoke every session and outstanding password token for that user,
+and write an entry to the audit log.
+
+Users change their own password in the app under **Account → Change password**.
+Passwords must be at least 15 characters and are checked against a strength
+estimator; the hash is Argon2id.
 
 ## 13. Verification
 
 ```bash
 # TLS, redirect, API
 curl -sS -o /dev/null -w "app        %{http_code}\n" https://$APP_DOMAIN/
-curl -sS -o /dev/null -w "redirect   %{http_code}\n" http://$HOST/
+curl -sS -o /dev/null -w "redirect   %{http_code}\n" http://$APP_DOMAIN/   # 301
 curl -sS   -w "  <- healthz\n"                       https://$APP_DOMAIN/api/healthz
-curl -sS -o /dev/null -w "dashboard  %{http_code}\n" https://$APP_DOMAIN/dashboard/
+curl -sS -o /dev/null -w "login      %{http_code}\n" https://$APP_DOMAIN/login
+curl -sS -o /dev/null -w "dashboard  %{http_code}\n" https://$APP_DOMAIN/dashboard
+curl -sS -o /dev/null -w "editor     %{http_code}\n" https://$APP_DOMAIN/editor
+curl -sS            -w "  <- CSRF guard\n" -X POST https://$APP_DOMAIN/api/auth/login \
+  -H "content-type: application/json" -d '{"username":"x","password":"y"}' 
 curl -sS -o /dev/null -w "socket.io  %{http_code}\n" "https://$APP_DOMAIN/socket.io/?EIO=4&transport=polling"
 
 # security headers must appear on the SPA shell, not only on assets
@@ -838,16 +815,17 @@ Signed-in checks — log in through the dashboard, then confirm:
 
 | Check | Expected |
 |---|---|
-| Sign in with email, and with display name | both succeed |
-| Wrong password | "Wrong username or password." |
+| Sign in with the username | succeeds; e-mail is not an identity |
+| Wrong password | "Invalid username or password." |
 | Create a collection | appears in the sidebar with a count |
 | New drawing → draw → reload | content persists |
 | `/api/scenes` after two saves | `scene_version` incremented |
-| Objects in storage | `scenes/<id>/<version>.json` present |
+| Objects in storage | the key in `scenes.s3_key` exists in the bucket |
 | Grant a user `view`, then have them edit | `POST …/commit` → 403 |
 | Grant `edit` | same call → 200 |
 | Two browsers, live collaboration | cursors sync in under a second |
-| Anonymous GET of an object URL | 403 |
+| Anonymous GET of an object URL | denied (Spaces answers 404) |
+| Anonymous `GET /?max-keys=5` on the bucket | denied — set **File Listing: Restricted**, or keys are enumerable |
 
 ---
 
@@ -907,14 +885,21 @@ yarn install && yarn test:typecheck && yarn test:update
 NODE_OPTIONS=--max-old-space-size=4096 yarn build:app
 # then ship as in §9.3
 
-# collaboration server
+# API and dashboard: ship the files (§7.1, §10), then migrate and restart
 ssh -i $KEY deploy@$HOST '
-  sudo -u excalidraw git -C /opt/excalidraw/room pull
-  sudo -u excalidraw env HOME=/opt/excalidraw yarn --cwd /opt/excalidraw/room install
-  sudo -u excalidraw env HOME=/opt/excalidraw yarn --cwd /opt/excalidraw/room build
-  sudo systemctl restart excalidraw-room
+  cd /opt/excalidraw/api
+  sudo -u excalidraw env HOME=/opt/excalidraw npm ci --no-fund --no-audit
+  sudo -u postgres env "DATABASE_URL=postgresql://postgres@/excalidraw?host=/var/run/postgresql" \
+    node bin/migrate.mjs
+  sudo -u postgres psql -d excalidraw -q -c \
+    "GRANT ALL ON ALL TABLES IN SCHEMA public TO excalidraw;
+     GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO excalidraw;"
+  sudo systemctl restart excalidraw-api
 '
 ```
+
+Run migrations **before** restarting the API so the new code never meets an old
+schema. Some migrations revoke sessions, which signs everyone out.
 
 `excalidraw-app/data/firebase.ts` is the file most likely to conflict on rebase.
 After every pull, re-check its six exported symbols against upstream and run
@@ -948,7 +933,7 @@ After every pull, re-check its six exported symbols against upstream and run
 
 ```bash
 journalctl -u excalidraw-api  -f
-journalctl -u excalidraw-room -f
+journalctl -u nginx -f
 sudo tail -f /var/log/nginx/error.log
 sudo -u postgres psql -d excalidraw -c "SELECT count(*) FROM scenes WHERE deleted_at IS NULL;"
 ```
