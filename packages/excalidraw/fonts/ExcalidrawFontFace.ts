@@ -1,4 +1,8 @@
-import { promiseTry, LOCAL_FONT_PROTOCOL } from "@excalidraw/common";
+import {
+  promiseTry,
+  LOCAL_FONT_PROTOCOL,
+  cssFontFamilyName,
+} from "@excalidraw/common";
 
 import { subsetWoff2GlyphsByCodepoints } from "../subset/subset-main";
 
@@ -46,7 +50,9 @@ export class ExcalidrawFontFace {
 
     return this.getContent(codepoints).then(
       (content) =>
-        `@font-face { font-family: ${this.fontFace.family}; src: url(${content}); }`,
+        `@font-face { font-family: ${cssFontFamilyName(
+          this.fontFace.family,
+        )}; src: url(${content}); }`,
     );
   }
 

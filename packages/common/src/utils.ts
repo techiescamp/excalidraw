@@ -120,6 +120,22 @@ export const isWritableElement = (
   );
 };
 
+/**
+ * A CSS <family-name> may only be written unquoted when every space-separated
+ * part is a valid identifier, i.e. none of them starts with a digit. A name
+ * such as "Source Sans 3" therefore makes the whole font shorthand invalid,
+ * and `document.fonts.check()` throws a SyntaxError on an invalid shorthand —
+ * which takes down the editor. Quote such names; leave identifier-only names
+ * (including the generic `sans-serif` / `monospace` keywords, which must stay
+ * unquoted to keep their meaning) untouched.
+ */
+const CSS_FONT_IDENTIFIER = /^-?[A-Za-z_][A-Za-z0-9_-]*$/;
+
+export const cssFontFamilyName = (family: string) =>
+  family.split(" ").every((part) => CSS_FONT_IDENTIFIER.test(part))
+    ? family
+    : `"${family.replace(/["\\]/g, "\\$&")}"`;
+
 export const getFontFamilyString = ({
   fontFamily,
 }: {
@@ -127,12 +143,12 @@ export const getFontFamilyString = ({
 }) => {
   for (const [fontFamilyString, id] of Object.entries(FONT_FAMILY)) {
     if (id === fontFamily) {
-      return `${fontFamilyString}${getFontFamilyFallbacks(id)
-        .map((x) => `, ${x}`)
+      return `${cssFontFamilyName(fontFamilyString)}${getFontFamilyFallbacks(id)
+        .map((x) => `, ${cssFontFamilyName(x)}`)
         .join("")}`;
     }
   }
-  return WINDOWS_EMOJI_FALLBACK_FONT;
+  return cssFontFamilyName(WINDOWS_EMOJI_FALLBACK_FONT);
 };
 
 /** returns fontSize+fontFamily string for assignment to DOM elements */
