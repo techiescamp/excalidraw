@@ -1240,6 +1240,107 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
+    "deleting a user removes only the account and keeps their content",
+    async () => {
+      const adminId = (await call("/me", { cookie: admin })).body.id;
+      const gone = await makeUser("departing");
+      const shared = await createDrawing(gone.cookie);
+      const hidden = await createDrawing(gone.cookie, null, { private: true });
+      const collection = await createCollection("Departing work", gone.cookie);
+      const remove = (id, cookie = admin) =>
+        call(`/admin/users/${id}`, { cookie, method: "DELETE" });
+      assert.equal((await remove(adminId, gone.cookie)).status, 403);
+      assert.equal((await remove(adminId)).status, 409);
+      assert.equal((await remove(gone.id)).status, 200);
+      assert.equal((await remove(gone.id)).status, 404);
+      assert.equal((await call("/me", { cookie: gone.cookie })).status, 401);
+      assert.equal(
+        (await db.query("SELECT 1 FROM users WHERE id=$1", [gone.id])).rowCount,
+        0,
+      );
+      const scenes = await db.query(
+        "SELECT id,private_owner_id FROM scenes WHERE id=ANY($1) AND deleted_at IS NULL",
+        [[shared.id, hidden.id]],
+      );
+      assert.equal(scenes.rowCount, 2);
+      assert.equal(
+        scenes.rows.find((s) => s.id === hidden.id).private_owner_id,
+        adminId,
+      );
+      assert.equal(
+        (await call(`/scenes/${hidden.id}/versions`, { cookie: admin })).status,
+        200,
+      );
+      assert.equal(
+        (
+          await db.query(
+            "SELECT 1 FROM collections WHERE id=$1 AND deleted_at IS NULL",
+            [collection.id],
+          )
+        ).rowCount,
+        1,
+      );
+      const entry = await db.query(
+        "SELECT metadata FROM audit_log WHERE action='user.delete' AND target_id=$1",
+        [gone.id],
+      );
+      assert.equal(entry.rows[0].metadata.username, "departing");
+      const list = (await call("/admin/users", { cookie: admin })).body.items;
+      assert.equal(list[0].is_superadmin, true);
+    },
+  );
+  await t.test(
+    "two administrators deleting each other always leave one administrator",
+    async () => {
+      const created = await call("/admin/users", {
+        cookie: admin,
+        method: "POST",
+        body: {
+          username: "second-admin",
+          is_superadmin: true,
+          confirm_global_admin: true,
+          assignments: [],
+        },
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      await call("/auth/reset-password", {
+        method: "POST",
+        body: {
+          token: new URL(created.body.url).hash.slice(7),
+          purpose: "setup",
+          password,
+          confirmation: password,
+        },
+      });
+      const second = (
+        await call("/auth/reauthenticate", {
+          cookie: await login("second-admin"),
+          method: "POST",
+          body: { password },
+        })
+      ).cookie;
+      const adminId = (await call("/me", { cookie: admin })).body.id;
+      const results = await Promise.all([
+        call(`/admin/users/${created.body.id}`, {
+          cookie: admin,
+          method: "DELETE",
+        }),
+        call(`/admin/users/${adminId}`, { cookie: second, method: "DELETE" }),
+      ]);
+      assert.deepEqual(
+        results.map((r) => r.status).sort(),
+        [200, 409],
+        JSON.stringify(results.map((r) => r.body)),
+      );
+      const remaining = await db.query(
+        "SELECT username FROM users WHERE is_superadmin AND is_active AND NOT pending_setup",
+      );
+      assert.equal(remaining.rowCount, 1);
+      if (remaining.rows[0].username !== "admin")
+        throw new Error("Later tests rely on the original admin account.");
+    },
+  );
+  await t.test(
     "authenticated collaboration rejects viewers sending encrypted mutations and revokes connections",
     async () => {
       const drawing = await createDrawing(),

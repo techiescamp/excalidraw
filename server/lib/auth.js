@@ -152,7 +152,7 @@ export function installAuth(app, db, origin) {
   const limit=25,offset=Math.max(0,Number(req.query.page)||0)*limit;
   const {rows}=await db.query(`SELECT u.id,u.username,u.display_name,u.is_superadmin,u.is_active,u.pending_setup,u.last_login_at,
    coalesce((SELECT jsonb_agg(jsonb_build_object('workspace_id',m.workspace_id,'role',CASE WHEN m.role IN ('owner','admin') THEN 'editor' ELSE m.role::text END,'overrides',coalesce((SELECT jsonb_object_agg(permission,effect) FROM permission_overrides p WHERE p.user_id=u.id AND p.workspace_id=m.workspace_id),'{}'))) FROM workspace_members m WHERE m.user_id=u.id),'[]') AS assignments,
-   count(*) OVER() AS total FROM users u WHERE username ILIKE $1 OR display_name ILIKE $1 ORDER BY username LIMIT $2 OFFSET $3`,[`%${String(req.query.search || '').slice(0,100)}%`,limit,offset]);
+   count(*) OVER() AS total FROM users u WHERE username ILIKE $1 OR display_name ILIKE $1 ORDER BY u.is_superadmin DESC, username LIMIT $2 OFFSET $3`,[`%${String(req.query.search || '').slice(0,100)}%`,limit,offset]);
   res.json({items:rows,total:Number(rows[0]?.total || 0),page:offset/limit});
  });
  app.post('/api/admin/users',auth,admin,recent,async(req,res)=>{
@@ -179,6 +179,36 @@ export function installAuth(app, db, origin) {
    }
    await tx.query('UPDATE users SET username=$2,display_name=$3,is_superadmin=$4,is_active=$5 WHERE id=$1',[old.id,name,String(req.body.display_name || '').slice(0,120),sa,active]);
    await assignments(tx,old.id,req.body.assignments,req.user.id); await revoke(tx,old.id); await audit(tx,req.user.id,'user.permissions_status.update',old.id);
+  }); res.json({ok:true});
+ });
+ app.delete('/api/admin/users/:id',auth,admin,recent,async(req,res)=>{
+  if(!uuid(req.params.id)) fail(404,'User not found.');
+  if(req.params.id===req.user.id) fail(409,'You cannot delete your own account.');
+  await transaction(db,async tx=>{
+   await tx.query('SELECT pg_advisory_xact_lock(4271901)');
+   const {rows}=await tx.query('SELECT * FROM users WHERE id=$1 FOR UPDATE',[req.params.id]); const old=rows[0]; if(!old) fail(404,'User not found.');
+   if(old.is_superadmin && old.is_active && !old.pending_setup) {
+    const count=await tx.query('SELECT count(*)::int AS n FROM users WHERE is_active AND is_superadmin AND NOT pending_setup');
+    if(count.rows[0].n<=1) fail(409,'The last active administrator cannot be deleted.');
+   }
+   const id=old.id, heir=req.user.id;
+   await revoke(tx,id);
+   // Only the account goes. Drawings, files, collections and history stay; anything the
+   // account owned moves to the deleting administrator so nothing becomes unreachable.
+   await tx.query('UPDATE scenes SET owner_id=$2 WHERE owner_id=$1',[id,heir]);
+   await tx.query('UPDATE scenes SET private_owner_id=$2 WHERE private_owner_id=$1',[id,heir]);
+   await tx.query('UPDATE workspaces SET owner_id=$2 WHERE owner_id=$1',[id,heir]);
+   await tx.query('UPDATE legacy_scene_visibility SET visible_to=$2 WHERE visible_to=$1',[id,heir]);
+   await tx.query('UPDATE collection_drawings SET added_by=NULL WHERE added_by=$1',[id]);
+   await tx.query('UPDATE workspace_activity SET actor_id=NULL WHERE actor_id=$1',[id]);
+   await tx.query('UPDATE password_tokens SET issued_by=NULL WHERE issued_by=$1',[id]);
+   await tx.query('UPDATE password_reset_requests SET resolved_by=NULL WHERE resolved_by=$1',[id]);
+   await tx.query('DELETE FROM password_tokens WHERE user_id=$1',[id]);
+   await tx.query('DELETE FROM password_reset_requests WHERE user_id=$1',[id]);
+   await tx.query('DELETE FROM creation_requests WHERE user_id=$1',[id]);
+   await tx.query('DELETE FROM users WHERE id=$1',[id]);
+   // The username is kept in the audit entry because the account row no longer exists.
+   await tx.query("INSERT INTO audit_log(actor_id,action,target_type,target_id,metadata) VALUES($1,'user.delete','user',$2,$3)",[heir,id,{outcome:'success',username:old.username}]);
   }); res.json({ok:true});
  });
  app.post('/api/admin/users/:id/password-link',auth,admin,recent,async(req,res)=>{

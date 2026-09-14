@@ -1628,6 +1628,22 @@ async function teamsPage(generation) {
           )),
       );
 }
+async function deleteUser(user) {
+  if (!(await reauthenticate())) return;
+  modal(
+    "Delete user?",
+    `<p><strong>${escape(
+      user.username,
+    )}</strong> will be removed and can no longer sign in.</p><p>Their drawings, images and collections are kept. Anything they owned, including private drawings, moves to you.</p><p>This cannot be undone.</p>`,
+    "Delete user",
+    async () => {
+      await api(`/admin/users/${user.id}`, { method: "DELETE" });
+      $("#dialog").close();
+      await render();
+      notify(`${user.username} was deleted. Their content was kept.`);
+    },
+  );
+}
 async function userForm(user) {
   if (!(await reauthenticate())) return;
   const content =
@@ -1850,7 +1866,11 @@ async function adminPage(generation) {
           }</td><td>${button("Edit", `data-edit-user="${u.id}"`)}${button(
             u.pending_setup ? "Regenerate setup link" : "Issue reset link",
             `data-issue="${u.id}"`,
-          )}</td></tr>`,
+          )}${
+            u.id === state.me.id
+              ? ""
+              : button("Delete", `class="danger" data-delete-user="${u.id}"`)
+          }</td></tr>`,
       )
       .join("")}</tbody></table></div>`;
     $("#create-user").onclick = () => userForm();
@@ -1866,6 +1886,15 @@ async function adminPage(generation) {
         (b) =>
           (b.onclick = () =>
             userForm(result.items.find((u) => u.id === b.dataset.editUser))),
+      );
+    doc
+      .querySelectorAll("[data-delete-user]")
+      .forEach(
+        (b) =>
+          (b.onclick = () =>
+            deleteUser(
+              result.items.find((u) => u.id === b.dataset.deleteUser),
+            )),
       );
   } else if (name === "reset-requests") {
     const rows = await api(
