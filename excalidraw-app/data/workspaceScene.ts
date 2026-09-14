@@ -1,6 +1,6 @@
 import "./workspaceScene.css";
 import { getNonDeletedElements } from "@excalidraw/element";
-import { exportToBlob } from "@excalidraw/excalidraw";
+import { exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 import type {
   AppState,
@@ -125,7 +125,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       status: response.status,
     });
   }
-  return response.json();
+  return response.status === 204 ? (undefined as T) : response.json();
 }
 const scenePayload = (
   elements: readonly OrderedExcalidrawElement[],
@@ -231,10 +231,7 @@ function showStatus(session: EditorSession, text: string) {
     status.append(copy, retry, reload);
   }
 }
-function startInlineRename(
-  session: EditorSession,
-  title: HTMLButtonElement,
-) {
+function startInlineRename(session: EditorSession, title: HTMLButtonElement) {
   const doc = node.ownerDocument;
   const input = doc.createElement("input");
   input.className = "workspace-scene-title-input";
@@ -296,6 +293,730 @@ function startInlineRename(
   };
   input.onblur = () => void finish(true);
 }
+type SceneRow = {
+  id: string;
+  name: string;
+  thumb_s3_key?: string | null;
+  scene_version: number;
+  metadata_version: number;
+  owner_name: string;
+  pinned: boolean;
+  private_owner_id: string | null;
+  created_at: string;
+  updated_at: string;
+  collections: Array<{ id: string; name: string }>;
+};
+type SceneList = { items: SceneRow[]; total: number };
+type MenuItem = {
+  label: string;
+  icon?: string;
+  danger?: boolean;
+  checked?: boolean;
+  action?: () => unknown;
+  children?: MenuItem[];
+};
+
+const svg = (paths: string) =>
+  `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICONS = {
+  more: svg(
+    '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  ),
+  sort: svg(
+    '<path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/>',
+  ),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  edit: svg(
+    '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  ),
+  share: svg(
+    '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  ),
+  link: svg(
+    '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  ),
+  export: svg(
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  ),
+  file: svg(
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+  ),
+  pin: svg(
+    '<path d="M12 17v5"/><path d="M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1Z"/>',
+  ),
+  copy: svg(
+    '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/>',
+  ),
+  move: svg('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'),
+  trash: svg(
+    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  ),
+  check: svg('<path d="M20 6 9 17l-5-5"/>'),
+  chevron: svg('<path d="m9 18 6-6-6-6"/>'),
+};
+
+const SORT_KEY = "excalidraw-workspace-scene-sort";
+const SORTS = [
+  ["title", "Name"],
+  ["created", "Last created"],
+  ["updated", "Last updated"],
+] as const;
+type SortOrder = typeof SORTS[number][0];
+const sortOrder = (): SortOrder => {
+  try {
+    const saved =
+      node.ownerDocument.defaultView!.localStorage.getItem(SORT_KEY);
+    return SORTS.find(([key]) => key === saved)?.[0] || "title";
+  } catch {
+    return "title";
+  }
+};
+const setSortOrder = (order: SortOrder) => {
+  try {
+    node.ownerDocument.defaultView!.localStorage.setItem(SORT_KEY, order);
+  } catch {}
+};
+
+const timeAgo = (iso: string) => {
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  for (const [unit, size] of [
+    ["year", 31536000],
+    ["month", 2592000],
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+  ] as const) {
+    const count = Math.floor(seconds / size);
+    if (count >= 1) {
+      return count === 1
+        ? `${unit === "hour" ? "an" : "a"} ${unit} ago`
+        : `${count} ${unit}s ago`;
+    }
+  }
+  return "just now";
+};
+
+// the metadata version the server expects for this scene's next rename/pin/move
+const sceneVersion = (session: EditorSession, scene: SceneRow) =>
+  scene.id === session.id
+    ? Math.max(session.metadataVersion, scene.metadata_version)
+    : scene.metadata_version;
+
+function showToast(text: string, error = false) {
+  const doc = node.ownerDocument;
+  doc.querySelector(".workspace-toast")?.remove();
+  const toast = doc.createElement("div");
+  toast.className = "workspace-toast";
+  toast.classList.toggle("error", error);
+  toast.setAttribute("role", error ? "alert" : "status");
+  toast.textContent = text;
+  doc.body.append(toast);
+  doc.defaultView!.setTimeout(() => toast.remove(), 4000);
+}
+
+let closeMenu: (() => void) | undefined;
+function openMenu(anchor: HTMLElement, items: MenuItem[]) {
+  closeMenu?.();
+  const doc = node.ownerDocument,
+    win = doc.defaultView!;
+  // menus[0] is the root menu, menus[n] the submenu opened from menus[n - 1]
+  const menus: HTMLElement[] = [];
+  const closeFrom = (level: number) => {
+    for (const menu of menus.splice(level)) {
+      menu.remove();
+    }
+    menus[level - 1]
+      ?.querySelectorAll('[aria-expanded="true"]')
+      .forEach((item) => item.setAttribute("aria-expanded", "false"));
+  };
+  const place = (menu: HTMLElement, x: number, y: number) => {
+    doc.body.append(menu);
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(
+      8,
+      Math.min(x, win.innerWidth - width - 8),
+    )}px`;
+    menu.style.top = `${Math.max(
+      8,
+      Math.min(y, win.innerHeight - height - 8),
+    )}px`;
+  };
+  const build = (entries: MenuItem[], depth: number) => {
+    const menu = doc.createElement("div");
+    menu.className = "workspace-menu";
+    menu.setAttribute("role", "menu");
+    entries.forEach((entry, index) => {
+      if (entry.danger && index > 0) {
+        const separator = doc.createElement("div");
+        separator.className = "workspace-menu-separator";
+        separator.setAttribute("role", "separator");
+        menu.append(separator);
+      }
+      const item = doc.createElement("button");
+      item.type = "button";
+      item.className = "workspace-menu-item";
+      item.classList.toggle("danger", Boolean(entry.danger));
+      if (entry.checked === undefined) {
+        item.setAttribute("role", "menuitem");
+      } else {
+        item.setAttribute("role", "menuitemradio");
+        item.setAttribute("aria-checked", String(entry.checked));
+      }
+      const icon = doc.createElement("span");
+      icon.className = "workspace-menu-icon";
+      icon.innerHTML = entry.checked ? ICONS.check : entry.icon || "";
+      const text = doc.createElement("span");
+      text.textContent = entry.label;
+      item.append(icon, text);
+      const openSubmenu = () => {
+        if (item.getAttribute("aria-expanded") !== "true") {
+          closeFrom(depth + 1);
+          item.setAttribute("aria-expanded", "true");
+          const rect = item.getBoundingClientRect();
+          menus[depth + 1] = build(entry.children!, depth + 1);
+          place(menus[depth + 1], rect.right + 4, rect.top - 6);
+        }
+        return menus[depth + 1];
+      };
+      if (entry.children) {
+        item.setAttribute("aria-haspopup", "menu");
+        item.setAttribute("aria-expanded", "false");
+        const chevron = doc.createElement("span");
+        chevron.className = "workspace-menu-chevron";
+        chevron.innerHTML = ICONS.chevron;
+        item.append(chevron);
+      }
+      item.onmouseenter = () =>
+        entry.children ? void openSubmenu() : closeFrom(depth + 1);
+      item.onclick = () => {
+        if (entry.children) {
+          openSubmenu().querySelector<HTMLElement>("button")?.focus();
+          return;
+        }
+        close();
+        void entry.action?.();
+      };
+      menu.append(item);
+    });
+    return menu;
+  };
+  const onPointerDown = (event: Event) => {
+    const target = event.target as Node;
+    if (
+      !menus.some((menu) => menu.contains(target)) &&
+      !anchor.contains(target)
+    ) {
+      close();
+    }
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    // keep canvas shortcuts from reacting while the menu owns the keyboard
+    event.stopPropagation();
+    const menu =
+      menus.find((m) => m.contains(doc.activeElement)) ||
+      menus[menus.length - 1];
+    const level = menus.indexOf(menu);
+    const buttons = [
+      ...menu.querySelectorAll<HTMLButtonElement>(".workspace-menu-item"),
+    ];
+    const index = buttons.indexOf(doc.activeElement as HTMLButtonElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      buttons[(index + step + buttons.length) % buttons.length]?.focus();
+    } else if (
+      event.key === "ArrowRight" &&
+      buttons[index]?.hasAttribute("aria-haspopup")
+    ) {
+      event.preventDefault();
+      buttons[index].click();
+    } else if (
+      event.key === "Escape" ||
+      (event.key === "ArrowLeft" && level > 0)
+    ) {
+      event.preventDefault();
+      if (level > 0) {
+        const opener = menus[level - 1].querySelector<HTMLElement>(
+          '[aria-expanded="true"]',
+        );
+        closeFrom(level);
+        opener?.focus();
+      } else {
+        close();
+        anchor.focus();
+      }
+    } else if (event.key === "Tab") {
+      close();
+    }
+  };
+  const close = () => {
+    closeFrom(0);
+    anchor.setAttribute("aria-expanded", "false");
+    doc.removeEventListener("pointerdown", onPointerDown, true);
+    doc.removeEventListener("keydown", onKeyDown, true);
+    win.removeEventListener("resize", close);
+    closeMenu = undefined;
+  };
+  menus[0] = build(items, 0);
+  const rect = anchor.getBoundingClientRect();
+  place(menus[0], rect.left, rect.bottom + 4);
+  anchor.setAttribute("aria-expanded", "true");
+  doc.addEventListener("pointerdown", onPointerDown, true);
+  doc.addEventListener("keydown", onKeyDown, true);
+  win.addEventListener("resize", close);
+  closeMenu = close;
+  menus[0].querySelector<HTMLElement>("button")?.focus();
+}
+
+function dialogField(label: string, control: HTMLElement) {
+  const wrapper = node.ownerDocument.createElement("label");
+  wrapper.className = "workspace-dialog-field";
+  wrapper.append(label, control);
+  return wrapper;
+}
+
+function editorDialog(
+  title: string,
+  body: HTMLElement[],
+  submitLabel: string,
+  onSubmit: () => Promise<void>,
+  danger = false,
+) {
+  const doc = node.ownerDocument;
+  const dialog = doc.createElement("dialog");
+  dialog.className = "workspace-dialog";
+  const form = doc.createElement("form");
+  const heading = doc.createElement("h2");
+  heading.textContent = title;
+  const error = doc.createElement("p");
+  error.className = "workspace-dialog-error";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  const actions = doc.createElement("div");
+  actions.className = "workspace-dialog-actions";
+  const cancel = doc.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.onclick = () => dialog.close();
+  const submit = doc.createElement("button");
+  submit.type = "submit";
+  submit.className = danger ? "danger" : "primary";
+  submit.textContent = submitLabel;
+  actions.append(cancel, submit);
+  form.append(heading, ...body, error, actions);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    error.hidden = true;
+    try {
+      await onSubmit();
+      dialog.close();
+    } catch (e: any) {
+      error.textContent = e.message;
+      error.hidden = false;
+      submit.disabled = false;
+    }
+  };
+  dialog.addEventListener("keydown", (event) => {
+    // typing in the dialog must not trigger canvas shortcuts
+    event.stopPropagation();
+    // submit from text fields explicitly instead of relying on implicit
+    // submission, which some key event sources do not trigger
+    if (
+      event.key === "Enter" &&
+      !event.isComposing &&
+      (event.target as Element).matches("input:not([type=button])")
+    ) {
+      event.preventDefault();
+      if (!submit.disabled) {
+        form.requestSubmit(submit);
+      }
+    }
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  dialog.append(form);
+  doc.body.append(dialog);
+  dialog.showModal();
+  form
+    .querySelector<HTMLElement>("input, select, button[type=submit]")
+    ?.focus();
+  return dialog;
+}
+
+function renameScene(
+  session: EditorSession,
+  scene: SceneRow,
+  row: HTMLElement,
+) {
+  if (scene.id === session.id) {
+    const title = status.querySelector<HTMLButtonElement>(
+      ".workspace-scene-title",
+    );
+    if (title && !title.disabled) {
+      startInlineRename(session, title);
+      return;
+    }
+  }
+  const input = node.ownerDocument.createElement("input");
+  input.required = true;
+  input.maxLength = 80;
+  input.value = scene.name;
+  editorDialog(
+    "Rename scene",
+    [dialogField("Scene name", input)],
+    "Rename scene",
+    async () => {
+      const saved = await request<{ name: string; metadata_version: number }>(
+        `/scenes/${scene.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: input.value.trim(),
+            version: sceneVersion(session, scene),
+          }),
+        },
+      );
+      scene.name = saved.name;
+      scene.metadata_version = saved.metadata_version;
+      row.dataset.sceneName = saved.name.toLowerCase();
+      const label = row.querySelector("strong");
+      if (label) {
+        label.textContent = saved.name;
+      }
+    },
+  );
+  input.select();
+}
+
+function shareScene(scene: SceneRow) {
+  const doc = node.ownerDocument,
+    win = doc.defaultView!;
+  const link = `${win.location.origin}/editor?scene=${scene.id}`;
+  const input = doc.createElement("input");
+  input.readOnly = true;
+  input.value = link;
+  const note = doc.createElement("p");
+  note.textContent =
+    "Only signed-in members who can access this scene can open the link.";
+  editorDialog(
+    `Share “${scene.name}”`,
+    [dialogField("Scene link", input), note],
+    "Copy link",
+    async () => {
+      try {
+        await win.navigator.clipboard.writeText(link);
+      } catch {
+        input.select();
+        if (!doc.execCommand("copy")) {
+          throw new Error("Copy failed. Select the link and copy it manually.");
+        }
+      }
+      showToast("Link copied.");
+    },
+  );
+  input.select();
+}
+
+async function quickExport(
+  session: EditorSession,
+  scene: SceneRow,
+  format: "svg" | "png" | "json",
+) {
+  const doc = node.ownerDocument,
+    win = doc.defaultView!;
+  try {
+    if (scene.id === session.id) {
+      await flush(session);
+    }
+    const payload = await request<Payload>(`/scenes/${scene.id}/export`);
+    const input = {
+      elements: getNonDeletedElements(payload.elements),
+      appState: { ...payload.appState, exportBackground: true },
+      files: payload.files || {},
+    };
+    const blob =
+      format === "json"
+        ? new win.Blob([JSON.stringify(payload)], {
+            type: "application/vnd.excalidraw+json",
+          })
+        : format === "svg"
+        ? new win.Blob([(await exportToSvg(input)).outerHTML], {
+            type: "image/svg+xml",
+          })
+        : await exportToBlob({ ...input, mimeType: "image/png" });
+    const url = win.URL.createObjectURL(blob);
+    const link = doc.createElement("a");
+    link.href = url;
+    link.download = `${scene.name.replace(/[\\/:*?"<>|]+/g, "-")}.${
+      format === "json" ? "excalidraw" : format
+    }`;
+    doc.body.append(link);
+    link.click();
+    link.remove();
+    win.setTimeout(() => win.URL.revokeObjectURL(url), 1000);
+  } catch (error: any) {
+    showToast(`Export failed: ${error.message}`, true);
+  }
+}
+
+async function destinationDialog(
+  session: EditorSession,
+  scene: SceneRow,
+  duplicate: boolean,
+  reload: () => Promise<unknown>,
+) {
+  const doc = node.ownerDocument;
+  let collections: Array<{ id: string; name: string }>;
+  try {
+    collections = await request(`/workspaces/${session.workspace}/collections`);
+  } catch (error: any) {
+    showToast(error.message, true);
+    return;
+  }
+  const current = scene.private_owner_id
+    ? "private"
+    : scene.collections[0]?.id || "private";
+  const select = doc.createElement("select");
+  for (const collection of [
+    { id: "private", name: "Private" },
+    ...collections,
+  ]) {
+    const option = doc.createElement("option");
+    option.value = collection.id;
+    option.textContent =
+      collection.id === current && !duplicate
+        ? `${collection.name} (current)`
+        : collection.name;
+    option.selected = collection.id === current;
+    select.append(option);
+  }
+  const name = doc.createElement("input");
+  name.required = true;
+  name.maxLength = 80;
+  name.value = `${scene.name} copy`;
+  const label = duplicate ? "Duplicate scene" : "Move scene";
+  editorDialog(
+    label,
+    [
+      ...(duplicate ? [dialogField("Scene name", name)] : []),
+      dialogField("Target collection", select),
+    ],
+    label,
+    async () => {
+      const target = select.value,
+        isPrivate = target === "private";
+      if (duplicate) {
+        await request(`/scenes/${scene.id}/duplicate`, {
+          method: "POST",
+          headers: { "Idempotency-Key": doc.defaultView!.crypto.randomUUID() },
+          body: JSON.stringify({
+            name: name.value.trim(),
+            collection_id: isPrivate ? null : target,
+            private: isPrivate,
+          }),
+        });
+      } else {
+        if (target === current) {
+          throw new Error("The scene is already in this collection.");
+        }
+        await request(`/scenes/${scene.id}/move`, {
+          method: "POST",
+          body: JSON.stringify({
+            collection_id: isPrivate ? null : target,
+            private: isPrivate,
+            version: sceneVersion(session, scene),
+          }),
+        });
+      }
+      showToast(duplicate ? "Scene duplicated." : "Scene moved.");
+      await reload();
+    },
+  );
+}
+
+function trashScene(
+  session: EditorSession,
+  scene: SceneRow,
+  reload: () => Promise<unknown>,
+) {
+  const doc = node.ownerDocument;
+  const text = doc.createElement("p");
+  const name = doc.createElement("strong");
+  name.textContent = scene.name;
+  text.append("You can restore ", name, " from Trash.");
+  editorDialog(
+    "Move scene to trash?",
+    [text],
+    "Move to trash",
+    async () => {
+      const isCurrent = scene.id === session.id;
+      if (isCurrent) {
+        await flush(session);
+      }
+      await request(`/scenes/${scene.id}`, { method: "DELETE" });
+      if (isCurrent) {
+        session.pending = undefined;
+        await draftStore("delete", session.key).catch(() => {});
+        doc.defaultView!.location.assign(session.returnTo);
+        return;
+      }
+      showToast("Scene moved to Trash.");
+      await reload();
+    },
+    true,
+  );
+}
+
+function sceneActions(
+  session: EditorSession,
+  scene: SceneRow,
+  row: HTMLElement,
+  reload: () => Promise<unknown>,
+): MenuItem[] {
+  const can = (permission: string) => Boolean(permissions?.[permission]);
+  const items: MenuItem[] = [];
+  if (can("drawing.rename")) {
+    items.push({
+      label: "Rename",
+      icon: ICONS.edit,
+      action: () => renameScene(session, scene, row),
+    });
+  }
+  items.push({
+    label: "Share",
+    icon: ICONS.share,
+    children: [
+      {
+        label: "Share scene",
+        icon: ICONS.link,
+        action: () => shareScene(scene),
+      },
+    ],
+  });
+  if (can("drawing.export")) {
+    items.push({
+      label: "Quick export",
+      icon: ICONS.export,
+      children: (
+        [
+          ["svg", "Scene as SVG"],
+          ["png", "Scene as PNG"],
+          ["json", "Scene as JSON"],
+        ] as const
+      ).map(([format, label]) => ({
+        label,
+        icon: ICONS.file,
+        action: () => quickExport(session, scene, format),
+      })),
+    });
+  }
+  if (can("drawing.rename")) {
+    items.push({
+      label: scene.pinned ? "Unpin" : "Pin",
+      icon: ICONS.pin,
+      action: async () => {
+        try {
+          const saved = await request<{ metadata_version: number }>(
+            `/scenes/${scene.id}`,
+            {
+              method: "PATCH",
+              body: JSON.stringify({
+                pinned: !scene.pinned,
+                version: sceneVersion(session, scene),
+              }),
+            },
+          );
+          if (scene.id === session.id) {
+            session.metadataVersion = saved.metadata_version;
+          }
+          await reload();
+        } catch (error: any) {
+          showToast(error.message, true);
+        }
+      },
+    });
+  }
+  if (can("drawing.duplicate")) {
+    items.push({
+      label: "Duplicate",
+      icon: ICONS.copy,
+      action: () => destinationDialog(session, scene, true, reload),
+    });
+  }
+  if (can("drawing.edit") && can("collection.remove")) {
+    items.push({
+      label: "Move",
+      icon: ICONS.move,
+      action: () => destinationDialog(session, scene, false, reload),
+    });
+  }
+  if (can("drawing.trash")) {
+    items.push({
+      label: "Move to trash",
+      icon: ICONS.trash,
+      danger: true,
+      action: () => trashScene(session, scene, reload),
+    });
+  }
+  return items;
+}
+
+function sceneRow(
+  session: EditorSession,
+  scene: SceneRow,
+  reload: () => Promise<unknown>,
+) {
+  const doc = node.ownerDocument;
+  const row = doc.createElement("div");
+  row.className = "workspace-scene-row";
+  row.dataset.sceneName = scene.name.toLowerCase();
+  const link = doc.createElement("a");
+  link.href = `/editor?scene=${scene.id}&returnTo=${encodeURIComponent(
+    session.returnTo,
+  )}`;
+  const caption = doc.createElement("span"),
+    label = doc.createElement("strong"),
+    author = doc.createElement("small"),
+    when = doc.createElement("small");
+  label.textContent = scene.name;
+  author.textContent = `by ${scene.owner_name}`;
+  when.textContent = timeAgo(
+    sortOrder() === "created" ? scene.created_at : scene.updated_at,
+  );
+  if (scene.pinned) {
+    const pin = doc.createElement("span");
+    pin.className = "workspace-scene-pin";
+    pin.title = "Pinned";
+    pin.innerHTML = ICONS.pin;
+    when.prepend(pin);
+  }
+  caption.append(label, author, when);
+  if (scene.thumb_s3_key) {
+    const image = doc.createElement("img");
+    image.src = `${API}/scenes/${scene.id}/thumbnail?v=${scene.scene_version}`;
+    image.alt = "";
+    link.append(image);
+  }
+  link.append(caption);
+  if (scene.id === session.id) {
+    link.setAttribute("aria-current", "page");
+  }
+  const more = doc.createElement("button");
+  more.type = "button";
+  more.className = "workspace-scene-more";
+  more.innerHTML = ICONS.more;
+  more.title = "Scene actions";
+  more.setAttribute("aria-label", `Actions for ${scene.name}`);
+  more.setAttribute("aria-haspopup", "menu");
+  more.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openMenu(more, sceneActions(session, scene, row, reload));
+  };
+  row.append(link, more);
+  return row;
+}
+
 async function showCollectionScenes(session: EditorSession) {
   const doc = node.ownerDocument,
     old = doc.querySelector(".workspace-scenes-panel");
@@ -326,7 +1047,7 @@ async function showCollectionScenes(session: EditorSession) {
     query = new URLSearchParams({
       workspace: session.workspace,
       limit: "100",
-      sort: "title",
+      sort: sortOrder(),
     });
   if (context.get("collection")) {
     query.set("collection", context.get("collection")!);
@@ -354,22 +1075,65 @@ async function showCollectionScenes(session: EditorSession) {
   account.href = "/account/change-password";
   account.textContent = userLabel;
   panel.append(account);
+  const sortButton = doc.createElement("button");
+  sortButton.type = "button";
+  sortButton.className = "workspace-panel-icon";
+  sortButton.innerHTML = ICONS.sort;
+  sortButton.title = "Sort scenes";
+  sortButton.setAttribute("aria-label", "Sort scenes");
+  sortButton.setAttribute("aria-haspopup", "menu");
+  header.append(sortButton);
+  const applySearch = () =>
+    list.querySelectorAll<HTMLElement>("[data-scene-name]").forEach((row) => {
+      row.hidden = !row.dataset.sceneName!.includes(search.value.toLowerCase());
+    });
+  search.oninput = applySearch;
+  const reload = async (): Promise<SceneList | undefined> => {
+    query.set("sort", sortOrder());
+    const result = await request<SceneList>(`/scenes?${query}`);
+    if (!panel.isConnected) {
+      return undefined;
+    }
+    list.replaceChildren(
+      ...result.items.map((scene) => sceneRow(session, scene, reload)),
+    );
+    const current = result.items.find((scene) => scene.id === session.id);
+    if (current) {
+      session.metadataVersion = Math.max(
+        session.metadataVersion,
+        current.metadata_version,
+      );
+    }
+    if (result.total > 100) {
+      const more = doc.createElement("a");
+      more.href = session.returnTo;
+      more.textContent = `View all ${result.total} scenes`;
+      list.append(more);
+    }
+    applySearch();
+    return result;
+  };
+  sortButton.onclick = () =>
+    openMenu(
+      sortButton,
+      SORTS.map(([key, label]) => ({
+        label,
+        checked: sortOrder() === key,
+        action: () => {
+          setSortOrder(key);
+          void reload().catch((error: any) => showToast(error.message, true));
+        },
+      })),
+    );
   list.textContent = "Loading…";
   try {
     const [result, workspaces] = await Promise.all([
-      request<{
-        items: Array<{
-          id: string;
-          name: string;
-          thumb_s3_key?: string;
-          scene_version: number;
-          owner_name: string;
-          collections: Array<{ id: string; name: string }>;
-        }>;
-        total: number;
-      }>(`/scenes?${query}`),
+      reload(),
       request<Array<{ id: string; name: string }>>("/workspaces"),
     ]);
+    if (!result) {
+      return;
+    }
     const workspace = doc.createElement("strong");
     workspace.className = "workspace-panel-name";
     workspace.textContent =
@@ -383,48 +1147,16 @@ async function showCollectionScenes(session: EditorSession) {
     heading.textContent =
       current?.collections.find((c) => c.id === context.get("collection"))
         ?.name || heading.textContent;
-    if (!panel.isConnected) return;
-    list.replaceChildren();
-    for (const scene of result.items) {
-      const link = doc.createElement("a");
-      link.href = `/editor?scene=${scene.id}&returnTo=${encodeURIComponent(
-        session.returnTo,
-      )}`;
-      const caption = doc.createElement("span"),
-        label = doc.createElement("strong"),
-        author = doc.createElement("small");
-      label.textContent = scene.name;
-      author.textContent = `by ${scene.owner_name}`;
-      caption.append(label, author);
-      if (scene.thumb_s3_key) {
-        const image = doc.createElement("img");
-        image.src = `${API}/scenes/${scene.id}/thumbnail?v=${scene.scene_version}`;
-        image.alt = "";
-        link.append(image);
-      }
-      link.append(caption);
-      link.dataset.sceneName = scene.name.toLowerCase();
-      if (scene.id === session.id) link.setAttribute("aria-current", "page");
-      list.append(link);
-    }
-    search.oninput = () =>
-      list
-        .querySelectorAll<HTMLAnchorElement>("[data-scene-name]")
-        .forEach(
-          (link) =>
-            (link.hidden = !link.dataset.sceneName!.includes(
-              search.value.toLowerCase(),
-            )),
-        );
-    if (result.total > 100) {
-      const more = doc.createElement("a");
-      more.href = session.returnTo;
-      more.textContent = `View all ${result.total} scenes`;
-      list.append(more);
+    if (!panel.isConnected) {
+      return;
     }
     if (permissions?.["drawing.create"]) {
       const create = doc.createElement("button");
-      create.textContent = "+ Create scene";
+      create.type = "button";
+      create.className = "workspace-panel-add";
+      create.innerHTML = ICONS.plus;
+      create.title = "Create scene";
+      create.setAttribute("aria-label", "Create scene");
       create.onclick = async () => {
         create.disabled = true;
         await flush(session);
@@ -451,11 +1183,11 @@ async function showCollectionScenes(session: EditorSession) {
             )}`,
           );
         } catch (e: any) {
-          create.textContent = e.message;
+          showToast(e.message, true);
           create.disabled = false;
         }
       };
-      panel.insertBefore(create, list);
+      header.append(create);
     }
   } catch (e: any) {
     list.textContent = e.message;
@@ -509,6 +1241,8 @@ export function initializeWorkspaceEditor(
       ) as HTMLAnchorElement | null;
       if (
         !anchor ||
+        // export downloads are blob links on this origin, not navigation
+        anchor.hasAttribute("download") ||
         !active?.pending ||
         anchor.origin !== win.location.origin ||
         event.ctrlKey ||
