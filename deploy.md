@@ -787,7 +787,7 @@ Both forms revoke every session and outstanding password token for that user,
 and write an entry to the audit log.
 
 Users change their own password in the app under **Account → Change password**.
-Passwords must be at least 15 characters and are checked against a strength
+Passwords must be at least 8 characters and are checked against a strength
 estimator; the hash is Argon2id.
 
 ## 13. Verification

@@ -38,3 +38,6 @@ excalidraw-plus-audit.md
 
 # the API deploy runs `npm ci`, which requires its lockfile
 !server/package-lock.json
+
+# QA / test run reports
+*QA_REPORT*.md

@@ -1,4 +1,4 @@
-import { revealSecret } from "./secrets.js";
+import { protectSecret, revealSecret } from "./secrets.js";
 import { mergeSceneSnapshots } from "./merge-scene.js";
 import { collectionTeamVisibility } from "./teams.js";
 import crypto from "node:crypto";
@@ -385,17 +385,39 @@ export function installDrawings(app, db, storage, security) {
       "INSERT INTO scene_visits(user_id,scene_id) VALUES($1,$2) ON CONFLICT(user_id,scene_id) DO UPDATE SET visited_at=now()",
       [req.user.id, scene.id],
     );
-    const savedRoom = (
-      await db.query(
-        "SELECT room_id,encrypted_key FROM scene_room_keys WHERE scene_id=$1 AND room_id=$2",
-        [scene.id, scene.room_id],
-      )
-    ).rows[0];
+    const savedRoom = await transaction(db, async (tx) => {
+      const locked = (
+        await tx.query("SELECT room_id FROM scenes WHERE id=$1 FOR UPDATE", [
+          scene.id,
+        ])
+      ).rows[0];
+      if (locked.room_id) {
+        return (
+          await tx.query(
+            "SELECT room_id,encrypted_key FROM scene_room_keys WHERE scene_id=$1 AND room_id=$2",
+            [scene.id, locked.room_id],
+          )
+        ).rows[0];
+      }
+      const roomId = crypto.randomBytes(20).toString("base64url"),
+        roomKey = crypto.randomBytes(32).toString("base64url"),
+        encryptedKey = protectSecret(roomKey);
+      await tx.query("UPDATE scenes SET room_id=$2 WHERE id=$1", [
+        scene.id,
+        roomId,
+      ]);
+      await tx.query(
+        "INSERT INTO scene_room_keys(scene_id,room_id,encrypted_key) VALUES($1,$2,$3)",
+        [scene.id, roomId, encryptedKey],
+      );
+      return { room_id: roomId, encrypted_key: encryptedKey };
+    });
+    const roomId = savedRoom?.room_id || scene.room_id;
     res.json({
       id: scene.id,
       name: scene.name,
       metadata_version: scene.metadata_version,
-      room_id: scene.room_id,
+      room_id: roomId,
       collaboration: savedRoom
         ? {
             roomId: savedRoom.room_id,

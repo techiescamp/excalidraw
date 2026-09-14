@@ -421,6 +421,12 @@ const initializeScene = async (opts: {
 
 const ExcalidrawWrapper = () => {
   const excalidrawAPI = useExcalidrawAPI();
+  const workspaceSceneId = getWorkspaceSceneId();
+  const editorLocation = workspaceEditorLocation();
+  const libraryReturnUrl =
+    workspaceSceneId && editorLocation
+      ? `${editorLocation.origin}${editorLocation.pathname}?scene=${workspaceSceneId}`
+      : undefined;
 
   const [errorMessage, setErrorMessage] = useState("");
   const workspacePermissions = useSyncExternalStore(
@@ -1009,6 +1015,7 @@ const ExcalidrawWrapper = () => {
       })}
     >
       <Excalidraw
+        libraryReturnUrl={libraryReturnUrl}
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
         onChange={onChange}

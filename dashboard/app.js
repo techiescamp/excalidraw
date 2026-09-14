@@ -21,7 +21,7 @@ const state = {
   generation: 0,
 };
 const guidance =
-  "Use 15–128 characters. Spaces and Unicode are welcome. Avoid common or compromised passwords.";
+  "Use 8–128 characters. Spaces and Unicode are welcome. Avoid common or compromised passwords.";
 const can = (key) => Boolean(state.workspace?.permissions[key]);
 const params = () => new URLSearchParams(win.location.search);
 const route = () => win.location.pathname;
@@ -71,7 +71,7 @@ const input = (label, name, value = "", attrs = "") =>
   )}" ${attrs}></label>`;
 const password = (label, name, autocomplete = "new-password") =>
   `<label>${label}<span class="password-field"><input name="${name}" type="password" autocomplete="${autocomplete}" required ${
-    autocomplete === "new-password" ? 'minlength="15" maxlength="256"' : ""
+    autocomplete === "new-password" ? 'minlength="8" maxlength="128"' : ""
   }><button type="button" data-visibility="${name}" aria-label="Show ${label.toLowerCase()}">Show</button></span></label>`;
 const errorBox = '<p class="error" role="alert" hidden></p>';
 function formHandler(form, run, busy = "Saving…") {

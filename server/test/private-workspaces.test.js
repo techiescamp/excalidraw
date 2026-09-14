@@ -187,6 +187,13 @@ after(async () => {
   if (storage) await rm(storage, { recursive: true, force: true });
 });
 test("private workspace backend", async (t) => {
+  await t.test("password policy accepts eight characters and rejects seven", async () => {
+    await assert.doesNotReject(() => hashPassword("K7!mQ2#z"));
+    assert.throws(
+      () => hashPassword("K7!mQ2#"),
+      /Use 8–128 characters/,
+    );
+  });
   await t.test(
     "signed-out APIs and old public routes expose no scene data",
     async () => {
@@ -847,6 +854,32 @@ test("private workspace backend", async (t) => {
         ).rowCount,
         0,
       );
+    },
+  );
+  await t.test(
+    "first workspace loads establish one persistent collaboration room",
+    async () => {
+      const scene = await createDrawing();
+      const loads = await Promise.all([
+        call(`/scenes/${scene.id}/data`, { cookie: admin }),
+        call(`/scenes/${scene.id}/data`, { cookie: editor.cookie }),
+      ]);
+      assert.deepEqual(
+        loads.map((result) => result.status),
+        [200, 200],
+      );
+      assert.match(loads[0].body.collaboration.roomId, /^[a-zA-Z0-9_-]{10,100}$/);
+      assert.match(loads[0].body.collaboration.roomKey, /^[a-zA-Z0-9_-]{20,100}$/);
+      assert.deepEqual(loads[1].body.collaboration, loads[0].body.collaboration);
+      assert.equal(loads[0].body.room_id, loads[0].body.collaboration.roomId);
+      const stored = (
+        await db.query(
+          "SELECT room_id,encrypted_key FROM scene_room_keys WHERE scene_id=$1",
+          [scene.id],
+        )
+      ).rows[0];
+      assert.equal(stored.room_id, loads[0].body.collaboration.roomId);
+      assert.notEqual(stored.encrypted_key, loads[0].body.collaboration.roomKey);
     },
   );
   await t.test(
