@@ -399,8 +399,12 @@ export function installDrawings(app, db, storage, security) {
           )
         ).rows[0];
       }
-      const roomId = crypto.randomBytes(20).toString("base64url"),
-        roomKey = crypto.randomBytes(32).toString("base64url"),
+      // Match the editor's own format (excalidraw-app/data/index.ts): a room id
+      // of 10 random bytes as hex, and a 128-bit AES-GCM key as the 22-character
+      // base64url JWK `k` value. The editor rejects any other key length with
+      // "Encryption key must be of 22 characters".
+      const roomId = crypto.randomBytes(10).toString("hex"),
+        roomKey = crypto.randomBytes(16).toString("base64url"),
         encryptedKey = protectSecret(roomKey);
       await tx.query("UPDATE scenes SET room_id=$2 WHERE id=$1", [
         scene.id,

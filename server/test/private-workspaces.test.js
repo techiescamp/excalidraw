@@ -869,7 +869,9 @@ test("private workspace backend", async (t) => {
         [200, 200],
       );
       assert.match(loads[0].body.collaboration.roomId, /^[a-zA-Z0-9_-]{10,100}$/);
-      assert.match(loads[0].body.collaboration.roomKey, /^[a-zA-Z0-9_-]{20,100}$/);
+      // the editor only accepts 22-character keys and hex room ids
+      assert.match(loads[0].body.collaboration.roomKey, /^[a-zA-Z0-9_-]{22}$/);
+      assert.match(loads[0].body.collaboration.roomId, /^[0-9a-f]{20}$/);
       assert.deepEqual(loads[1].body.collaboration, loads[0].body.collaboration);
       assert.equal(loads[0].body.room_id, loads[0].body.collaboration.roomId);
       const stored = (
@@ -999,7 +1001,8 @@ test("private workspace backend", async (t) => {
     async () => {
       const s = await createDrawing(),
         room = "persistent-" + crypto.randomUUID(),
-        key = crypto.randomBytes(32).toString("base64url");
+        // a 128-bit key, the only size the editor accepts (22 base64url chars)
+        key = crypto.randomBytes(16).toString("base64url");
       const first = await call(`/scenes/${s.id}/room`, {
         cookie: admin,
         method: "POST",
@@ -1011,7 +1014,7 @@ test("private workspace backend", async (t) => {
         method: "POST",
         body: {
           room_id: "another-" + crypto.randomUUID(),
-          room_key: crypto.randomBytes(32).toString("base64url"),
+          room_key: crypto.randomBytes(16).toString("base64url"),
         },
       });
       assert.deepEqual(repeat.body, first.body);

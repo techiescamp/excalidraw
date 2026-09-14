@@ -33,7 +33,8 @@ export async function installCollaboration(
     const roomKey = req.body?.room_key;
     if (
       roomKey !== undefined &&
-      (typeof roomKey !== "string" || !/^[a-zA-Z0-9_-]{20,100}$/.test(roomKey))
+      // 128-bit key encoded as base64url: exactly what the editor can import
+      (typeof roomKey !== "string" || !/^[a-zA-Z0-9_-]{22}$/.test(roomKey))
     )
       fail(400, "Invalid room key.");
     const result = await transaction(db, async (tx) => {
