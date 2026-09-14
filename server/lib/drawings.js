@@ -717,5 +717,5 @@ export function installDrawings(app, db, storage, security) {
     );
     res.json(rows);
   });
-  return { sceneAccess, readScene };
+  return { sceneAccess, readScene, create, validateScene, collectionAccess };
 }

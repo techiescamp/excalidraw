@@ -1255,3 +1255,245 @@ html {
 .settings-row[hidden] {
   display: none;
 }
+
+/* Workspace transfer settings mirror the spacious Plus settings layout. */
+.transfer-page {
+  max-width: 1128px;
+  margin: 24px auto;
+}
+.transfer-title {
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--border, #eae7f6);
+  font-size: 24px;
+  color: #29105b;
+}
+.transfer-section {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 48px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border, #eae7f6);
+}
+.transfer-section h3 {
+  color: #7863dc;
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+.transfer-section p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #65616d;
+}
+.transfer-notice {
+  padding: 18px;
+  background: #f5f8ff;
+  color: #5d5cfd;
+  border-left: 4px solid #72a3ff;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  margin-bottom: 24px;
+}
+.transfer-page fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 28px;
+}
+.transfer-page legend {
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+.export-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.export-admin-options {
+  display: grid;
+  gap: 12px;
+}
+.export-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 14px;
+  border: 1px solid #e4e1ed;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.export-option:has(input:checked) {
+  border-color: #7962ee;
+  background: #f7f5ff;
+}
+.export-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: #7863dc;
+  flex-shrink: 0;
+}
+.export-option small {
+  display: block;
+  font-size: 11px;
+  margin-top: 7px;
+  color: #858092;
+}
+.transfer-limit {
+  font-size: 12px !important;
+  color: #88828f !important;
+}
+.export-history {
+  overflow: auto;
+}
+.export-history table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #ebe8f2;
+  font-size: 12px;
+}
+.export-history th {
+  background: #e5e0fa;
+  text-align: left;
+}
+.export-history th,
+.export-history td {
+  padding: 15px 12px;
+}
+.export-type,
+.export-pending {
+  padding: 4px 8px;
+  border-radius: 16px;
+  background: #b9f4d8;
+  color: #24754b;
+}
+.export-pending {
+  background: #ffe0b6;
+  color: #9c550d;
+  white-space: nowrap;
+}
+.import-empty {
+  text-align: center;
+  padding: 60px 12px 30px;
+}
+.import-plane {
+  width: 360px;
+  max-width: 90%;
+  height: 160px;
+  color: #e8e7eb;
+}
+.import-empty h3 {
+  margin: 15px 0 30px;
+  font-weight: 500;
+  color: #79757d;
+}
+.import-empty p {
+  color: #85818a;
+  line-height: 1.8;
+  font-size: 14px;
+}
+.import-actions {
+  display: grid;
+  gap: 18px;
+  width: 260px;
+  margin: 34px auto;
+}
+.import-actions button {
+  min-height: 48px;
+}
+.import-divider {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  color: #aaa5af;
+  max-width: 485px;
+  margin: 0 auto;
+}
+.import-divider::before,
+.import-divider::after {
+  content: "";
+  height: 1px;
+  background: #c5c1c9;
+  flex: 1;
+}
+.import-destination {
+  max-width: 300px;
+  margin: 24px auto 12px;
+  text-align: left;
+}
+.import-dragging {
+  outline: 2px dashed #7863dc;
+  background: #f7f5ff;
+}
+#import-progress {
+  margin: 24px auto;
+  max-width: 620px;
+}
+#import-progress details {
+  text-align: left;
+}
+.transfer-page [hidden] {
+  display: none !important;
+}
+@media (max-width: 900px) {
+  .transfer-section {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .export-options {
+    gap: 12px;
+  }
+}
+@media (max-width: 520px) {
+  .export-options {
+    grid-template-columns: 1fr;
+  }
+  .import-empty {
+    padding-top: 15px;
+  }
+}
+.transfer-layout {
+  background: #fff;
+}
+.transfer-layout .sidebar {
+  border-radius: 0;
+  margin: 0;
+  border-width: 0 1px 0 0;
+  box-shadow: none;
+}
+.transfer-layout #admin-content {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+.transfer-layout #page {
+  padding-top: 24px;
+}
+.transfer-layout .settings-nav-title {
+  color: #7863dc;
+  font-size: 17px;
+  padding: 4px 12px 8px;
+  margin: 0;
+}
+.transfer-layout .primary-nav {
+  gap: 2px;
+}
+.transfer-layout .primary-nav a {
+  min-height: 42px;
+}
+.transfer-layout .sidebar [hidden] {
+  display: none !important;
+}
+.transfer-layout .export-option {
+  margin: 0;
+}
+.transfer-layout .export-option input {
+  order: 2;
+  margin-left: auto;
+}
+.transfer-layout .export-option span {
+  flex: 1;
+  text-align: center;
+}

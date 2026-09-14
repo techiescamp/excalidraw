@@ -1,3 +1,4 @@
+import { renderWorkspaceTransfer } from "./workspace-transfer.js";
 import { icon, relativeTime } from "./ui.js";
 import { PERMISSIONS, effectivePermissions } from "./permissions.js";
 const root = document.getElementById("shell");
@@ -1169,7 +1170,9 @@ async function drawingsPage(generation) {
    16,
  )}<input type="search" name="search" aria-label="Search scenes" placeholder="Search scenes…" value="${escape(
     p.get("search") || "",
-  )}"><span>${result.total} ${result.total === 1 ? "scene" : "scenes"}</span></div>
+  )}"><span>${result.total} ${
+    result.total === 1 ? "scene" : "scenes"
+  }</span></div>
  <div id="scene-results"><div class="scene-grid">${result.items
    .map((s) => card(s, trash))
    .join("")}</div>${
@@ -1259,7 +1262,9 @@ async function drawingsPage(generation) {
               ? emptyState("No matching scenes", "Try a different name.")
               : ""
           }`;
-          $(".scene-filter span").textContent = `${fresh.total} ${fresh.total === 1 ? "scene" : "scenes"}`;
+          $(".scene-filter span").textContent = `${fresh.total} ${
+            fresh.total === 1 ? "scene" : "scenes"
+          }`;
           $(".pagination").innerHTML =
             fresh.total > fresh.limit ? button("Next scenes", 'id="next"') : "";
           $("#next")?.addEventListener("click", () =>
@@ -1427,6 +1432,8 @@ function adminNav() {
       ["reset-requests", "Password requests"],
       ["audit-log", "Audit log"],
       ["storage", "Storage"],
+      ["workspace-export", "Workspace export"],
+      ["workspace-import", "Workspace import"],
     ]
       .map(
         ([id, label]) =>
@@ -1788,6 +1795,39 @@ async function adminPage(generation) {
   $(
     "#page",
   ).innerHTML = `<h1>Administration</h1>${adminNav()}<div id="admin-content"></div>`;
+  if (["workspace-export", "workspace-import"].includes(name)) {
+    $(".layout").classList.add("transfer-layout");
+    $("#page").innerHTML = '<div id="admin-content"></div>';
+    const sidebar = $(".sidebar");
+    sidebar.querySelector(".primary-nav").innerHTML =
+      '<h2 class="settings-nav-title">Workspace Settings</h2>' +
+      [
+        ["workspaces", "Settings", "settings"],
+        ["users", "Members", "users"],
+        ["teams", "Teams & Collections", "collection"],
+        ["reset-requests", "Password requests", "lock"],
+        ["storage", "Storage", "storage"],
+        ["workspace-export", "Workspace export", "download"],
+        ["workspace-import", "Workspace import", "import"],
+        ["audit-log", "Logs", "scene"],
+      ]
+        .map(([id, label, glyph]) =>
+          navLink("/admin/" + id, label, glyph, name === id),
+        )
+        .join("") +
+      navLink(homePath(), "Dashboard", "dashboard", false);
+    for (const selector of [".section-head", ".private-nav", ".collection-nav"])
+      sidebar.querySelector(selector).hidden = true;
+    return renderWorkspaceTransfer({
+      host: $("#admin-content"),
+      state,
+      api,
+      escape,
+      reauthenticate,
+      kind: name,
+      generation,
+    });
+  }
   if (name === "teams") return teamsPage(generation);
   if (name === "workspaces") {
     const rows = await api("/admin/workspaces");

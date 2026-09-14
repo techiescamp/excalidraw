@@ -1,3 +1,5 @@
+import { renderWorkspaceTransfer } from "../../dashboard/workspace-transfer.js";
+import { zipSync, unzipSync } from "fflate";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
@@ -130,6 +132,7 @@ before(async () => {
     "migration-006-workspace-experience.sql",
     "migration-007-team-access.sql",
     "migration-008-collaboration-keys.sql",
+    "migration-009-workspace-transfer.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -187,13 +190,273 @@ after(async () => {
   if (storage) await rm(storage, { recursive: true, force: true });
 });
 test("private workspace backend", async (t) => {
-  await t.test("password policy accepts eight characters and rejects seven", async () => {
-    await assert.doesNotReject(() => hashPassword("K7!mQ2#z"));
-    assert.throws(
-      () => hashPassword("K7!mQ2#"),
-      /Use 8–128 characters/,
-    );
-  });
+  await t.test(
+    "import UI submits ZIPs and displays the backend summary",
+    async () => {
+      const dom = new JSDOM('<div id="host"></div>', {
+        url: origin + "/admin/workspace-import",
+      });
+      const win = dom.window,
+        host = win.document.getElementById("host");
+      win.fetch = (url, options) =>
+        fetch(origin + url, {
+          ...options,
+          headers: { ...options.headers, Cookie: admin, Origin: origin },
+        });
+      const api = async (endpoint) => {
+        const result = await call(endpoint, { cookie: admin });
+        assert.equal(result.status, 200);
+        return result.body;
+      };
+      await renderWorkspaceTransfer({
+        host,
+        state: { workspace: { id: workspace }, collections: [], generation: 1 },
+        api,
+        escape: (value) => String(value),
+        reauthenticate: async () => true,
+        kind: "workspace-import",
+        generation: 1,
+      });
+      const payload = {
+        type: "excalidraw",
+        elements: [],
+        appState: {},
+        files: {},
+      };
+      const file = new File(
+        [
+          zipSync({
+            "UI import/Browser scene.excalidraw": Buffer.from(
+              JSON.stringify(payload),
+            ),
+          }),
+        ],
+        "ui.zip",
+        { type: "application/zip" },
+      );
+      const input = host.querySelector("#import-files");
+      Object.defineProperty(input, "files", { value: [file] });
+      input.dispatchEvent(new win.Event("change"));
+      for (
+        let i = 0;
+        i < 100 && !host.textContent.includes("Import complete");
+        i++
+      )
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.match(host.textContent, /1 imported · 0 skipped · 0 errors/);
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM collections WHERE workspace_id=$1 AND name='UI import'",
+            [workspace],
+          )
+        ).rows[0].n,
+        1,
+      );
+      dom.window.close();
+    },
+  );
+
+  await t.test(
+    "workspace transfer preserves images, collections and privacy; checks scope and retries",
+    async () => {
+      const prefix = `/admin/workspaces/${workspace}`;
+      assert.equal(
+        (await call(prefix + "/transfers", { cookie: editor.cookie })).status,
+        403,
+      );
+      const image = {
+        type: "excalidraw",
+        version: 2,
+        elements: [
+          { id: "image-1", type: "image", fileId: "asset", isDeleted: false },
+        ],
+        appState: { viewBackgroundColor: "#ffffff" },
+        files: {
+          asset: {
+            id: "asset",
+            dataURL: "data:image/png;base64,aGVsbG8=",
+            mimeType: "image/png",
+            created: 1,
+          },
+        },
+      };
+      const upload = async (
+        bytes,
+        key,
+        file = "Drawing.zip",
+        cookie = admin,
+      ) => {
+        const response = await fetch(origin + "/api" + prefix + "/imports", {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: origin,
+            "X-Excalidraw-Request": "1",
+            "Idempotency-Key": key,
+            "Content-Type": "application/zip",
+            "X-File-Path": encodeURIComponent(file),
+          },
+          body: bytes,
+        });
+        return { status: response.status, body: await response.json() };
+      };
+      const bytes = zipSync({
+        "Architecture/Diagram.excalidraw": Buffer.from(JSON.stringify(image)),
+        "Private/Personal.excalidraw": Buffer.from(JSON.stringify(image)),
+      });
+      const key = crypto.randomUUID();
+      assert.equal(
+        (await upload(bytes, key, "Drawing.zip", editor.cookie)).status,
+        403,
+      );
+      const imported = await upload(bytes, key);
+      assert.equal(imported.status, 200, JSON.stringify(imported.body));
+      assert.deepEqual(imported.body, { imported: 2, skipped: 0, errors: [] });
+      assert.deepEqual((await upload(bytes, key)).body, {
+        imported: 0,
+        skipped: 2,
+        errors: [],
+      });
+      const privateOther = await createDrawing(editor.cookie, null, {
+        private: true,
+        name: "Other user private",
+      });
+      const request = await call(prefix + "/exports", {
+        cookie: admin,
+        method: "POST",
+        body: { scope: "accessible" },
+      });
+      assert.equal(request.status, 202, JSON.stringify(request.body));
+      assert.equal(
+        (
+          await call(prefix + "/exports", {
+            cookie: admin,
+            method: "POST",
+            body: { scope: "all" },
+          })
+        ).status,
+        429,
+      );
+      let job;
+      for (let i = 0; i < 100; i++) {
+        job = (
+          await db.query("SELECT * FROM workspace_exports WHERE id=$1", [
+            request.body.id,
+          ])
+        ).rows[0];
+        if (["ready", "failed"].includes(job.status)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.equal(job.status, "ready", job.error);
+      const download = await fetch(
+        origin + "/api" + prefix + "/exports/" + job.id + "/download",
+        { headers: { Cookie: admin } },
+      );
+      assert.equal(download.status, 200);
+      const archive = unzipSync(new Uint8Array(await download.arrayBuffer()));
+      const manifest = JSON.parse(
+        Buffer.from(archive["manifest.json"]).toString(),
+      );
+      assert.equal(
+        manifest.scenes.some((s) => s.name === privateOther.name),
+        false,
+      );
+      const diagram = manifest.scenes.find((s) => s.name === "Diagram");
+      assert.equal(diagram.collections[0].name, "Architecture");
+      assert.deepEqual(
+        JSON.parse(Buffer.from(archive[diagram.path]).toString()).files,
+        image.files,
+      );
+      const restored = await upload(zipSync(archive), crypto.randomUUID());
+      assert.equal(
+        restored.body.errors.length,
+        0,
+        JSON.stringify(restored.body),
+      );
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM collections WHERE workspace_id=$1 AND name='Architecture'",
+            [workspace],
+          )
+        ).rows[0].n,
+        1,
+      );
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM scenes WHERE workspace_id=$1 AND name='Personal' AND private_owner_id IS NOT NULL",
+            [workspace],
+          )
+        ).rows[0].n,
+        2,
+      );
+      await db.query(
+        "UPDATE workspace_exports SET created_at=now()-interval '2 hours' WHERE id=$1",
+        [job.id],
+      );
+      const full = await call(prefix + "/exports", {
+        cookie: admin,
+        method: "POST",
+        body: { scope: "member", member_id: editor.id },
+      });
+      assert.equal(full.status, 202);
+      for (let i = 0; i < 100; i++) {
+        job = (
+          await db.query("SELECT * FROM workspace_exports WHERE id=$1", [
+            full.body.id,
+          ])
+        ).rows[0];
+        if (["ready", "failed"].includes(job.status)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.equal(job.status, "ready", job.error);
+      const memberArchive = unzipSync(
+        await readFile(path.join(storage, job.object_key)),
+      );
+      const memberManifest = JSON.parse(
+        Buffer.from(memberArchive["manifest.json"]).toString(),
+      );
+      assert.deepEqual(
+        memberManifest.scenes.map((s) => s.name),
+        [privateOther.name],
+      );
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM audit_log WHERE action='workspace.export.request'",
+          )
+        ).rows[0].n,
+        2,
+      );
+      await db.query(
+        "UPDATE workspace_exports SET expires_at=now()-interval '1 second' WHERE id=$1",
+        [job.id],
+      );
+      assert.equal(
+        (
+          await fetch(
+            origin + "/api" + prefix + "/exports/" + job.id + "/download",
+            { headers: { Cookie: admin } },
+          )
+        ).status,
+        404,
+      );
+      const unsafe = zipSync({
+        "../escape.excalidraw": Buffer.from(JSON.stringify(image)),
+      });
+      assert.equal((await upload(unsafe, crypto.randomUUID())).status, 400);
+    },
+  );
+
+  await t.test(
+    "password policy accepts eight characters and rejects seven",
+    async () => {
+      await assert.doesNotReject(() => hashPassword("K7!mQ2#z"));
+      assert.throws(() => hashPassword("K7!mQ2#"), /Use 8–128 characters/);
+    },
+  );
   await t.test(
     "signed-out APIs and old public routes expose no scene data",
     async () => {
@@ -868,11 +1131,17 @@ test("private workspace backend", async (t) => {
         loads.map((result) => result.status),
         [200, 200],
       );
-      assert.match(loads[0].body.collaboration.roomId, /^[a-zA-Z0-9_-]{10,100}$/);
+      assert.match(
+        loads[0].body.collaboration.roomId,
+        /^[a-zA-Z0-9_-]{10,100}$/,
+      );
       // the editor only accepts 22-character keys and hex room ids
       assert.match(loads[0].body.collaboration.roomKey, /^[a-zA-Z0-9_-]{22}$/);
       assert.match(loads[0].body.collaboration.roomId, /^[0-9a-f]{20}$/);
-      assert.deepEqual(loads[1].body.collaboration, loads[0].body.collaboration);
+      assert.deepEqual(
+        loads[1].body.collaboration,
+        loads[0].body.collaboration,
+      );
       assert.equal(loads[0].body.room_id, loads[0].body.collaboration.roomId);
       const stored = (
         await db.query(
@@ -881,7 +1150,10 @@ test("private workspace backend", async (t) => {
         )
       ).rows[0];
       assert.equal(stored.room_id, loads[0].body.collaboration.roomId);
-      assert.notEqual(stored.encrypted_key, loads[0].body.collaboration.roomKey);
+      assert.notEqual(
+        stored.encrypted_key,
+        loads[0].body.collaboration.roomKey,
+      );
     },
   );
   await t.test(

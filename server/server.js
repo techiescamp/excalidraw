@@ -1,3 +1,4 @@
+import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
 import { createServer } from "node:http";
 import { installCollaboration } from "./lib/collaboration.js";
@@ -172,6 +173,13 @@ const storage = {
       throw e;
     }
   },
+  async remove(key) {
+    if (hasObjectStore())
+      await store.client.send(
+        new DeleteObjectCommand({ Bucket: store.bucket, Key: key }),
+      );
+    else await fsp.rm(localPath(key), { force: true });
+  },
   async put(key, body, contentType = "application/octet-stream") {
     if (hasObjectStore()) {
       await store.client.send(
@@ -287,6 +295,8 @@ const audit = (actor, action, type, id, meta = {}) =>
     "INSERT INTO audit_log(actor_id,action,target_type,target_id,metadata) VALUES($1,$2,$3,$4,$5)",
     [actor, action, type, String(id), { ...meta, outcome: "success" }],
   );
+
+installWorkspaceTransfer(app, db, storage, security, drawings);
 
 // Workspace management uses the same administrator and recent-password gates.
 app.get("/api/admin/workspaces", auth, requireSuperadmin, async (_req, res) => {
@@ -568,6 +578,8 @@ app.get(
     "/admin/reset-requests",
     "/admin/audit-log",
     "/admin/storage",
+    "/admin/workspace-export",
+    "/admin/workspace-import",
     "/admin/workspaces",
     "/admin/teams",
   ],

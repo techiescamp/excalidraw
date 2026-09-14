@@ -24,6 +24,7 @@ for (const file of [
   "migration-006-workspace-experience.sql",
   "migration-007-team-access.sql",
   "migration-008-collaboration-keys.sql",
+  "migration-009-workspace-transfer.sql",
 ])
   await db.query(
     await readFile(new URL("../" + file, import.meta.url), "utf8"),
