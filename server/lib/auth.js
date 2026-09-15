@@ -118,13 +118,13 @@ export function installAuth(app, db, origin) {
  const workspaceAccess = async (user,workspace,tx=db) => {
   if(!uuid(workspace)) fail(404,'Workspace not found.');
   const {rows}=await tx.query(`SELECT w.id,m.role,coalesce((SELECT jsonb_object_agg(permission,effect) FROM permission_overrides p WHERE p.workspace_id=w.id AND p.user_id=$2),'{}') AS overrides
-    FROM workspaces w LEFT JOIN workspace_members m ON m.workspace_id=w.id AND m.user_id=$2 WHERE w.id=$1`,[workspace,user.id]);
+    FROM workspaces w LEFT JOIN workspace_members m ON m.workspace_id=w.id AND m.user_id=$2 WHERE w.id=$1 AND w.deleted_at IS NULL FOR SHARE OF w`,[workspace,user.id]);
   if(!rows[0] || (!user.is_superadmin && !rows[0].role)) fail(404,'Workspace not found.');
   return effectivePermissions(rows[0].role,rows[0].overrides,user.is_superadmin);
  };
  const permit=async(user,workspace,key,tx=db)=>{const permissions=await workspaceAccess(user,workspace,tx); if(!permissions[key]) fail(403,'You do not have permission for this action.'); return permissions;};
  app.get('/api/workspaces',auth,async(req,res)=>{
-  const {rows}=await db.query(`SELECT w.id,w.name,w.slug,m.role FROM workspaces w LEFT JOIN workspace_members m ON m.workspace_id=w.id AND m.user_id=$1 WHERE $2 OR m.user_id IS NOT NULL ORDER BY w.created_at`,[req.user.id,req.user.is_superadmin]);
+  const {rows}=await db.query(`SELECT w.id,w.name,w.slug,m.role FROM workspaces w LEFT JOIN workspace_members m ON m.workspace_id=w.id AND m.user_id=$1 WHERE w.deleted_at IS NULL AND ($2 OR m.user_id IS NOT NULL) ORDER BY w.created_at`,[req.user.id,req.user.is_superadmin]);
   for(const row of rows) row.permissions=await workspaceAccess(req.user,row.id);
   res.json(rows);
  });

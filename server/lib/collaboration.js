@@ -226,9 +226,13 @@ export async function installCollaboration(
   // LISTEN is per server instance; revocations fan out across every deployed API/relay.
   const listener = await db.connect();
   await listener.query("LISTEN auth_changed");
+  await listener.query("LISTEN workspace_changed");
   listener.on("notification", (event) => {
-    for (const socket of io.sockets.sockets.values())
-      if (socket.data.user?.id === event.payload) socket.disconnect(true);
+    for (const socket of io.sockets.sockets.values()) {
+      if (event.channel === "workspace_changed")
+        check(socket).catch(() => socket.disconnect(true));
+      else if (socket.data.user?.id === event.payload) socket.disconnect(true);
+    }
   });
   listener.on("error", () => {
     for (const socket of io.sockets.sockets.values()) socket.disconnect(true);

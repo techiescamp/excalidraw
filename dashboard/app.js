@@ -1445,6 +1445,43 @@ function adminNav() {
     "</nav>"
   );
 }
+async function deleteWorkspace(workspace) {
+  const preview = await api(`/admin/workspaces/${workspace.id}/delete-preview`);
+  if (!(await reauthenticate())) return;
+  modal(
+    "Delete workspace",
+    `<p>Move <strong>${escape(
+      preview.name,
+    )}</strong> to Trash?</p><p>This affects <strong>${
+      preview.collections
+    } collections</strong> and <strong>${
+      preview.scenes
+    } drawings</strong>, including private and trashed drawings. Workspace access stops immediately.</p><p>You can restore it for 30 days. After that, its drawings, saved versions, images, thumbnails and export archives are permanently removed from storage. User accounts are kept.</p>` +
+      input(
+        `Type <strong>${escape(preview.name)}</strong> to confirm`,
+        "name",
+        "",
+        'required autocomplete="off"',
+      ),
+    "Move workspace to Trash",
+    async (values) => {
+      await api(`/admin/workspaces/${workspace.id}`, {
+        method: "DELETE",
+        body: {
+          name: values.name,
+          scenes: preview.scenes,
+          collections: preview.collections,
+        },
+      });
+      await render();
+    },
+  );
+}
+async function restoreWorkspace(workspace) {
+  if (!(await reauthenticate())) return;
+  await api(`/admin/workspaces/${workspace.id}/restore`, { method: "POST" });
+  await render();
+}
 async function workspaceForm(workspace) {
   if (!(await reauthenticate())) return;
   modal(
@@ -1796,28 +1833,8 @@ async function adminPage(generation) {
     "#page",
   ).innerHTML = `<h1>Administration</h1>${adminNav()}<div id="admin-content"></div>`;
   if (["workspace-export", "workspace-import"].includes(name)) {
-    $(".layout").classList.add("transfer-layout");
-    $("#page").innerHTML = '<div id="admin-content"></div>';
-    const sidebar = $(".sidebar");
-    sidebar.querySelector(".primary-nav").innerHTML =
-      '<h2 class="settings-nav-title">Workspace Settings</h2>' +
-      [
-        ["workspaces", "Settings", "settings"],
-        ["users", "Members", "users"],
-        ["teams", "Teams & Collections", "collection"],
-        ["reset-requests", "Password requests", "lock"],
-        ["storage", "Storage", "storage"],
-        ["workspace-export", "Workspace export", "download"],
-        ["workspace-import", "Workspace import", "import"],
-        ["audit-log", "Logs", "scene"],
-      ]
-        .map(([id, label, glyph]) =>
-          navLink("/admin/" + id, label, glyph, name === id),
-        )
-        .join("") +
-      navLink(homePath(), "Dashboard", "dashboard", false);
-    for (const selector of [".section-head", ".private-nav", ".collection-nav"])
-      sidebar.querySelector(selector).hidden = true;
+    // Export and import are ordinary Administration tabs: they keep the shared
+    // header, tabs and sidebar so navigation stays the same on every admin page.
     return renderWorkspaceTransfer({
       host: $("#admin-content"),
       state,
@@ -1838,18 +1855,76 @@ async function adminPage(generation) {
       "Create workspace",
       'class="primary" id="create-workspace"',
     )}</div>${rows
+      .filter((w) => !w.deleted_at)
       .map(
         (w) =>
           `<div class="settings-row"><div><strong>${escape(
             w.name,
           )}</strong><small>${w.members} assigned members · ${
             w.collections
-          } collections · ${w.scenes} scenes</small></div>${button(
+          } collections · ${
+            w.scenes
+          } scenes</small></div><div class="settings-actions">${button(
             "Rename",
             `data-workspace-edit="${w.id}"`,
-          )}</div>`,
+          )}${button(
+            "Delete workspace",
+            `class="danger" data-workspace-delete="${w.id}"`,
+          )}</div></div>`,
       )
       .join("")}`;
+    const trashed = rows.filter((w) => w.deleted_at);
+    $("#admin-content").insertAdjacentHTML(
+      "beforeend",
+      `<section class="workspace-trash"><h2>Workspace Trash</h2><p class="muted">Restore within 30 days. After that, workspace data and associated storage files are permanently deleted.</p>${
+        trashed.length
+          ? trashed
+              .map(
+                (w) =>
+                  `<div class="settings-row"><div><strong>${escape(
+                    w.name,
+                  )}</strong><small>${w.collections} collections · ${
+                    w.scenes
+                  } drawings · ${
+                    w.purging_at
+                      ? "Cleanup in progress"
+                      : "Restore until " +
+                        escape(new Date(w.purge_after).toLocaleString())
+                  }</small></div>${button(
+                    "Restore workspace",
+                    `data-workspace-restore="${w.id}" ${
+                      w.purging_at || new Date(w.purge_after) <= new Date()
+                        ? "disabled"
+                        : ""
+                    }`,
+                  )}</div>`,
+              )
+              .join("")
+          : '<p class="muted">No workspaces in Trash.</p>'
+      }</section>`,
+    );
+    doc
+      .querySelectorAll("[data-workspace-delete]")
+      .forEach(
+        (b) =>
+          (b.onclick = () =>
+            run(() =>
+              deleteWorkspace(
+                rows.find((w) => w.id === b.dataset.workspaceDelete),
+              ),
+            )),
+      );
+    doc
+      .querySelectorAll("[data-workspace-restore]")
+      .forEach(
+        (b) =>
+          (b.onclick = () =>
+            run(() =>
+              restoreWorkspace(
+                rows.find((w) => w.id === b.dataset.workspaceRestore),
+              ),
+            )),
+      );
     $("#create-workspace").onclick = () => run(() => workspaceForm());
     doc
       .querySelectorAll("[data-workspace-edit]")

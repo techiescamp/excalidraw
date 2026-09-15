@@ -1,3 +1,4 @@
+import { cleanupWorkspaceTrash } from "../lib/workspace-deletion.js";
 import { renderWorkspaceTransfer } from "../../dashboard/workspace-transfer.js";
 import { zipSync, unzipSync } from "fflate";
 import { test, before, after } from "node:test";
@@ -133,6 +134,7 @@ before(async () => {
     "migration-007-team-access.sql",
     "migration-008-collaboration-keys.sql",
     "migration-009-workspace-transfer.sql",
+    "migration-010-workspace-trash.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -190,6 +192,217 @@ after(async () => {
   if (storage) await rm(storage, { recursive: true, force: true });
 });
 test("private workspace backend", async (t) => {
+  await t.test(
+    "workspace deletion confirms counts, revokes access, restores, and retries object cleanup",
+    async () => {
+      const made = await call("/admin/workspaces", {
+        cookie: admin,
+        method: "POST",
+        body: { name: "Disposable deletion test" },
+      });
+      assert.equal(made.status, 201);
+      const id = made.body.id,
+        endpoint = "/admin/workspaces/" + id;
+      const collection = await call("/workspaces/" + id + "/collections", {
+        cookie: admin,
+        method: "POST",
+        key: crypto.randomUUID(),
+        body: { name: "Deletion collection" },
+      });
+      const scene = await call("/scenes", {
+        cookie: admin,
+        method: "POST",
+        key: crypto.randomUUID(),
+        body: {
+          workspace_id: id,
+          collection_id: collection.body.id,
+          name: "Deletion scene",
+        },
+      });
+      assert.equal(scene.status, 201);
+      assert.equal(
+        (await call(endpoint + "/delete-preview", { cookie: editor.cookie }))
+          .status,
+        403,
+      );
+      let preview = (
+        await call(endpoint + "/delete-preview", { cookie: admin })
+      ).body;
+      assert.equal(preview.collections, 1);
+      assert.equal(preview.scenes, 1);
+      assert.equal(
+        (
+          await call(endpoint, {
+            cookie: admin,
+            method: "DELETE",
+            body: { ...preview, name: "wrong" },
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await call(endpoint, {
+            cookie: admin,
+            method: "DELETE",
+            body: { ...preview, scenes: 0 },
+          })
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await call(endpoint, {
+            cookie: admin,
+            method: "DELETE",
+            body: preview,
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (await call("/scenes/" + scene.body.id + "/data", { cookie: admin }))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await call("/workspaces", { cookie: admin })).body.some(
+          (w) => w.id === id,
+        ),
+        false,
+      );
+      assert.equal(
+        (
+          await call(endpoint, {
+            cookie: admin,
+            method: "PATCH",
+            body: { name: "Forbidden rename" },
+          })
+        ).status,
+        404,
+      );
+      assert.equal(
+        (
+          await call(endpoint + "/restore", {
+            cookie: editor.cookie,
+            method: "POST",
+          })
+        ).status,
+        403,
+      );
+      assert.equal(
+        (await call(endpoint + "/restore", { cookie: admin, method: "POST" }))
+          .status,
+        200,
+      );
+      assert.equal(
+        (await call("/scenes/" + scene.body.id + "/data", { cookie: admin }))
+          .status,
+        200,
+      );
+      preview = (await call(endpoint + "/delete-preview", { cookie: admin }))
+        .body;
+      const owned = scene.body.s3_key;
+      await db.query(
+        "UPDATE scenes SET thumb_s3_key='delete-test/thumb',collab_s3_key='delete-test/collab' WHERE id=$1",
+        [scene.body.id],
+      );
+      await db.query(
+        "INSERT INTO scene_files(file_id,scene_id,s3_key) VALUES('delete-image',$1,'delete-test/image')",
+        [scene.body.id],
+      );
+      await db.query(
+        "INSERT INTO scene_versions(scene_id,s3_key,scene_version,created_by) VALUES($1,'delete-test/version',2,$2)",
+        [scene.body.id, scene.body.owner_id],
+      );
+      await db.query(
+        "INSERT INTO workspace_exports(workspace_id,requested_by,scope,status,object_key) VALUES($1,$2,'all','ready','delete-test/export')",
+        [id, scene.body.owner_id],
+      );
+      // A file also referenced by another workspace must survive cleanup.
+      await db.query(
+        "INSERT INTO scene_files(file_id,scene_id,s3_key) VALUES('shared-reference',$1,'delete-test/shared')",
+        [scene.body.id],
+      );
+      await db.query(
+        "INSERT INTO shared_scenes(id,s3_key) VALUES('delete-test-shared','delete-test/shared')",
+      );
+      assert.equal(
+        (
+          await call(endpoint, {
+            cookie: admin,
+            method: "DELETE",
+            body: preview,
+          })
+        ).status,
+        200,
+      );
+      const removed = [];
+      await cleanupWorkspaceTrash(db, {
+        remove: async (key) => removed.push(key),
+      });
+      assert.equal(removed.length, 0, "retention period must protect objects");
+      await db.query(
+        "UPDATE workspaces SET purge_after=now()-interval '1 second' WHERE id=$1",
+        [id],
+      );
+      assert.equal(
+        (await call(endpoint + "/restore", { cookie: admin, method: "POST" }))
+          .status,
+        409,
+      );
+      await assert.rejects(
+        () =>
+          cleanupWorkspaceTrash(db, {
+            remove: async () => {
+              throw new Error("temporary storage failure");
+            },
+          }),
+        /temporary storage failure/,
+      );
+      assert.equal(
+        (
+          await db.query(
+            "SELECT 1 FROM workspaces WHERE id=$1 AND purging_at IS NOT NULL",
+            [id],
+          )
+        ).rowCount,
+        1,
+      );
+      await cleanupWorkspaceTrash(db, {
+        remove: async (key) => removed.push(key),
+      });
+      assert.deepEqual(
+        removed.sort(),
+        [
+          owned,
+          "delete-test/thumb",
+          "delete-test/collab",
+          "delete-test/image",
+          "delete-test/version",
+          "delete-test/export",
+        ].sort(),
+      );
+      assert.equal(
+        (await db.query("SELECT 1 FROM workspaces WHERE id=$1", [id])).rowCount,
+        0,
+      );
+      const actions = (
+        await db.query(
+          "SELECT action FROM audit_log WHERE target_id=$1 ORDER BY created_at",
+          [id],
+        )
+      ).rows.map((r) => r.action);
+      for (const action of [
+        "workspace.trash",
+        "workspace.restore",
+        "workspace.purge.start",
+        "workspace.purge.complete",
+      ])
+        assert.ok(actions.includes(action), action);
+    },
+  );
+
   await t.test(
     "import UI submits ZIPs and displays the backend summary",
     async () => {

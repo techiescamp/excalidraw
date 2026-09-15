@@ -27,6 +27,7 @@ type SavedScene = {
   version: number;
   permissions: Record<string, boolean>;
   scene: Payload;
+  has_thumbnail?: boolean;
 };
 type EditorSession = {
   name: string;
@@ -47,6 +48,7 @@ type EditorSession = {
   generation: number;
   acknowledged: number;
   renaming?: boolean;
+  thumbnail?: Promise<void>;
 };
 let node: HTMLElement;
 let status: HTMLElement;
@@ -1243,7 +1245,7 @@ export function initializeWorkspaceEditor(
         !anchor ||
         // export downloads are blob links on this origin, not navigation
         anchor.hasAttribute("download") ||
-        !active?.pending ||
+        !(active?.pending || active?.thumbnail) ||
         anchor.origin !== win.location.origin ||
         event.ctrlKey ||
         event.metaKey
@@ -1252,6 +1254,14 @@ export function initializeWorkspaceEditor(
       }
       event.preventDefault();
       await flush(active);
+      if (!active.pending && active.thumbnail) {
+        // let the preview of the last save finish, or the dashboard keeps
+        // showing the old picture and the edit looks lost
+        await Promise.race([
+          active.thumbnail,
+          new Promise((resolve) => win.setTimeout(resolve, 4000)),
+        ]);
+      }
       if (
         !active.pending ||
         win.confirm(
@@ -1345,6 +1355,10 @@ export async function loadWorkspaceScene(
     scenePayload(payload.elements, payload.appState, payload.files),
   );
   session.loaded = true;
+  if (session.editable && result.has_thumbnail === false) {
+    // imported drawings arrive without a preview; create one on first open
+    uploadThumbnail(session, result.version, result.scene);
+  }
   showStatus(
     session,
     session.error || (session.editable ? "Saved" : "Read only"),
@@ -1368,6 +1382,45 @@ export async function loadWorkspaceScene(
     },
     files: payload.files,
   };
+}
+// Thumbnail failure never changes scene save success; version gates stale renders.
+// The upload is kept on the session so leaving the editor can wait for it.
+function uploadThumbnail(
+  session: EditorSession,
+  version: number,
+  scene: Payload,
+) {
+  const upload: Promise<void> = exportToBlob({
+    elements: getNonDeletedElements(scene.elements),
+    appState: { ...scene.appState, exportBackground: true },
+    files: scene.files,
+    mimeType: "image/png",
+    maxWidthOrHeight: 480,
+  })
+    .then((blob) =>
+      node.ownerDocument.defaultView!.fetch(
+        `${API}/scenes/${session.id}/thumbnail?version=${version}`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Excalidraw-Request": "1",
+          },
+          body: blob,
+        },
+      ),
+    )
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .finally(() => {
+      if (session.thumbnail === upload) {
+        session.thumbnail = undefined;
+      }
+    });
+  session.thumbnail = upload;
 }
 async function flush(session: EditorSession): Promise<void> {
   if (session.running) {
@@ -1417,29 +1470,7 @@ async function flush(session: EditorSession): Promise<void> {
             scene: session.pending,
           });
         }
-        // Thumbnail failure never changes scene save success; version gates stale renders.
-        void exportToBlob({
-          elements: getNonDeletedElements((saved.scene || pending).elements),
-          appState: { ...pending.appState, exportBackground: true },
-          files: (saved.scene || pending).files,
-          mimeType: "image/png",
-          maxWidthOrHeight: 480,
-        })
-          .then((blob) =>
-            node.ownerDocument.defaultView!.fetch(
-              `${API}/scenes/${session.id}/thumbnail?version=${saved.version}`,
-              {
-                method: "POST",
-                credentials: "include",
-                headers: {
-                  "Content-Type": "application/octet-stream",
-                  "X-Excalidraw-Request": "1",
-                },
-                body: blob,
-              },
-            ),
-          )
-          .catch(() => {});
+        uploadThumbnail(session, saved.version, saved.scene || pending);
       } catch (error: any) {
         session.error = error.message;
         showStatus(

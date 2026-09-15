@@ -391,7 +391,16 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
       const job = rows[0];
       if (!job) return;
       try {
-        if (!job.is_active || !job.is_superadmin)
+        if (
+          !job.is_active ||
+          !job.is_superadmin ||
+          !(
+            await db.query(
+              "SELECT 1 FROM workspaces WHERE id=$1 AND deleted_at IS NULL",
+              [job.workspace_id],
+            )
+          ).rowCount
+        )
           throw new Error("Requesting administrator is no longer active.");
         await db.query(
           "UPDATE workspace_exports SET status='exporting' WHERE id=$1",

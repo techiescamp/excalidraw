@@ -1,3 +1,4 @@
+import { installWorkspaceDeletion } from "./lib/workspace-deletion.js";
 import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
 import { createServer } from "node:http";
@@ -297,13 +298,14 @@ const audit = (actor, action, type, id, meta = {}) =>
   );
 
 installWorkspaceTransfer(app, db, storage, security, drawings);
+installWorkspaceDeletion(app, db, storage, security);
 
 // Workspace management uses the same administrator and recent-password gates.
 app.get("/api/admin/workspaces", auth, requireSuperadmin, async (_req, res) => {
   const { rows } =
     await db.query(`SELECT w.*, (SELECT count(*)::int FROM workspace_members m WHERE m.workspace_id=w.id) AS members,
- (SELECT count(*)::int FROM scenes s WHERE s.workspace_id=w.id AND s.deleted_at IS NULL) AS scenes,
- (SELECT count(*)::int FROM collections c WHERE c.workspace_id=w.id AND c.deleted_at IS NULL) AS collections FROM workspaces w ORDER BY w.created_at`);
+ (SELECT count(*)::int FROM scenes s WHERE s.workspace_id=w.id) AS scenes,
+ (SELECT count(*)::int FROM collections c WHERE c.workspace_id=w.id) AS collections FROM workspaces w ORDER BY w.created_at`);
   res.json(rows);
 });
 const workspaceName = (value) =>
@@ -336,7 +338,7 @@ app.patch(
         .status(400)
         .json({ error: "Use a workspace name of 1–80 characters." });
     const { rows } = await db.query(
-      "UPDATE workspaces SET name=$2 WHERE id=$1 RETURNING *",
+      "UPDATE workspaces SET name=$2 WHERE id=$1 AND deleted_at IS NULL RETURNING *",
       [req.params.id, name],
     );
     if (!rows[0])

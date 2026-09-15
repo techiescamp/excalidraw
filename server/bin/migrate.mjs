@@ -19,6 +19,7 @@ try {
     "migration-007-team-access.sql",
     "migration-008-collaboration-keys.sql",
     "migration-009-workspace-transfer.sql",
+    "migration-010-workspace-trash.sql",
   ];
   const checks = [
     "users",
@@ -30,6 +31,7 @@ try {
     "workspace_teams",
     "scene_room_keys",
     "workspace_exports",
+    "workspace_cleanup_objects",
   ];
   for (const [index, file] of files.entries()) {
     if (

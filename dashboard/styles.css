@@ -1453,47 +1453,28 @@ html {
     padding-top: 15px;
   }
 }
-.transfer-layout {
-  background: #fff;
-}
-.transfer-layout .sidebar {
-  border-radius: 0;
-  margin: 0;
-  border-width: 0 1px 0 0;
-  box-shadow: none;
-}
-.transfer-layout #admin-content {
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-  background: transparent;
-}
-.transfer-layout #page {
-  padding-top: 24px;
-}
-.transfer-layout .settings-nav-title {
-  color: #7863dc;
-  font-size: 17px;
-  padding: 4px 12px 8px;
+.transfer-page .export-option {
   margin: 0;
 }
-.transfer-layout .primary-nav {
-  gap: 2px;
-}
-.transfer-layout .primary-nav a {
-  min-height: 42px;
-}
-.transfer-layout .sidebar [hidden] {
-  display: none !important;
-}
-.transfer-layout .export-option {
-  margin: 0;
-}
-.transfer-layout .export-option input {
+.transfer-page .export-option input {
   order: 2;
   margin-left: auto;
 }
-.transfer-layout .export-option span {
+.transfer-page .export-option span {
   flex: 1;
   text-align: center;
+}
+.workspace-trash {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+/* row buttons sit together on the right instead of spreading across the row */
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.settings-actions > .danger {
+  color: #b42318;
 }

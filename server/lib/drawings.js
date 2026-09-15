@@ -429,6 +429,8 @@ export function installDrawings(app, db, storage, security) {
           }
         : null,
       workspace_id: scene.workspace_id,
+      // imported drawings have no preview until the editor renders one
+      has_thumbnail: Boolean(scene.thumb_s3_key),
       version: scene.scene_version,
       permissions: {
         ...permissions,
