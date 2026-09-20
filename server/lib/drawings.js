@@ -234,7 +234,7 @@ export function installDrawings(app, db, storage, security) {
     const page = Math.max(0, Number(req.query.page) || 0),
       limit = Math.min(100, Math.max(1, Number(req.query.limit) || 24));
     const { rows } = await db.query(
-      `SELECT s.id,s.name,s.workspace_id,s.updated_at,s.created_at,s.scene_version,s.metadata_version,s.thumb_s3_key,s.owner_id,s.pinned,s.private_owner_id,s.deleted_at,v.visited_at,u.username AS owner_name,
+      `SELECT s.id,s.name,s.workspace_id,s.updated_at,s.created_at,s.scene_version,s.metadata_version,s.thumb_s3_key,s.owner_id,s.pinned,s.private_owner_id,s.deleted_at,v.visited_at,coalesce(nullif(btrim(u.display_name),''),u.username::text) AS owner_name,
    coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'name',c.name)) FROM collection_drawings cd JOIN collections c ON c.id=cd.collection_id WHERE cd.drawing_id=s.id AND c.deleted_at IS NULL AND (NOT c.is_private OR c.created_by=$1 OR $2) AND ${collectionTeamVisibility}),'[]') AS collections,
    count(*) OVER() AS total FROM scenes s JOIN users u ON u.id=s.owner_id LEFT JOIN scene_visits v ON v.scene_id=s.id AND v.user_id=$1 WHERE s.workspace_id=$3 AND ${visibility}
    AND (($4 AND s.deleted_at IS NOT NULL) OR (NOT $4 AND s.deleted_at IS NULL))

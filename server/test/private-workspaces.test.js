@@ -1058,6 +1058,24 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
+    "drawing listings credit the creator by display name",
+    async () => {
+      const author = await makeUser("mona");
+      const scene = await createDrawing(author.cookie);
+      const credited = async () =>
+        (
+          await call(`/scenes?workspace=${workspace}`, { cookie: admin })
+        ).body.items.find((x) => x.id === scene.id)?.owner_name;
+      // accounts without a display name keep showing their username
+      assert.equal(await credited(), "mona");
+      await db.query("UPDATE users SET display_name=$2 WHERE id=$1", [
+        author.id,
+        "Mona Lisa",
+      ]);
+      assert.equal(await credited(), "Mona Lisa");
+    },
+  );
+  await t.test(
     "administrators read and edit private drawings without owning them",
     async () => {
       const owner = await makeUser("private-owner");
