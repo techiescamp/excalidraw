@@ -214,25 +214,26 @@ export function installDrawings(app, db, storage, security) {
     });
     res.json({ ok: true });
   });
-  app.get("/api/scenes", auth, async (req, res) => {
-    const workspace = req.query.workspace,
-      trash = req.query.trashed === "1";
+  // Shared by the web app and the MCP tools so both obey identical visibility rules.
+  const listScenes = async (user, query = {}) => {
+    const workspace = query.workspace,
+      trash = query.trashed === "1";
     const permissions = await permit(
-      req.user,
+      user,
       workspace,
       trash ? "trash.read" : "drawing.read",
     );
-    if (req.query.collection)
-      await collectionAccess(req.user, req.query.collection, "collection.read");
+    if (query.collection)
+      await collectionAccess(user, query.collection, "collection.read");
     const sort =
       {
         updated: "s.updated_at DESC,s.id",
         created: "s.created_at DESC,s.id",
         visited: "v.visited_at DESC NULLS LAST,s.id",
         title: "lower(s.name),s.id",
-      }[req.query.sort] || "s.updated_at DESC,s.id";
-    const page = Math.max(0, Number(req.query.page) || 0),
-      limit = Math.min(100, Math.max(1, Number(req.query.limit) || 24));
+      }[query.sort] || "s.updated_at DESC,s.id";
+    const page = Math.max(0, Number(query.page) || 0),
+      limit = Math.min(100, Math.max(1, Number(query.limit) || 24));
     const { rows } = await db.query(
       `SELECT s.id,s.name,s.workspace_id,s.updated_at,s.created_at,s.scene_version,s.metadata_version,s.thumb_s3_key,s.owner_id,s.pinned,s.private_owner_id,s.deleted_at,v.visited_at,coalesce(nullif(btrim(u.display_name),''),u.username::text) AS owner_name,
    coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'name',c.name)) FROM collection_drawings cd JOIN collections c ON c.id=cd.collection_id WHERE cd.drawing_id=s.id AND c.deleted_at IS NULL AND (NOT c.is_private OR c.created_by=$1 OR $2) AND ${collectionTeamVisibility}),'[]') AS collections,
@@ -243,28 +244,31 @@ export function installDrawings(app, db, storage, security) {
    AND (NOT $10 OR s.private_owner_id=$1) AND (NOT $11 OR coalesce(s.updated_by,s.owner_id)=$1) AND (NOT $12 OR v.visited_at IS NOT NULL)
    AND s.name ILIKE $7 ORDER BY s.pinned DESC,${sort} LIMIT $8 OFFSET $9`,
       [
-        req.user.id,
-        req.user.is_superadmin,
+        user.id,
+        user.is_superadmin,
         workspace,
         trash,
-        req.query.collection || null,
-        req.query.unorganized === "1",
-        `%${String(req.query.search || "").slice(0, 100)}%`,
+        query.collection || null,
+        query.unorganized === "1",
+        `%${String(query.search || "").slice(0, 100)}%`,
         limit,
         page * limit,
-        req.query.private === "1",
-        req.query.mine === "1",
-        req.query.sort === "visited",
+        query.private === "1",
+        query.mine === "1",
+        query.sort === "visited",
       ],
     );
-    res.json({
+    return {
       items: rows,
       total: Number(rows[0]?.total || 0),
       page,
       limit,
       permissions,
-    });
-  });
+    };
+  };
+  app.get("/api/scenes", auth, async (req, res) =>
+    res.json(await listScenes(req.user, req.query)),
+  );
   const empty = {
     type: "excalidraw",
     version: 2,
@@ -719,5 +723,12 @@ export function installDrawings(app, db, storage, security) {
     );
     res.json(rows);
   });
-  return { sceneAccess, readScene, create, validateScene, collectionAccess };
+  return {
+    sceneAccess,
+    readScene,
+    create,
+    validateScene,
+    collectionAccess,
+    listScenes,
+  };
 }

@@ -20,6 +20,7 @@ try {
     "migration-008-collaboration-keys.sql",
     "migration-009-workspace-transfer.sql",
     "migration-010-workspace-trash.sql",
+    "migration-011-mcp-keys.sql",
   ];
   const checks = [
     "users",
@@ -32,6 +33,7 @@ try {
     "scene_room_keys",
     "workspace_exports",
     "workspace_cleanup_objects",
+    "mcp_keys",
   ];
   for (const [index, file] of files.entries()) {
     if (

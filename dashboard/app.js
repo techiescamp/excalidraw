@@ -136,6 +136,58 @@ async function reauthenticate() {
     );
   });
 }
+async function mcpKeyForm() {
+  if (!(await reauthenticate())) return;
+  const d = modal(
+    "Create MCP key",
+    input(
+      "Key name",
+      "name",
+      "",
+      'required autofocus placeholder="Claude on my laptop"',
+    ) +
+      `<label>Access<select name="scope"><option value="read">Read only — search and read drawings</option><option value="write">Read and write — also create and change drawings</option></select></label>` +
+      `<label>Workspace<select name="workspace_id"><option value="">Every workspace this account can reach</option>${state.workspaces
+        .map((w) => `<option value="${w.id}">${escape(w.name)}</option>`)
+        .join("")}</select></label>` +
+      `<p class="muted">The key acts as you. It is shown once, so copy it into your assistant right away.</p>`,
+    "Create key",
+    async (values) => {
+      const created = await api("/admin/mcp-keys", {
+        method: "POST",
+        body: {
+          name: values.name,
+          scope: values.scope,
+          workspace_id: values.workspace_id || null,
+        },
+      });
+      d.close();
+      showKey(created.token);
+      await render();
+    },
+  );
+}
+function showKey(token) {
+  const dialog = $("#dialog");
+  dialog.innerHTML = `<h2 id="dialog-title">Your new MCP key</h2><p>Copy it now. It is never shown again — if you lose it, revoke the key and create another.</p><label>Key<textarea readonly rows="3">${escape(
+    token,
+  )}</textarea></label><p class="muted">In Claude: Settings → Connectors → Add custom connector, using this key as the connector's authorization header.</p><div class="modal-actions">${button(
+    "Copy key",
+    "data-copy",
+  )}${button("Done", "data-close")}</div><p role="status"></p>`;
+  dialog.querySelector("[data-copy]").onclick = async () => {
+    try {
+      await win.navigator.clipboard.writeText(token);
+      dialog.querySelector("[role=status]").textContent = "Copied.";
+    } catch {
+      dialog.querySelector("textarea").select();
+      dialog.querySelector("[role=status]").textContent =
+        "Select and copy the key.";
+    }
+  };
+  dialog.querySelector("[data-close]").onclick = () => dialog.close();
+  if (!dialog.open) dialog.showModal();
+}
 function showLink(result) {
   const dialog = $("#dialog");
   dialog.innerHTML = `<h2 id="dialog-title">Private password link</h2><p>Share this link privately with the verified user. It is displayed only once.</p><p>Expires ${escape(
@@ -1432,6 +1484,7 @@ function adminNav() {
       ["reset-requests", "Password requests"],
       ["audit-log", "Audit log"],
       ["storage", "Storage"],
+      ["mcp-keys", "MCP keys"],
       ["workspace-export", "Workspace export"],
       ["workspace-import", "Workspace import"],
     ]
@@ -2043,6 +2096,61 @@ async function adminPage(generation) {
           });
           await render();
         }),
+    );
+  } else if (name === "mcp-keys") {
+    const keys = await api("/admin/mcp-keys");
+    if (generation !== state.generation) return;
+    $(
+      "#admin-content",
+    ).innerHTML = `<div class="section-title"><div><h2>MCP keys</h2><p class="muted">Let Claude or another AI assistant work in this workspace. A key acts as the person who created it, follows that person's permissions, and can be revoked at any time.</p></div>${button(
+      "Create key",
+      'class="primary" id="create-mcp-key"',
+    )}</div><p class="muted">Connector address: <code>${escape(
+      win.location.origin,
+    )}/mcp</code></p>${
+      keys.length
+        ? `<table><thead><tr><th>Name</th><th>Acts as</th><th>Access</th><th>Workspace</th><th>Created</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${keys
+            .map(
+              (k) =>
+                `<tr><td>${escape(k.name)}</td><td>${escape(k.owner)}</td><td>${
+                  k.scope === "write" ? "Read and write" : "Read only"
+                }</td><td>${escape(
+                  k.workspace || "All workspaces",
+                )}</td><td>${escape(
+                  new Date(k.created_at).toLocaleDateString(),
+                )}</td><td>${
+                  k.last_used_at
+                    ? escape(new Date(k.last_used_at).toLocaleString())
+                    : "Never"
+                }</td><td>${button(
+                  "Revoke",
+                  `class="danger" data-revoke-key="${k.id}"`,
+                )}</td></tr>`,
+            )
+            .join("")}</tbody></table>`
+        : '<p class="muted">No keys yet. Create one to connect an assistant.</p>'
+    }`;
+    $("#create-mcp-key").onclick = () => run(mcpKeyForm);
+    doc.querySelectorAll("[data-revoke-key]").forEach(
+      (b) =>
+        (b.onclick = () =>
+          run(async () => {
+            const key = keys.find((k) => k.id === b.dataset.revokeKey);
+            if (!(await reauthenticate())) return;
+            modal(
+              "Revoke this key?",
+              `<p>Assistants using <strong>${escape(
+                key.name,
+              )}</strong> stop working immediately. Drawings made with it are kept.</p>`,
+              "Revoke key",
+              async () => {
+                await api(`/admin/mcp-keys/${key.id}`, { method: "DELETE" });
+                $("#dialog").close();
+                await render();
+                notify("Key revoked.");
+              },
+            );
+          })),
     );
   } else if (name === "storage") {
     const cfg = await api("/admin/storage");

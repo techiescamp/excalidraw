@@ -1,4 +1,6 @@
 import { installWorkspaceDeletion } from "./lib/workspace-deletion.js";
+import { installMcpKeys } from "./lib/mcp-keys.js";
+import { installMcp } from "./lib/mcp.js";
 import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
 import { createServer } from "node:http";
@@ -298,6 +300,9 @@ const audit = (actor, action, type, id, meta = {}) =>
   );
 
 installWorkspaceTransfer(app, db, storage, security, drawings);
+// AI assistants reach the workspace here, acting as the person who owns the key.
+const mcpKeyHolder = installMcpKeys(app, db, security);
+installMcp(app, db, drawings, mcpKeyHolder, APP_ORIGIN);
 installWorkspaceDeletion(app, db, storage, security);
 
 // Workspace management uses the same administrator and recent-password gates.

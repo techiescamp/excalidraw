@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { hashPassword } from "../lib/passwords.js";
+import { sha256 } from "../lib/core.js";
 const base = process.env.TEST_DATABASE_URL;
 if (!base)
   throw new Error(
@@ -135,6 +136,7 @@ before(async () => {
     "migration-008-collaboration-keys.sql",
     "migration-009-workspace-transfer.sql",
     "migration-010-workspace-trash.sql",
+    "migration-011-mcp-keys.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -1055,6 +1057,135 @@ test("private workspace backend", async (t) => {
         ).body.items.some((x) => x.id === s.id),
         false,
       );
+    },
+  );
+  await t.test(
+    "MCP keys let an assistant work as one person and no further",
+    async () => {
+      const rpc = async (token, method, params = {}, id = 1) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        });
+        const text = await response.text();
+        const body = text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : text
+          ? JSON.parse(text)
+          : null;
+        return { status: response.status, body };
+      };
+      const hello = {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      };
+      assert.equal((await rpc(null, "initialize", hello)).status, 401);
+      assert.equal(
+        (await rpc("exmcp_" + "a".repeat(43), "initialize", hello)).status,
+        401,
+      );
+      const created = await call("/admin/mcp-keys", {
+        cookie: admin,
+        method: "POST",
+        body: { name: "Test assistant", scope: "read" },
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const token = created.body.token;
+      assert.match(token, /^exmcp_[A-Za-z0-9_-]{43}$/);
+      // only a hash of the key is kept
+      assert.equal(
+        (
+          await db.query("SELECT token_hash FROM mcp_keys WHERE id=$1", [
+            created.body.id,
+          ])
+        ).rows[0].token_hash.includes(token.slice(6)),
+        false,
+      );
+      assert.equal((await rpc(token, "initialize", hello)).status, 200);
+      const tools = await rpc(token, "tools/list", {}, 2);
+      assert.deepEqual(tools.body.result.tools.map((x) => x.name).sort(), [
+        "export_drawing",
+        "fetch",
+        "list_collections",
+        "search",
+      ]);
+      const collection = await createCollection("MCP visible");
+      const scene = await createDrawing(admin, collection.id);
+      const found = await rpc(
+        token,
+        "tools/call",
+        { name: "search", arguments: { query: "A drawing" } },
+        3,
+      );
+      const results = found.body.result.structuredContent.results;
+      const hit = results.find((r) => r.id === scene.id);
+      assert.ok(hit, JSON.stringify(found.body));
+      assert.match(hit.url, /\/editor\?scene=/);
+      const read = await rpc(
+        token,
+        "tools/call",
+        { name: "fetch", arguments: { id: scene.id } },
+        4,
+      );
+      assert.match(read.body.result.structuredContent.text, /MCP visible/);
+      const folders = await rpc(
+        token,
+        "tools/call",
+        { name: "list_collections", arguments: {} },
+        5,
+      );
+      assert.ok(
+        folders.body.result.structuredContent.collections.some(
+          (c) => c.id === collection.id,
+        ),
+      );
+      // a key carries its owner's limits: another member's private drawing stays hidden
+      const member = await makeUser("mcp-reader");
+      const hidden = await createDrawing(member.cookie, null, {
+        private: true,
+      });
+      const memberKey = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Reader key", scope: "read" },
+        })
+      ).body.token;
+      await db.query("UPDATE mcp_keys SET user_id=$2 WHERE token_hash=$1", [
+        sha256(memberKey),
+        member.id,
+      ]);
+      const adminScene = await createDrawing(admin, null, { private: true });
+      const denied = await rpc(
+        memberKey,
+        "tools/call",
+        { name: "fetch", arguments: { id: adminScene.id } },
+        6,
+      );
+      assert.equal(denied.body.result.isError, true);
+      const own = await rpc(
+        memberKey,
+        "tools/call",
+        { name: "fetch", arguments: { id: hidden.id } },
+        7,
+      );
+      assert.notEqual(own.body.result.isError, true);
+      assert.equal(
+        (
+          await call(`/admin/mcp-keys/${created.body.id}`, {
+            cookie: admin,
+            method: "DELETE",
+          })
+        ).status,
+        200,
+      );
+      assert.equal((await rpc(token, "initialize", hello)).status, 401);
     },
   );
   await t.test(
