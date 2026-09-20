@@ -429,6 +429,13 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
         let total = 0;
         for await (const scene of scenePages()) {
           if (job.scope === "accessible") {
+            // administrators can open every private drawing, so this scope
+            // keeps its own rule: shared drawings plus the requester's own
+            if (
+              scene.private_owner_id &&
+              scene.private_owner_id !== job.requested_by
+            )
+              continue;
             try {
               await drawings.sceneAccess(user, scene.id);
             } catch (error) {

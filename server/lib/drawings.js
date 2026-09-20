@@ -7,7 +7,7 @@ import { fail, uuid, transaction, sha256 } from "./core.js";
 export function installDrawings(app, db, storage, security) {
   const { auth, permit } = security;
   // Keep legacy view-only scene grants and private collection visibility restrictions.
-  const visibility = `(s.private_owner_id IS NULL OR s.private_owner_id=$1) AND (NOT EXISTS(SELECT 1 FROM legacy_scene_visibility pv WHERE pv.scene_id=s.id AND pv.visible_to<>$1)
+  const visibility = `(s.private_owner_id IS NULL OR s.private_owner_id=$1 OR $2::boolean) AND (NOT EXISTS(SELECT 1 FROM legacy_scene_visibility pv WHERE pv.scene_id=s.id AND pv.visible_to<>$1)
    OR $2::boolean) AND (
  NOT EXISTS(SELECT 1 FROM collection_drawings cd JOIN collections c ON c.id=cd.collection_id WHERE cd.drawing_id=s.id)
  OR EXISTS(SELECT 1 FROM collection_drawings cd JOIN collections c ON c.id=cd.collection_id WHERE cd.drawing_id=s.id AND ${collectionTeamVisibility}))`;

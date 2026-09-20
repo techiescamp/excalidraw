@@ -7,6 +7,10 @@ export function installAuth(app, db, origin) {
  const secure = process.env.COOKIE_SECURE !== 'false';
  if (!origin || (secure && new URL(origin).protocol !== 'https:')) throw new Error('APP_ORIGIN must be a trusted HTTPS origin');
  const cookieOptions = {httpOnly:true,secure,sameSite:'strict',path:'/'};
+ // Sessions stay signed in while they are used: every request slides the expiry
+ // forward, so there is no idle timeout. Revocation, password changes and
+ // deactivation still end a session immediately.
+ const SESSION_HOURS = Math.min(Math.max(Math.floor(Number(process.env.SESSION_HOURS)) || 720, 1), 8760);
  const clear = res => { for(const name of ['ex_session','ex_at','ex_rt']) res.clearCookie(name,cookieOptions); };
  const revoke = async (tx,id) => {
   await tx.query('UPDATE users SET credential_version=credential_version+1 WHERE id=$1',[id]);
@@ -16,11 +20,10 @@ export function installAuth(app, db, origin) {
  };
  const sessionUser = async token => {
   if(typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
-  const {rows} = await db.query(`UPDATE sessions s SET last_seen_at=now() FROM users u
+  const {rows} = await db.query(`UPDATE sessions s SET last_seen_at=now(),expires_at=now()+make_interval(hours=>$2) FROM users u
    WHERE s.token_hash=$1 AND u.id=s.user_id AND u.is_active AND NOT u.pending_setup
    AND u.credential_version=s.credential_version AND s.expires_at>now()
-   AND s.last_seen_at>now()-interval '30 minutes'
-   RETURNING u.id,u.username,u.display_name,u.is_superadmin,s.reauthenticated_at,s.token_hash`,[sha256(token)]);
+   RETURNING u.id,u.username,u.display_name,u.is_superadmin,s.reauthenticated_at,s.token_hash`,[sha256(token),SESSION_HOURS]);
   return rows[0] || null;
  };
  const auth = async (req,res,next) => {
@@ -34,8 +37,8 @@ export function installAuth(app, db, origin) {
  const createSession = async (tx,req,res,user) => {
   const token=crypto.randomBytes(32).toString('hex');
   if(req.cookies.ex_session) await tx.query('DELETE FROM sessions WHERE token_hash=$1',[sha256(req.cookies.ex_session)]);
-  await tx.query(`INSERT INTO sessions(token_hash,user_id,credential_version,expires_at) VALUES($1,$2,$3,now()+interval '12 hours')`,[sha256(token),user.id,user.credential_version]);
-  clear(res); res.cookie('ex_session',token,{...cookieOptions,maxAge:12*3600_000});
+  await tx.query(`INSERT INTO sessions(token_hash,user_id,credential_version,expires_at) VALUES($1,$2,$3,now()+make_interval(hours=>$4))`,[sha256(token),user.id,user.credential_version,SESSION_HOURS]);
+  clear(res); res.cookie('ex_session',token,{...cookieOptions,maxAge:SESSION_HOURS*3600_000});
  };
  // Same-origin custom header plus strict Origin validation prevents cross-site form/JSON mutations.
  app.use('/api',(req,res,next) => {

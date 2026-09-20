@@ -987,9 +987,10 @@ test("private workspace backend", async (t) => {
         (await call(`/scenes/${s.id}/data`, { cookie: viewer.cookie })).status,
         404,
       );
+      // administrators are trusted with every drawing in the workspace
       assert.equal(
         (await call(`/scenes/${s.id}/data`, { cookie: admin })).status,
-        404,
+        200,
       );
       const list = await call(`/scenes?workspace=${workspace}&private=1`, {
         cookie: editor.cookie,
@@ -1054,6 +1055,94 @@ test("private workspace backend", async (t) => {
         ).body.items.some((x) => x.id === s.id),
         false,
       );
+    },
+  );
+  await t.test(
+    "administrators read and edit private drawings without owning them",
+    async () => {
+      const owner = await makeUser("private-owner");
+      const mine = await createDrawing(owner.cookie, null, { private: true });
+      const adminId = (await call("/me", { cookie: admin })).body.id;
+      assert.equal(
+        (await call(`/scenes/${mine.id}/data`, { cookie: admin })).status,
+        200,
+      );
+      assert.equal(
+        (await call(`/scenes/${mine.id}/data`, { cookie: viewer.cookie }))
+          .status,
+        404,
+      );
+      const saved = await call(`/scenes/${mine.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: mine.version ?? 1,
+          scene: {
+            type: "excalidraw",
+            version: 2,
+            elements: [],
+            appState: { viewBackgroundColor: "#0f0f0f" },
+            files: {},
+          },
+        },
+      });
+      assert.equal(saved.status, 200, JSON.stringify(saved.body));
+      // the drawing stays owned by its author and out of the admin's own Private view
+      assert.equal(
+        (
+          await db.query("SELECT private_owner_id FROM scenes WHERE id=$1", [
+            mine.id,
+          ])
+        ).rows[0].private_owner_id,
+        owner.id,
+      );
+      assert.equal(
+        (
+          await call(`/scenes?workspace=${workspace}&private=1`, {
+            cookie: admin,
+          })
+        ).body.items.some((x) => x.id === mine.id),
+        false,
+      );
+      assert.ok(
+        (
+          await call(`/scenes?workspace=${workspace}`, { cookie: admin })
+        ).body.items.some((x) => x.id === mine.id),
+      );
+      assert.ok(adminId);
+    },
+  );
+  await t.test(
+    "sessions survive long idle periods and end only when they expire",
+    async () => {
+      const user = await makeUser("long-session");
+      const expiry = async () =>
+        (
+          await db.query(
+            "SELECT expires_at FROM sessions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1",
+            [user.id],
+          )
+        ).rows[0].expires_at;
+      const first = await expiry();
+      // far beyond the old 30-minute idle cutoff
+      await db.query(
+        "UPDATE sessions SET last_seen_at=now()-interval '20 days' WHERE user_id=$1",
+        [user.id],
+      );
+      assert.equal((await call("/me", { cookie: user.cookie })).status, 200);
+      assert.ok(
+        (await expiry()).getTime() >= first.getTime(),
+        "each request slides the expiry forward",
+      );
+      assert.ok(
+        (await expiry()).getTime() - Date.now() > 29 * 24 * 3600_000,
+        "sessions last about a month from the last request",
+      );
+      await db.query(
+        "UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE user_id=$1",
+        [user.id],
+      );
+      assert.equal((await call("/me", { cookie: user.cookie })).status, 401);
     },
   );
   await t.test(
@@ -1176,15 +1265,13 @@ test("private workspace backend", async (t) => {
     "bulk trash is atomic when a selected scene is inaccessible",
     async () => {
       const mine = await createDrawing(),
-        privateScene = await createDrawing(editor.cookie, null, {
-          private: true,
-        });
+        unreachable = crypto.randomUUID();
       assert.equal(
         (
           await call("/scenes/bulk", {
             cookie: admin,
             method: "POST",
-            body: { ids: [mine.id, privateScene.id], action: "trash" },
+            body: { ids: [mine.id, unreachable], action: "trash" },
           })
         ).status,
         404,
@@ -1521,15 +1608,25 @@ test("private workspace backend", async (t) => {
       const privateScene = await createDrawing(editor.cookie, null, {
         private: true,
       });
+      const privateRoom = "private-" + crypto.randomUUID();
       await call(`/scenes/${privateScene.id}/room`, {
         cookie: editor.cookie,
         method: "POST",
-        body: { room_id: "private-" + crypto.randomUUID(), room_key: key },
+        body: { room_id: privateRoom, room_key: key },
       });
+      // a private drawing keeps its room key from everyone but its owner and administrators
       assert.equal(
-        (await call(`/scenes/${privateScene.id}/data`, { cookie: admin }))
-          .status,
+        (
+          await call(`/scenes/${privateScene.id}/data`, {
+            cookie: viewer.cookie,
+          })
+        ).status,
         404,
+      );
+      assert.deepEqual(
+        (await call(`/scenes/${privateScene.id}/data`, { cookie: admin })).body
+          .collaboration,
+        { roomId: privateRoom, roomKey: key },
       );
     },
   );
