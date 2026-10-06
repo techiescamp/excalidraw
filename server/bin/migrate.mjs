@@ -21,6 +21,7 @@ try {
     "migration-009-workspace-transfer.sql",
     "migration-010-workspace-trash.sql",
     "migration-011-mcp-keys.sql",
+    "migration-012-oauth.sql",
   ];
   const checks = [
     "users",
@@ -34,6 +35,7 @@ try {
     "workspace_exports",
     "workspace_cleanup_objects",
     "mcp_keys",
+    "oauth_clients",
   ];
   for (const [index, file] of files.entries()) {
     if (

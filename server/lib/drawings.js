@@ -4,6 +4,12 @@ import { collectionTeamVisibility } from "./teams.js";
 import crypto from "node:crypto";
 import { fail, uuid, transaction, sha256 } from "./core.js";
 
+// How long one restore point covers. Saves inside the same window collapse.
+const VERSION_WINDOW_SECONDS = Math.max(
+  60,
+  Number(process.env.VERSION_WINDOW_SECONDS) || 600,
+);
+
 export function installDrawings(app, db, storage, security) {
   const { auth, permit } = security;
   // Keep legacy view-only scene grants and private collection visibility restrictions.
@@ -476,18 +482,46 @@ export function installDrawings(app, db, storage, security) {
           mergeSceneSnapshots(await readScene(scene), payload),
         );
       const nextVersion = scene.scene_version + 1;
-      const key = `scenes/${scene.id}/${crypto.randomUUID()}.json`,
-        body = Buffer.from(JSON.stringify(payload));
-      // Immutable object first, pointer/version second. Failed transactions never damage the old object.
+      const body = Buffer.from(JSON.stringify(payload));
+      // Autosave writes a full copy about a second after every pause, so an hour of
+      // drawing used to leave hundreds of near-identical restore points, each a
+      // separate stored file. Saves that land inside the newest restore point's
+      // window update that same object instead of adding another one.
+      const latest = (
+        await tx.query(
+          `SELECT v.id,v.s3_key,v.created_at,
+             (SELECT count(*) FROM scene_versions o WHERE o.scene_id=v.scene_id AND o.s3_key=v.s3_key) AS copies
+           FROM scene_versions v WHERE v.scene_id=$1 ORDER BY v.scene_version DESC LIMIT 1`,
+          [scene.id],
+        )
+      ).rows[0];
+      const continues =
+        latest &&
+        latest.s3_key === scene.s3_key &&
+        // a restored version points at an older object; never overwrite that
+        Number(latest.copies) === 1 &&
+        Date.now() - new Date(latest.created_at).getTime() <
+          VERSION_WINDOW_SECONDS * 1000;
+      const key = continues
+        ? scene.s3_key
+        : `scenes/${scene.id}/${crypto.randomUUID()}.json`;
+      // Outside a window the object is immutable and written before the pointer,
+      // so a failed transaction never damages the previous restore point.
       await storage.put(key, body, "application/json");
       await tx.query(
         "UPDATE scenes SET s3_key=$2,scene_version=scene_version+1,size_bytes=$3,updated_by=$4 WHERE id=$1",
         [scene.id, key, body.length, req.user.id],
       );
-      await tx.query(
-        "INSERT INTO scene_versions(scene_id,s3_key,scene_version,size_bytes,created_by) VALUES($1,$2,$3,$4,$5)",
-        [scene.id, key, nextVersion, body.length, req.user.id],
-      );
+      if (continues)
+        await tx.query(
+          "UPDATE scene_versions SET scene_version=$2,size_bytes=$3,created_by=$4 WHERE id=$1",
+          [latest.id, nextVersion, body.length, req.user.id],
+        );
+      else
+        await tx.query(
+          "INSERT INTO scene_versions(scene_id,s3_key,scene_version,size_bytes,created_by) VALUES($1,$2,$3,$4,$5)",
+          [scene.id, key, nextVersion, body.length, req.user.id],
+        );
       await activity(tx, req.user, scene, "edited");
       return {
         version: nextVersion,

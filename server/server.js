@@ -1,6 +1,7 @@
 import { installWorkspaceDeletion } from "./lib/workspace-deletion.js";
 import { installMcpKeys } from "./lib/mcp-keys.js";
 import { installMcp } from "./lib/mcp.js";
+import { installOAuth } from "./lib/oauth.js";
 import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
 import { createServer } from "node:http";
@@ -258,18 +259,18 @@ app.use(cookieParser());
 const notBlob = (req) => !req.path.startsWith("/api/blob/");
 app.use(
   express.json({
-    limit: "25mb",
+    limit: "64mb",
     type: (req) => notBlob(req) && Boolean(req.is("application/json")),
   }),
 );
 app.use(
   express.raw({
-    limit: "25mb",
+    limit: "64mb",
     type: (req) => notBlob(req) && Boolean(req.is("application/octet-stream")),
   }),
 );
 // blob uploads are opaque bytes whatever content-type the client declares
-const rawBlob = express.raw({ type: "*/*", limit: "25mb" });
+const rawBlob = express.raw({ type: "*/*", limit: "64mb" });
 
 const security = installAuth(app, db, APP_ORIGIN);
 const { auth, admin: requireSuperadmin, recent } = security;
@@ -302,7 +303,9 @@ const audit = (actor, action, type, id, meta = {}) =>
 installWorkspaceTransfer(app, db, storage, security, drawings);
 // AI assistants reach the workspace here, acting as the person who owns the key.
 const mcpKeyHolder = installMcpKeys(app, db, security);
-installMcp(app, db, drawings, mcpKeyHolder, APP_ORIGIN);
+// Assistants either carry a workspace key or sign in through OAuth as a person.
+const mcpBearerHolder = installOAuth(app, db, APP_ORIGIN, security);
+installMcp(app, db, drawings, mcpKeyHolder, APP_ORIGIN, mcpBearerHolder);
 installWorkspaceDeletion(app, db, storage, security);
 
 // Workspace management uses the same administrator and recent-password gates.

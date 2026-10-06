@@ -137,6 +137,7 @@ before(async () => {
     "migration-009-workspace-transfer.sql",
     "migration-010-workspace-trash.sql",
     "migration-011-mcp-keys.sql",
+    "migration-012-oauth.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -1060,6 +1061,301 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
+    "rapid autosaves share one restore point instead of piling up copies",
+    async () => {
+      const scene = await createDrawing();
+      const paint = async (version, colour) => {
+        const saved = await call(`/scenes/${scene.id}/data`, {
+          cookie: admin,
+          method: "PUT",
+          body: {
+            version,
+            scene: {
+              type: "excalidraw",
+              version: 2,
+              elements: [],
+              appState: { viewBackgroundColor: colour },
+              files: {},
+            },
+          },
+        });
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        return saved.body.version;
+      };
+      const points = () =>
+        db.query(
+          "SELECT s3_key,scene_version FROM scene_versions WHERE scene_id=$1 ORDER BY scene_version",
+          [scene.id],
+        );
+      let version = scene.scene_version;
+      for (const colour of ["#111111", "#222222", "#333333", "#444444"])
+        version = await paint(version, colour);
+      const burst = await points();
+      assert.equal(
+        burst.rowCount,
+        1,
+        "four quick saves keep one restore point",
+      );
+      assert.equal(burst.rows[0].scene_version, version);
+      // the newest drawing is intact, not an older copy
+      assert.equal(
+        (await call(`/scenes/${scene.id}/data`, { cookie: admin })).body.scene
+          .appState.viewBackgroundColor,
+        "#444444",
+      );
+      // once the window passes, the next save starts a fresh restore point
+      await db.query(
+        "UPDATE scene_versions SET created_at=now()-interval '20 minutes' WHERE scene_id=$1",
+        [scene.id],
+      );
+      version = await paint(version, "#555555");
+      const later = await points();
+      assert.equal(later.rowCount, 2, "a new window adds a restore point");
+      assert.notEqual(
+        later.rows[0].s3_key,
+        later.rows[1].s3_key,
+        "each restore point keeps its own stored file",
+      );
+      // a restored version is never overwritten by the saves that follow it
+      const history = (
+        await call(`/scenes/${scene.id}/versions`, { cookie: admin })
+      ).body;
+      assert.equal(history.items.length, 2);
+      const older = history.items.find((v) => v.scene_version < version);
+      const restored = await call(
+        `/scenes/${scene.id}/versions/${older.id}/restore`,
+        { cookie: admin, method: "POST", body: { version } },
+      );
+      assert.equal(restored.status, 200, JSON.stringify(restored.body));
+      version = restored.body.version;
+      version = await paint(version, "#666666");
+      assert.equal(
+        (await call(`/scenes/${scene.id}/data`, { cookie: admin })).body.scene
+          .appState.viewBackgroundColor,
+        "#666666",
+      );
+      // restoring reuses the old file on purpose, so the save after a restore has
+      // to write its own file rather than overwrite the shared one
+      const rows = (await points()).rows;
+      const newest = rows[rows.length - 1];
+      assert.ok(
+        rows.slice(0, -1).every((row) => row.s3_key !== newest.s3_key),
+        "a save after a restore never overwrites the restored file",
+      );
+    },
+  );
+  await t.test(
+    "an assistant signs in with OAuth and acts as that person",
+    async () => {
+      const post = (path, body, headers = {}) =>
+        fetch(origin + path, {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            ...headers,
+          },
+          body: new URLSearchParams(body).toString(),
+        });
+      // metadata the client reads first
+      const resource = await (
+        await fetch(origin + "/.well-known/oauth-protected-resource")
+      ).json();
+      assert.equal(resource.resource, origin + "/mcp");
+      const server = await (
+        await fetch(origin + "/.well-known/oauth-authorization-server")
+      ).json();
+      assert.deepEqual(server.code_challenge_methods_supported, ["S256"]);
+      // an unauthenticated tool call points the client at that metadata
+      const challenge = await fetch(origin + "/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(challenge.status, 401);
+      assert.match(
+        challenge.headers.get("www-authenticate") || "",
+        /resource_metadata=/,
+      );
+      // the client registers itself
+      const registered = await (
+        await fetch(origin + "/oauth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_name: "Test Assistant",
+            redirect_uris: ["http://127.0.0.1:9999/callback"],
+          }),
+        })
+      ).json();
+      assert.match(registered.client_id, /^mcp-/);
+      assert.equal(
+        (
+          await fetch(origin + "/oauth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ redirect_uris: ["http://evil.test/cb"] }),
+          })
+        ).status,
+        400,
+        "only https or loopback redirects are accepted",
+      );
+      const verifier = crypto.randomBytes(32).toString("base64url");
+      const query = {
+        client_id: registered.client_id,
+        redirect_uri: "http://127.0.0.1:9999/callback",
+        response_type: "code",
+        scope: "drawings.read offline_access",
+        state: "xyz",
+        code_challenge: crypto
+          .createHash("sha256")
+          .update(verifier)
+          .digest("base64url"),
+        code_challenge_method: "S256",
+      };
+      // signed out, the page asks for a password
+      const prompt = await fetch(
+        origin + "/oauth/authorize?" + new URLSearchParams(query),
+      );
+      assert.equal(prompt.status, 200);
+      assert.match(await prompt.text(), /Sign in to connect/);
+      // browsers apply form-action to the redirect a submission lands on, so the
+      // client's callback origin must be allowed or approval silently does nothing
+      assert.match(
+        prompt.headers.get("content-security-policy") || "",
+        /form-action 'self' http:\/\/127\.0\.0\.1:9999/,
+      );
+      assert.match(prompt.headers.get("cache-control") || "", /no-store/);
+      const signedIn = await post("/oauth/sign-in", {
+        ...query,
+        username: "admin",
+        password,
+      });
+      assert.equal(signedIn.status, 302);
+      const cookie = signedIn.headers
+        .getSetCookie()
+        .filter(
+          (c) => c.startsWith("ex_session=") && !c.startsWith("ex_session=;"),
+        )
+        .pop()
+        ?.split(";")[0];
+      assert.ok(cookie, "signing in on the consent page starts a session");
+      const consent = await fetch(
+        origin + "/oauth/authorize?" + new URLSearchParams(query),
+        { headers: { Cookie: cookie } },
+      );
+      assert.match(await consent.text(), /Connect/);
+      const refused = await post(
+        "/oauth/authorize",
+        { ...query, decision: "deny" },
+        { Cookie: cookie },
+      );
+      assert.match(refused.headers.get("location"), /error=access_denied/);
+      const granted = await post(
+        "/oauth/authorize",
+        { ...query, decision: "allow" },
+        { Cookie: cookie },
+      );
+      const back = new URL(granted.headers.get("location"));
+      assert.equal(back.searchParams.get("state"), "xyz");
+      const code = back.searchParams.get("code");
+      assert.ok(code);
+      // the wrong verifier never exchanges
+      assert.equal(
+        (
+          await (
+            await post("/oauth/token", {
+              grant_type: "authorization_code",
+              code,
+              client_id: registered.client_id,
+              redirect_uri: query.redirect_uri,
+              code_verifier: crypto.randomBytes(32).toString("base64url"),
+            })
+          ).json()
+        ).error,
+        "invalid_grant",
+      );
+      const issued = await (
+        await post("/oauth/token", {
+          grant_type: "authorization_code",
+          code,
+          client_id: registered.client_id,
+          redirect_uri: query.redirect_uri,
+          code_verifier: verifier,
+        })
+      ).json();
+      assert.equal(issued.token_type, "Bearer");
+      assert.ok(issued.access_token && issued.refresh_token);
+      // a code is single use
+      assert.equal(
+        (
+          await (
+            await post("/oauth/token", {
+              grant_type: "authorization_code",
+              code,
+              client_id: registered.client_id,
+              redirect_uri: query.redirect_uri,
+              code_verifier: verifier,
+            })
+          ).json()
+        ).error,
+        "invalid_grant",
+      );
+      // the token works on the MCP endpoint, as the person who approved it
+      const rpc = (accessToken, method, params = {}, id = 1) =>
+        fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        });
+      assert.equal(
+        (
+          await rpc(issued.access_token, "initialize", {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "test", version: "1" },
+          })
+        ).status,
+        200,
+      );
+      const tools = await (
+        await rpc(issued.access_token, "tools/list", {}, 2)
+      ).json();
+      assert.ok(tools.result.tools.length >= 4);
+      // refresh rotates: the old refresh token stops working
+      const refreshed = await (
+        await post("/oauth/token", {
+          grant_type: "refresh_token",
+          refresh_token: issued.refresh_token,
+          client_id: registered.client_id,
+        })
+      ).json();
+      assert.ok(refreshed.access_token);
+      assert.equal(
+        (
+          await (
+            await post("/oauth/token", {
+              grant_type: "refresh_token",
+              refresh_token: issued.refresh_token,
+              client_id: registered.client_id,
+            })
+          ).json()
+        ).error,
+        "invalid_grant",
+      );
+      // revoking ends access immediately
+      await post("/oauth/revoke", { token: refreshed.access_token });
+      assert.equal(
+        (await rpc(refreshed.access_token, "tools/list", {}, 3)).status,
+        401,
+      );
+    },
+  );
+  await t.test(
     "MCP keys let an assistant work as one person and no further",
     async () => {
       const rpc = async (token, method, params = {}, id = 1) => {
@@ -1355,6 +1651,12 @@ test("private workspace backend", async (t) => {
           appState: { viewBackgroundColor: "#abcdef" },
           files: {},
         };
+      // edits in one sitting share a restore point, so age the first one as if
+      // the drawing were reopened on another day
+      await db.query(
+        "UPDATE scene_versions SET created_at=now()-interval '20 minutes' WHERE scene_id=$1",
+        [s.id],
+      );
       assert.equal(
         (
           await call(`/scenes/${s.id}/data`, {
@@ -1610,6 +1912,11 @@ test("private workspace backend", async (t) => {
     async () => {
       const s = await createDrawing(),
         room = "test-collab-" + crypto.randomUUID();
+      // age the creation point so the saves below become their own restore points
+      await db.query(
+        "UPDATE scene_versions SET created_at=now()-interval '20 minutes' WHERE scene_id=$1",
+        [s.id],
+      );
       assert.equal(
         (
           await call(`/scenes/${s.id}/room`, {

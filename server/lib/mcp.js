@@ -48,7 +48,7 @@ const summarize = (scene, payload) => {
     .join("\n");
 };
 
-export function installMcp(app, db, drawings, keyHolder, origin) {
+export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
   const editorUrl = (id) => `${origin}/editor?scene=${id}`;
   const workspaceFor = async (context) => {
     if (context.workspaceId) return context.workspaceId;
@@ -233,17 +233,18 @@ export function installMcp(app, db, drawings, keyHolder, origin) {
     const header = req.get("authorization");
     const token =
       /^Bearer\s+(.+)$/i.exec(header || "")?.[1] || req.get("x-api-key");
-    const context = await keyHolder(token);
+    const context =
+      (await keyHolder(token)) ||
+      (bearerHolder ? await bearerHolder(token) : null);
     if (!context) {
+      // Clients discover the sign-in flow from this pointer (RFC 9728).
       res.set(
         "WWW-Authenticate",
-        `Bearer realm="excalidraw", error="invalid_token"`,
+        `Bearer realm="excalidraw", error="invalid_token", resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
       );
-      return res
-        .status(401)
-        .json({
-          error: "A valid MCP key is required in the Authorization header.",
-        });
+      return res.status(401).json({
+        error: "A valid MCP key is required in the Authorization header.",
+      });
     }
     if (!withinBudget(context.keyId))
       return res

@@ -1,0 +1,17 @@
+[Unit]
+Description=Excalidraw backup (database nightly, drawings weekly)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=excalidraw
+Group=excalidraw
+WorkingDirectory=/opt/excalidraw/api
+EnvironmentFile=/etc/excalidraw-api.env
+ExecStart=/usr/bin/node /opt/excalidraw/api/bin/backup.mjs
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
