@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { transaction } from "./core.js";
+import { buildDiagram, styleGuide } from "./diagram.js";
 
 const MAX_TEXT = 4000;
 const MAX_EXPORT_BYTES = 400 * 1024;
@@ -46,6 +48,39 @@ const summarize = (scene, payload) => {
   ]
     .filter(Boolean)
     .join("\n");
+};
+
+const nodeSchema = z.object({
+  id: z.string().describe("Short name used by edges, e.g. api"),
+  label: z.string().optional().describe("Words shown inside the shape"),
+  shape: z.enum(["rectangle", "ellipse", "diamond"]).optional(),
+  color: z
+    .string()
+    .optional()
+    .describe("blue, green, red, orange, violet, teal, pink, grey, black"),
+  fill: z.string().optional().describe("Exact background colour, e.g. #a5d8ff"),
+  stroke: z.string().optional().describe("Exact outline colour, e.g. #1971c2"),
+});
+const edgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string().optional().describe("Words shown on the arrow"),
+  style: z.enum(["solid", "dashed"]).optional(),
+  color: z.string().optional(),
+});
+const specSchema = {
+  title: z.string().optional().describe("Heading drawn above the diagram"),
+  layout: z.enum(["right", "down"]).optional().describe("Flow direction"),
+  style: z
+    .object({
+      font: z.string().optional().describe("Font name, e.g. Inter"),
+      color: z.string().optional().describe("Default colour for shapes"),
+      background: z.string().optional().describe("Canvas colour, e.g. #ffffff"),
+      sketchy: z.boolean().optional().describe("Hand-drawn look"),
+    })
+    .optional(),
+  nodes: z.array(nodeSchema).describe("The boxes"),
+  edges: z.array(edgeSchema).optional().describe("Arrows between boxes"),
 };
 
 export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
@@ -226,6 +261,107 @@ export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
         return { content: [{ type: "text", text: body }] };
       },
     );
+    server.registerTool(
+      "drawing_style_guide",
+      {
+        title: "Drawing options",
+        description:
+          "The fonts, colours, shapes and layouts this workspace can draw with. Read this before creating a drawing.",
+        inputSchema: {},
+      },
+      async () => {
+        const guide = styleGuide();
+        return {
+          content: [{ type: "text", text: JSON.stringify(guide, null, 1) }],
+          structuredContent: guide,
+        };
+      },
+    );
+    if (context.scope === "write") {
+      server.registerTool(
+        "create_drawing",
+        {
+          title: "Create a drawing",
+          description:
+            "Draw a new diagram from a description. Say which boxes exist and what connects to what; positions are worked out here.",
+          inputSchema: {
+            name: z.string().describe("Name of the drawing"),
+            collection: z
+              .string()
+              .optional()
+              .describe("Collection id from list_collections"),
+            ...specSchema,
+          },
+        },
+        async ({ name, collection, ...spec }) => {
+          const workspace = await workspaceFor(context);
+          const payload = buildDiagram(spec);
+          const scene = await transaction(db, (tx) =>
+            drawings.create(
+              {
+                user: context.user,
+                body: {
+                  workspace_id: workspace,
+                  name,
+                  collection_id: collection || null,
+                  private: !collection,
+                },
+              },
+              tx,
+              payload,
+            ),
+          );
+          const result = {
+            id: scene.id,
+            name: scene.name,
+            url: editorUrl(scene.id),
+            elements: payload.elements.length,
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Drew "${scene.name}" with ${result.elements} elements: ${result.url}`,
+              },
+            ],
+            structuredContent: result,
+          };
+        },
+      );
+      server.registerTool(
+        "update_drawing",
+        {
+          title: "Redraw a drawing",
+          description:
+            "Replace the contents of an existing drawing with a new diagram. The old version stays in its history.",
+          inputSchema: { id: z.string().describe("Drawing id"), ...specSchema },
+        },
+        async ({ id, ...spec }) => {
+          const scene = await sceneRow(context, id);
+          const payload = buildDiagram(spec);
+          const saved = await drawings.saveScene(
+            context.user,
+            scene.id,
+            payload,
+          );
+          const result = {
+            id: scene.id,
+            version: saved.version,
+            url: editorUrl(scene.id),
+            elements: payload.elements.length,
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Redrew "${scene.name}" (version ${saved.version}): ${result.url}`,
+              },
+            ],
+            structuredContent: result,
+          };
+        },
+      );
+    }
     return server;
   };
 

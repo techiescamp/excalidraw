@@ -451,27 +451,18 @@ export function installDrawings(app, db, storage, security) {
       scene: await readScene(scene),
     });
   });
-  app.put("/api/scenes/:id/data", auth, async (req, res) => {
-    let payload = validateScene(req.body?.scene);
-    const expected = req.body?.version;
-    if (!Number.isSafeInteger(expected) || expected < 0)
-      fail(400, "Expected scene version is required.");
-    const result = await transaction(db, async (tx) => {
-      await tx.query("SELECT id FROM scenes WHERE id=$1 FOR UPDATE", [
-        req.params.id,
-      ]);
-      const { scene } = await sceneAccess(
-        req.user,
-        req.params.id,
-        "drawing.edit",
-        tx,
-      );
-      const collaborative = Boolean(
-        scene.room_id && req.body.room_id === scene.room_id,
-      );
+  // Shared by the editor's save route and the MCP drawing tools.
+  const saveScene = async (user, id, incoming, { expected, roomId } = {}) => {
+    let payload = validateScene(incoming);
+    return transaction(db, async (tx) => {
+      await tx.query("SELECT id FROM scenes WHERE id=$1 FOR UPDATE", [id]);
+      const { scene } = await sceneAccess(user, id, "drawing.edit", tx);
+      const expectedVersion =
+        expected === undefined ? scene.scene_version : expected;
+      const collaborative = Boolean(scene.room_id && roomId === scene.room_id);
       if (
-        expected > scene.scene_version ||
-        (scene.scene_version !== expected && !collaborative)
+        expectedVersion > scene.scene_version ||
+        (scene.scene_version !== expectedVersion && !collaborative)
       )
         fail(
           409,
@@ -510,25 +501,35 @@ export function installDrawings(app, db, storage, security) {
       await storage.put(key, body, "application/json");
       await tx.query(
         "UPDATE scenes SET s3_key=$2,scene_version=scene_version+1,size_bytes=$3,updated_by=$4 WHERE id=$1",
-        [scene.id, key, body.length, req.user.id],
+        [scene.id, key, body.length, user.id],
       );
       if (continues)
         await tx.query(
           "UPDATE scene_versions SET scene_version=$2,size_bytes=$3,created_by=$4 WHERE id=$1",
-          [latest.id, nextVersion, body.length, req.user.id],
+          [latest.id, nextVersion, body.length, user.id],
         );
       else
         await tx.query(
           "INSERT INTO scene_versions(scene_id,s3_key,scene_version,size_bytes,created_by) VALUES($1,$2,$3,$4,$5)",
-          [scene.id, key, nextVersion, body.length, req.user.id],
+          [scene.id, key, nextVersion, body.length, user.id],
         );
-      await activity(tx, req.user, scene, "edited");
+      await activity(tx, user, scene, "edited");
       return {
         version: nextVersion,
         ...(collaborative ? { scene: payload } : {}),
       };
     });
-    res.json(result);
+  };
+  app.put("/api/scenes/:id/data", auth, async (req, res) => {
+    const expected = req.body?.version;
+    if (!Number.isSafeInteger(expected) || expected < 0)
+      fail(400, "Expected scene version is required.");
+    res.json(
+      await saveScene(req.user, req.params.id, req.body?.scene, {
+        expected,
+        roomId: req.body?.room_id,
+      }),
+    );
   });
   app.get("/api/scenes/:id/versions", auth, async (req, res) => {
     const { scene } = await sceneAccess(req.user, req.params.id);
@@ -764,5 +765,6 @@ export function installDrawings(app, db, storage, security) {
     validateScene,
     collectionAccess,
     listScenes,
+    saveScene,
   };
 }

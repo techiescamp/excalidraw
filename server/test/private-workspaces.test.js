@@ -1405,7 +1405,9 @@ test("private workspace backend", async (t) => {
       );
       assert.equal((await rpc(token, "initialize", hello)).status, 200);
       const tools = await rpc(token, "tools/list", {}, 2);
+      // a read-only key sees the reading tools and the style guide, never the drawing ones
       assert.deepEqual(tools.body.result.tools.map((x) => x.name).sort(), [
+        "drawing_style_guide",
         "export_drawing",
         "fetch",
         "list_collections",
@@ -1482,6 +1484,163 @@ test("private workspace backend", async (t) => {
         200,
       );
       assert.equal((await rpc(token, "initialize", hello)).status, 401);
+    },
+  );
+  await t.test(
+    "an assistant draws a diagram that opens as real shapes",
+    async () => {
+      const key = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Drawing key", scope: "write" },
+        })
+      ).body.token;
+      const readOnly = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Reading key", scope: "read" },
+        })
+      ).body.token;
+      const rpc = async (useKey, name, args, id = 1) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${useKey}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        });
+        const text = await response.text();
+        return text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : JSON.parse(text);
+      };
+      const tools = async (useKey) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${useKey}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 9,
+            method: "tools/list",
+            params: {},
+          }),
+        });
+        const text = await response.text();
+        const body = text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : JSON.parse(text);
+        return body.result.tools.map((tool) => tool.name);
+      };
+      // drawing tools appear only for a key allowed to write
+      assert.ok((await tools(key)).includes("create_drawing"));
+      assert.ok(!(await tools(readOnly)).includes("create_drawing"));
+      const collection = await createCollection("Diagrams");
+      const drawn = await rpc(key, "create_drawing", {
+        name: "Cilium architecture",
+        collection: collection.id,
+        title: "Cilium",
+        layout: "right",
+        style: { font: "Inter", color: "blue" },
+        nodes: [
+          { id: "api", label: "k8s API Server" },
+          { id: "op", label: "Cilium Operator" },
+          { id: "agent", label: "DaemonSet Agent", color: "green" },
+        ],
+        edges: [
+          { from: "api", to: "op", label: "watches" },
+          { from: "op", to: "agent", label: "configures", style: "dashed" },
+        ],
+      });
+      const made = drawn.result.structuredContent;
+      assert.ok(made.id, JSON.stringify(drawn.result));
+      assert.match(made.url, /\/editor\?scene=/);
+      // the saved scene is a real drawing: shapes, labels and bound arrows
+      const saved = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
+        .body.scene;
+      const kinds = saved.elements.map((e) => e.type);
+      assert.equal(kinds.filter((k) => k === "rectangle").length, 3);
+      assert.equal(kinds.filter((k) => k === "arrow").length, 2);
+      assert.ok(kinds.filter((k) => k === "text").length >= 5);
+      const boxes = saved.elements.filter((e) => e.type === "rectangle");
+      assert.ok(
+        boxes.every((box) => box.width > 0 && box.height > 0),
+        "every shape has a size",
+      );
+      assert.ok(
+        new Set(boxes.map((box) => box.x)).size === 3,
+        "boxes are laid out in sequence, not stacked",
+      );
+      const arrows = saved.elements.filter((e) => e.type === "arrow");
+      assert.ok(
+        arrows.every(
+          (a) => a.startBinding?.elementId && a.endBinding?.elementId,
+        ),
+        "arrows stay attached to their boxes",
+      );
+      assert.ok(
+        saved.elements.some((e) => e.text === "watches"),
+        "arrow labels are drawn",
+      );
+      assert.equal(
+        saved.elements.find((e) => e.text?.includes("API Server")).fontFamily,
+        15,
+        "the requested font is used",
+      );
+      // it lands in the collection it was asked for
+      assert.ok(
+        (
+          await call(
+            `/scenes?workspace=${workspace}&collection=${collection.id}`,
+            { cookie: admin },
+          )
+        ).body.items.some((s) => s.id === made.id),
+      );
+      // redrawing replaces the contents and keeps the history
+      const redrawn = await rpc(
+        key,
+        "update_drawing",
+        {
+          id: made.id,
+          nodes: [{ id: "one", label: "Only box" }],
+        },
+        2,
+      );
+      assert.ok(redrawn.result.structuredContent.version > 1);
+      const after = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
+        .body.scene;
+      assert.equal(
+        after.elements.filter((e) => e.type === "rectangle").length,
+        1,
+      );
+      // a read-only key cannot draw
+      const refused = await rpc(readOnly, "create_drawing", {
+        name: "Not allowed",
+        nodes: [{ id: "a", label: "a" }],
+      });
+      assert.ok(refused.error || refused.result?.isError);
+      // nonsense input is rejected with a readable message
+      const broken = await rpc(key, "create_drawing", {
+        name: "Broken",
+        nodes: [{ id: "a" }],
+        edges: [{ from: "a", to: "ghost" }],
+      });
+      assert.match(
+        JSON.stringify(broken.result ?? broken.error),
+        /does not exist/,
+      );
     },
   );
   await t.test(
