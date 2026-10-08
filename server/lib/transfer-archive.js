@@ -5,13 +5,17 @@ import {
   workerData,
 } from "node:worker_threads";
 import { unzipSync, zipSync } from "fflate";
-export const MAX_BYTES = 100 * 1024 * 1024;
-export const MAX_SCENE_BYTES = 25 * 1024 * 1024;
-// Exports read from our own storage rather than an upload, so they are bounded by
-// what the droplet can hold in memory while zipping, not by the upload limit.
-export const EXPORT_MAX_BYTES = 512 * 1024 * 1024;
-export const EXPORT_MAX_SCENE_BYTES = 64 * 1024 * 1024;
-export const MAX_FILES = 1000;
+// An export that cannot be imported again is not a backup, so both directions
+// share these figures. The ceiling is what the droplet can hold rather than a
+// policy: an upload is buffered whole, copied into the worker, expanded, and
+// copied back, so peak memory is roughly four times the archive. Lifting it
+// further means streaming the archive through a file instead of memory.
+export const MAX_BYTES = 256 * 1024 * 1024;
+export const MAX_SCENE_BYTES = 64 * 1024 * 1024;
+export const EXPORT_MAX_BYTES = MAX_BYTES;
+export const EXPORT_MAX_SCENE_BYTES = MAX_SCENE_BYTES;
+export const MAX_FILES = 2000;
+const mb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 export function safePath(name) {
   if (
     typeof name !== "string" ||
@@ -25,7 +29,8 @@ export function safePath(name) {
   return name;
 }
 export function unpack(bytes) {
-  if (bytes.length > MAX_BYTES) throw new Error("Upload exceeds 100 MB.");
+  if (bytes.length > MAX_BYTES)
+    throw new Error(`Upload exceeds ${mb(MAX_BYTES)}.`);
   let count = 0,
     total = 0;
   const names = new Set();
@@ -40,7 +45,9 @@ export function unpack(bytes) {
         (total += file.originalSize) > MAX_BYTES
       )
         throw new Error(
-          "Archive exceeds 1,000 entries, 25 MB per file, or 100 MB expanded.",
+          `Archive exceeds ${MAX_FILES.toLocaleString()} entries, ${mb(
+            MAX_SCENE_BYTES,
+          )} per file, or ${mb(MAX_BYTES)} expanded.`,
         );
       if (names.has(file.name))
         throw new Error("Archive contains duplicate file paths.");

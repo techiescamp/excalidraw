@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zipSync } from "fflate";
-import { unpack, MAX_SCENE_BYTES } from "../lib/transfer-archive.js";
+import { unpack, MAX_SCENE_BYTES, MAX_FILES } from "../lib/transfer-archive.js";
 test("ZIP parser rejects oversized expansion before allocating scene buffers", () => {
   const zip = zipSync({
     "bomb.excalidraw": new Uint8Array(MAX_SCENE_BYTES + 1),
@@ -19,7 +19,7 @@ test("ZIP parser rejects traversal, corrupt archives, and excessive entry counts
       unpack(
         zipSync(
           Object.fromEntries(
-            Array.from({ length: 1001 }, (_, i) => [
+            Array.from({ length: MAX_FILES + 1 }, (_, i) => [
               i + ".excalidraw",
               new Uint8Array(),
             ]),

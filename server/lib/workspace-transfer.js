@@ -181,7 +181,9 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
     },
     express.raw({
       type: ["application/zip", "application/x-excalidraw"],
-      limit: "100mb",
+      // Kept in step with the archive limits so an export of this size can be
+      // uploaded back; the body is rejected here before it is ever buffered.
+      limit: MAX_BYTES,
     }),
     async (req, res) => {
       req.processingImport = true;
