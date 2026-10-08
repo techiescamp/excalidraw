@@ -15,6 +15,7 @@ import {
   DEFAULT_CATEGORIES,
 } from "@excalidraw/excalidraw/components/CommandPalette/CommandPalette";
 import { ErrorDialog } from "@excalidraw/excalidraw/components/ErrorDialog";
+import { IconButton } from "@excalidraw/excalidraw/components/IconButton";
 import { OverwriteConfirmDialog } from "@excalidraw/excalidraw/components/OverwriteConfirm/OverwriteConfirm";
 import { openConfirmModal } from "@excalidraw/excalidraw/components/OverwriteConfirm/OverwriteConfirmState";
 import { ShareableLinkDialog } from "@excalidraw/excalidraw/components/ShareableLinkDialog";
@@ -72,6 +73,7 @@ import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconc
 import type { RestoredDataState } from "@excalidraw/excalidraw/data/restore";
 import type {
   FileId,
+  InitializedExcalidrawImageElement,
   NonDeletedExcalidrawElement,
   OrderedExcalidrawElement,
 } from "@excalidraw/element/types";
@@ -82,6 +84,7 @@ import type {
   ExcalidrawInitialDataState,
   UIAppState,
   ExcalidrawProps,
+  DataURL,
 } from "@excalidraw/excalidraw/types";
 import type { ResolutionType } from "@excalidraw/common/utility-types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
@@ -107,6 +110,7 @@ import Collab, {
   userToFollowAtom,
 } from "./collab/Collab";
 import { AppFooter } from "./components/AppFooter";
+import { ImageProcessingDialog } from "./image-processing/ImageProcessingDialog";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
 import {
@@ -420,6 +424,7 @@ const initializeScene = async (opts: {
 };
 
 const ExcalidrawWrapper = () => {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const excalidrawAPI = useExcalidrawAPI();
   const workspaceSceneId = getWorkspaceSceneId();
   const editorLocation = workspaceEditorLocation();
@@ -429,6 +434,22 @@ const ExcalidrawWrapper = () => {
       : undefined;
 
   const [errorMessage, setErrorMessage] = useState("");
+  const [selectedImage, setSelectedImage] =
+    useState<InitializedExcalidrawImageElement | null>(null);
+  const [imageJob, setImageJob] = useState<{
+    operation:
+      | "recolor"
+      | "flat-background"
+      | "background-color"
+      | "icon-sheet"
+      | "ai-background";
+    targetId: string;
+    fileId: FileId;
+    version: number;
+    sceneId: string | null;
+    location: string;
+    source: string;
+  } | null>(null);
   const workspacePermissions = useSyncExternalStore(
     subscribeWorkspacePermissions,
     getWorkspacePermissions,
@@ -780,6 +801,34 @@ const ExcalidrawWrapper = () => {
     appState: AppState,
     files: BinaryFiles,
   ) => {
+    const selectedIds = Object.keys(appState.selectedElementIds).filter(
+      (id) => appState.selectedElementIds[id],
+    );
+    const image =
+      selectedIds.length === 1
+        ? elements.find((element) => element.id === selectedIds[0])
+        : undefined;
+    const nextImage =
+      image &&
+      isInitializedImageElement(image) &&
+      !image.isDeleted &&
+      !image.locked &&
+      image.status !== "error" &&
+      files[image.fileId] &&
+      ["image/png", "image/jpeg", "image/webp"].includes(
+        files[image.fileId].mimeType,
+      )
+        ? image
+        : null;
+    setSelectedImage((previous) =>
+      previous?.id === nextImage?.id &&
+      previous?.version === nextImage?.version &&
+      previous?.fileId === nextImage?.fileId &&
+      previous?.status === nextImage?.status
+        ? previous
+        : nextImage,
+    );
+
     if (collabAPI?.isCollaborating()) {
       collabAPI.syncElements(elements);
     }
@@ -1009,6 +1058,7 @@ const ExcalidrawWrapper = () => {
 
   return (
     <div
+      ref={wrapperRef}
       style={{ height: "100%" }}
       className={clsx("excalidraw-app", {
         "is-collaborating": isCollaborating,
@@ -1077,6 +1127,62 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
+        renderToolbarActions={() => {
+          const canProcessImage =
+            selectedImage &&
+            excalidrawAPI &&
+            !excalidrawAPI.getAppState().viewModeEnabled &&
+            (!workspacePermissions || workspacePermissions["drawing.edit"]);
+
+          return (
+            <IconButton
+              type="button"
+              aria-label="Remove background"
+              title="Remove background"
+              data-testid="toolbar-remove-background"
+              disabled={!canProcessImage}
+              icon={
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 12h9V3M12 12h9M12 12v9" />
+                  <path
+                    d="m7 17 2 2 3-4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              }
+              onClick={() => {
+                if (!selectedImage || !excalidrawAPI) {
+                  return;
+                }
+                const source =
+                  excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
+                if (source) {
+                  setImageJob({
+                    operation: "flat-background",
+                    targetId: selectedImage.id,
+                    fileId: selectedImage.fileId,
+                    version: selectedImage.version,
+                    sceneId: getWorkspaceSceneId(),
+                    location:
+                      wrapperRef.current?.ownerDocument.defaultView?.location
+                        .href || "",
+                    source,
+                  });
+                }
+              }}
+            />
+          );
+        }}
         renderTopRightUI={(isMobile) => {
           if (isMobile || !collabAPI || isCollabDisabled) {
             return null;
@@ -1384,6 +1490,76 @@ const ExcalidrawWrapper = () => {
           />
         )}
       </Excalidraw>
+      {imageJob && (
+        <ImageProcessingDialog
+          operation={imageJob.operation}
+          source={imageJob.source}
+          onClose={() => setImageJob(null)}
+          onApply={(dataURL) => {
+            if (
+              !excalidrawAPI ||
+              getWorkspaceSceneId() !== imageJob.sceneId ||
+              wrapperRef.current?.ownerDocument.defaultView?.location.href !==
+                imageJob.location ||
+              (workspacePermissions && !workspacePermissions["drawing.edit"]) ||
+              excalidrawAPI.getAppState().viewModeEnabled
+            ) {
+              setErrorMessage(
+                "The drawing changed or editing is unavailable. Please retry.",
+              );
+              setImageJob(null);
+              return;
+            }
+            const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
+            const current = elements.find(
+              (element) => element.id === imageJob.targetId,
+            );
+            if (
+              !current ||
+              !isInitializedImageElement(current) ||
+              current.isDeleted ||
+              current.locked ||
+              current.version !== imageJob.version ||
+              current.fileId !== imageJob.fileId ||
+              excalidrawAPI.getFiles()[imageJob.fileId]?.dataURL !==
+                imageJob.source
+            ) {
+              setErrorMessage(
+                "The selected image changed. Please select it and retry.",
+              );
+              setImageJob(null);
+              return;
+            }
+            const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
+            if (!ownerWindow) {
+              return;
+            }
+            const random = ownerWindow.crypto.getRandomValues(
+              new Uint8Array(20),
+            );
+            const fileId = Array.from(random, (byte) =>
+              byte.toString(16).padStart(2, "0"),
+            ).join("") as FileId;
+            excalidrawAPI.addFiles([
+              {
+                id: fileId,
+                mimeType: "image/png",
+                dataURL: dataURL as DataURL,
+                created: Date.now(),
+              },
+            ]);
+            excalidrawAPI.updateScene({
+              elements: elements.map((element) =>
+                element.id === current.id
+                  ? newElementWith(current, { fileId, status: "pending" })
+                  : element,
+              ),
+              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+            });
+            setImageJob(null);
+          }}
+        />
+      )}
     </div>
   );
 };

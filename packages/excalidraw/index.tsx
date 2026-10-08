@@ -82,6 +82,7 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     onPointerUpdate,
     renderTopLeftUI,
     renderTopRightUI,
+    renderToolbarActions,
     langCode = defaultLang.code,
     viewModeEnabled,
     interaction,
@@ -224,6 +225,7 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
           onPointerUpdate={onPointerUpdate}
           renderTopLeftUI={renderTopLeftUI}
           renderTopRightUI={renderTopRightUI}
+          renderToolbarActions={renderToolbarActions}
           langCode={langCode}
           viewModeEnabled={viewModeEnabled}
           interaction={interaction}
