@@ -2,6 +2,7 @@ import { installWorkspaceDeletion } from "./lib/workspace-deletion.js";
 import { installMcpKeys } from "./lib/mcp-keys.js";
 import { installMcp } from "./lib/mcp.js";
 import { installOAuth } from "./lib/oauth.js";
+import { installIcons } from "./lib/icons.js";
 import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
 import { createServer } from "node:http";
@@ -235,6 +236,10 @@ const storage = {
           new GetObjectCommand({ Bucket: store.bucket, Key: key }),
         );
         res.set("Content-Type", obj.ContentType ?? "application/octet-stream");
+        // Without a length the browser cannot show progress on a large export,
+        // and a truncated transfer looks like a complete one.
+        if (Number.isFinite(obj.ContentLength))
+          res.set("Content-Length", String(obj.ContentLength));
         obj.Body.pipe(res);
         return true;
       } catch {
@@ -246,6 +251,7 @@ const storage = {
       return false;
     }
     res.set("Content-Type", "application/octet-stream");
+    res.set("Content-Length", String(fs.statSync(full).size));
     fs.createReadStream(full).pipe(res);
     return true;
   },
@@ -305,7 +311,8 @@ installWorkspaceTransfer(app, db, storage, security, drawings);
 const mcpKeyHolder = installMcpKeys(app, db, security);
 // Assistants either carry a workspace key or sign in through OAuth as a person.
 const mcpBearerHolder = installOAuth(app, db, APP_ORIGIN, security);
-installMcp(app, db, drawings, mcpKeyHolder, APP_ORIGIN, mcpBearerHolder);
+const icons = installIcons(app, db, storage, security);
+installMcp(app, db, drawings, mcpKeyHolder, APP_ORIGIN, mcpBearerHolder, icons);
 installWorkspaceDeletion(app, db, storage, security);
 
 // Workspace management uses the same administrator and recent-password gates.
@@ -588,6 +595,8 @@ app.get(
     "/admin/reset-requests",
     "/admin/audit-log",
     "/admin/storage",
+    "/admin/mcp-keys",
+    "/admin/icons",
     "/admin/workspace-export",
     "/admin/workspace-import",
     "/admin/workspaces",

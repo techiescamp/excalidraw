@@ -7,6 +7,10 @@ import {
 import { unzipSync, zipSync } from "fflate";
 export const MAX_BYTES = 100 * 1024 * 1024;
 export const MAX_SCENE_BYTES = 25 * 1024 * 1024;
+// Exports read from our own storage rather than an upload, so they are bounded by
+// what the droplet can hold in memory while zipping, not by the upload limit.
+export const EXPORT_MAX_BYTES = 512 * 1024 * 1024;
+export const EXPORT_MAX_SCENE_BYTES = 64 * 1024 * 1024;
 export const MAX_FILES = 1000;
 export function safePath(name) {
   if (
@@ -53,12 +57,21 @@ export function archiveTask(operation, data) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), {
       workerData: { operation, data },
-      resourceLimits: { maxOldGenerationSizeMb: 256 },
+      resourceLimits: { maxOldGenerationSizeMb: 1024 },
     });
-    const timer = setTimeout(() => {
-      worker.terminate();
-      reject(new Error("Archive processing timed out."));
-    }, 60000);
+    // Imports are one upload and stay quick; packing a whole workspace is
+    // hundreds of megabytes and needs minutes, not seconds.
+    const timer = setTimeout(
+      () => {
+        worker.terminate();
+        reject(
+          new Error(
+            "Packing the archive took too long. Export one collection at a time.",
+          ),
+        );
+      },
+      operation === "zip" ? 600000 : 60000,
+    );
     worker.once("message", (result) => {
       clearTimeout(timer);
       result.error ? reject(new Error(result.error)) : resolve(result.value);

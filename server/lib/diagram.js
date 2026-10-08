@@ -48,6 +48,8 @@ const GAP_ACROSS = 140;
 const GAP_DOWN = 70;
 const MAX_NODES = 120;
 const MAX_LABEL = 160;
+const ICON = 52;
+const ICON_GAP = 10;
 
 // Average advance width per font size unit. Close enough for box sizing; the
 // editor rewraps bound text to the container, so small errors stay invisible.
@@ -156,7 +158,7 @@ const layerNodes = (nodes, edges) => {
   return columns;
 };
 
-export function buildDiagram(spec) {
+export function buildDiagram(spec, icons = new Map()) {
   order = 0;
   const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
   const edges = Array.isArray(spec?.edges) ? spec.edges : [];
@@ -194,16 +196,21 @@ export function buildDiagram(spec) {
   const columns = layerNodes(nodes, edges);
   const boxes = new Map();
   const elements = [];
+  const files = {};
   const sizes = new Map(
     nodes.map((node) => {
       const text = wrap(node.label || node.id);
       const size = measure(text);
+      const art = node.icon ? icons.get(String(node.icon)) : null;
       return [
         node.id,
         {
           text,
+          art,
           width: Math.max(MIN_WIDTH, size.width + PADDING * 2),
-          height: Math.max(MIN_HEIGHT, size.height + PADDING),
+          height:
+            Math.max(MIN_HEIGHT, size.height + PADDING) +
+            (art ? ICON + ICON_GAP : 0),
         },
       ];
     }),
@@ -234,10 +241,50 @@ export function buildDiagram(spec) {
         roughness: sketchy ? 1 : 0,
         roundness: shape === "rectangle" ? { type: 3 } : null,
       });
-      const text = label(size.text, box, fontFamily, "#1e1e1e");
+      const text = label(
+        size.text,
+        size.art
+          ? {
+              ...box,
+              y: box.y + (ICON + ICON_GAP) / 2,
+              height: box.height - ICON - ICON_GAP,
+            }
+          : box,
+        fontFamily,
+        "#1e1e1e",
+      );
       box.boundElements = [{ id: text.id, type: "text" }];
       boxes.set(node.id, box);
       elements.push(box, text);
+      if (size.art) {
+        const fileId = crypto
+          .createHash("sha256")
+          .update(size.art.dataURL)
+          .digest("hex")
+          .slice(0, 40);
+        files[fileId] = {
+          id: fileId,
+          mimeType: size.art.mime,
+          dataURL: size.art.dataURL,
+          created: Date.now(),
+          lastRetrieved: Date.now(),
+        };
+        elements.push(
+          element("image", {
+            fileId,
+            x: box.x + (box.width - ICON) / 2,
+            y: box.y + ICON_GAP,
+            width: ICON,
+            height: ICON,
+            status: "saved",
+            scale: [1, 1],
+            crop: null,
+            strokeColor: "transparent",
+            backgroundColor: "transparent",
+            roundness: null,
+          }),
+        );
+      }
       along += (down ? size.width : size.height) + GAP_DOWN;
     }
     across += (down ? tallest : widest) + GAP_ACROSS;
@@ -329,7 +376,7 @@ export function buildDiagram(spec) {
     source: "self-hosted",
     elements,
     appState: { viewBackgroundColor: style.background || "#ffffff" },
-    files: {},
+    files,
   };
 }
 

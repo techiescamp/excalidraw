@@ -60,6 +60,10 @@ const nodeSchema = z.object({
     .describe("blue, green, red, orange, violet, teal, pink, grey, black"),
   fill: z.string().optional().describe("Exact background colour, e.g. #a5d8ff"),
   stroke: z.string().optional().describe("Exact outline colour, e.g. #1971c2"),
+  icon: z
+    .string()
+    .optional()
+    .describe("Icon drawn inside the box, as set/name, e.g. logos/kubernetes"),
 });
 const edgeSchema = z.object({
   from: z.string(),
@@ -83,7 +87,15 @@ const specSchema = {
   edges: z.array(edgeSchema).optional().describe("Arrows between boxes"),
 };
 
-export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
+export function installMcp(
+  app,
+  db,
+  drawings,
+  keyHolder,
+  origin,
+  bearerHolder,
+  icons,
+) {
   const editorUrl = (id) => `${origin}/editor?scene=${id}`;
   const workspaceFor = async (context) => {
     if (context.workspaceId) return context.workspaceId;
@@ -109,6 +121,23 @@ export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
       collections: known?.collections || [],
       owner_name: known?.owner_name,
     };
+  };
+
+  // Icons named by the model are looked up (and fetched once, if the workspace
+  // allows it) before the diagram is built.
+  const artwork = async (workspace, spec) => {
+    const found = new Map();
+    if (!icons) return found;
+    for (const node of spec?.nodes || []) {
+      if (!node?.icon || found.has(node.icon)) continue;
+      try {
+        const art = await icons.iconData(workspace, node.icon);
+        if (art) found.set(node.icon, art);
+      } catch {
+        // a missing icon never fails the drawing; the box is simply drawn plain
+      }
+    }
+    return found;
   };
 
   const build = (context) => {
@@ -262,6 +291,39 @@ export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
       },
     );
     server.registerTool(
+      "list_icons",
+      {
+        title: "List available icons",
+        description:
+          "Icons this workspace can draw with, named set/name. Use one in a node's icon field.",
+        inputSchema: {
+          search: z.string().optional().describe("Filter by words in the name"),
+        },
+        outputSchema: {
+          icons: z.array(z.string()),
+          fetching_allowed: z.boolean(),
+        },
+      },
+      async ({ search }) => {
+        const workspace = await workspaceFor(context);
+        const { rows } = await db.query(
+          `SELECT set_name||'/'||name AS ref FROM icons
+           WHERE workspace_id=$1 AND ($2::text IS NULL OR name ILIKE '%'||$2||'%')
+           ORDER BY set_name,name LIMIT 200`,
+          [workspace, search || null],
+        );
+        const allowed = icons ? (await icons.settings()).fetch_enabled : false;
+        const result = {
+          icons: rows.map((row) => row.ref),
+          fetching_allowed: Boolean(allowed),
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
+      },
+    );
+    server.registerTool(
       "drawing_style_guide",
       {
         title: "Drawing options",
@@ -295,7 +357,7 @@ export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
         },
         async ({ name, collection, ...spec }) => {
           const workspace = await workspaceFor(context);
-          const payload = buildDiagram(spec);
+          const payload = buildDiagram(spec, await artwork(workspace, spec));
           const scene = await transaction(db, (tx) =>
             drawings.create(
               {
@@ -338,7 +400,10 @@ export function installMcp(app, db, drawings, keyHolder, origin, bearerHolder) {
         },
         async ({ id, ...spec }) => {
           const scene = await sceneRow(context, id);
-          const payload = buildDiagram(spec);
+          const payload = buildDiagram(
+            spec,
+            await artwork(scene.workspace_id, spec),
+          );
           const saved = await drawings.saveScene(
             context.user,
             scene.id,

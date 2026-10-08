@@ -1478,3 +1478,59 @@ html {
 .settings-actions > .danger {
   color: #b42318;
 }
+
+/* Failure messages in the export history are full sentences, so they need a
+   block of their own: an inline .error with padding bleeds over the row above. */
+.export-history td {
+  vertical-align: top;
+}
+.export-history .error {
+  display: block;
+  padding: 8px 10px;
+  line-height: 1.45;
+  border-radius: 7px;
+}
+.export-history .export-pending,
+.export-history .export-type {
+  display: inline-block;
+}
+
+/* Icon search results: a grid of previews that add on click. */
+.icon-search {
+  margin-bottom: 20px;
+}
+.icon-search input {
+  max-width: 320px;
+}
+.icon-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.icon-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+.icon-result:hover {
+  border-color: #6965db;
+  background: #f7f6ff;
+}
+.icon-result img {
+  width: 32px;
+  height: 32px;
+}
+.icon-result small {
+  font-size: 11px;
+  color: #65616d;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}

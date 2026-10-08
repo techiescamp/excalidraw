@@ -6,6 +6,8 @@ import {
   safePath,
   MAX_BYTES,
   MAX_SCENE_BYTES,
+  EXPORT_MAX_BYTES,
+  EXPORT_MAX_SCENE_BYTES,
   MAX_FILES,
 } from "./transfer-archive.js";
 const cleanName = (name) =>
@@ -262,8 +264,8 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
                 info && Array.isArray(info.collections)
                   ? info.collections.map((c) => c.name)
                   : folder && !isPrivate
-                  ? [folder]
-                  : [];
+                    ? [folder]
+                    : [];
               const collections = [];
               if (!isPrivate)
                 for (const value of collectionNames) {
@@ -456,8 +458,8 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
           const folder = scene.private_owner_id
             ? "Private"
             : cols.length
-            ? cleanName(cols[0].name) + "__" + cols[0].id
-            : "Uncollected";
+              ? cleanName(cols[0].name) + "__" + cols[0].id
+              : "Uncollected";
           const path =
             folder +
             "/" +
@@ -468,12 +470,19 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
           const bytes = Buffer.from(
             JSON.stringify(await drawings.readScene(scene)),
           );
-          if (
-            bytes.length > MAX_SCENE_BYTES ||
-            (total += bytes.length) > MAX_BYTES
-          )
+          if (bytes.length > EXPORT_MAX_SCENE_BYTES)
             throw new Error(
-              "Export exceeds 100 MB total or 25 MB per drawing. Export a smaller scope.",
+              `"${scene.name}" is ${Math.round(
+                bytes.length / 1024 / 1024,
+              )} MB, past the ${Math.round(
+                EXPORT_MAX_SCENE_BYTES / 1024 / 1024,
+              )} MB limit for one drawing. Split it, or export a scope without it.`,
+            );
+          if ((total += bytes.length) > EXPORT_MAX_BYTES)
+            throw new Error(
+              `This export passes ${Math.round(
+                EXPORT_MAX_BYTES / 1024 / 1024,
+              )} MB. Export one collection at a time, or a smaller scope.`,
             );
           files[path] = bytes;
           manifest.scenes.push({
@@ -484,8 +493,12 @@ export function installWorkspaceTransfer(app, db, storage, security, drawings) {
           });
         }
         files["manifest.json"] = Buffer.from(JSON.stringify(manifest));
-        if (total + files["manifest.json"].length > MAX_BYTES)
-          throw new Error("Export exceeds 100 MB including its manifest.");
+        if (total + files["manifest.json"].length > EXPORT_MAX_BYTES)
+          throw new Error(
+            `This export passes ${Math.round(
+              EXPORT_MAX_BYTES / 1024 / 1024,
+            )} MB once the file list is added. Export one collection at a time.`,
+          );
         const bytes = await archiveTask("zip", files),
           key = "workspace-exports/" + job.workspace_id + "/" + job.id + ".zip";
         await storage.put(key, bytes, "application/zip");

@@ -40,7 +40,7 @@ export async function renderWorkspaceTransfer({
       .map((m) => `<option value="${m.id}">${escape(m.username)}</option>`)
       .join(
         "",
-      )}</select></label><p class="muted export-privacy" hidden>This includes another member's private drawings. The export is recorded in the Audit log.</p><p role="alert" class="error" hidden></p><button class="primary" type="submit">Export workspace</button><p class="transfer-limit">Up to 999 drawings and 100 MB per export. One export per hour.</p></form></div></section><section class="transfer-section"><div><h3>Workspace export history <span class="count">${
+      )}</select></label><p class="muted export-privacy" hidden>This includes another member's private drawings. The export is recorded in the Audit log.</p><p role="alert" class="error" hidden></p><button class="primary" type="submit">Export workspace</button><p class="transfer-limit">Up to 999 drawings, 512 MB per export and 64 MB per drawing. One export per hour.</p></form></div></section><section class="transfer-section"><div><h3>Workspace export history <span class="count">${
       data.history.length
     }</span></h3><p>View the history of your workspace exports. Download links are valid for 7 days.</p></div><div class="export-history"><table><thead><tr><th>Requested by</th><th>Type</th><th>Requested at</th><th><span class="sr-only">Status</span></th></tr></thead><tbody>${
       data.history.length
@@ -58,7 +58,7 @@ export async function renderWorkspaceTransfer({
                     ? "Expired"
                     : job.status === "ready"
                     ? job.own
-                      ? `<a href="/api${base}/exports/${job.id}/download">Download</a>`
+                      ? `<a href="/api${base}/exports/${job.id}/download" download="workspace-export-${job.id}.zip">Download</a>`
                       : "Ready"
                     : job.status === "failed"
                     ? `<span class="error" title="${escape(

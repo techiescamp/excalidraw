@@ -8,7 +8,7 @@ import { io as socketClient } from "socket.io-client";
 import { JSDOM } from "jsdom";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -138,6 +138,7 @@ before(async () => {
     "migration-010-workspace-trash.sql",
     "migration-011-mcp-keys.sql",
     "migration-012-oauth.sql",
+    "migration-013-icons.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -1411,6 +1412,7 @@ test("private workspace backend", async (t) => {
         "export_drawing",
         "fetch",
         "list_collections",
+        "list_icons",
         "search",
       ]);
       const collection = await createCollection("MCP visible");
@@ -1640,6 +1642,104 @@ test("private workspace backend", async (t) => {
       assert.match(
         JSON.stringify(broken.result ?? broken.error),
         /does not exist/,
+      );
+    },
+  );
+  await t.test(
+    "icons from the workspace library are drawn inside the boxes",
+    async () => {
+      const key = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Icon key", scope: "write" },
+        })
+      ).body.token;
+      // an icon already in the library, as an uploaded pack would be
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#326de6"/></svg>';
+      const objectKey = `icons/${workspace}/testpack/${crypto.randomUUID()}.svg`;
+      await mkdir(path.join(storage, path.dirname(objectKey)), {
+        recursive: true,
+      });
+      await writeFile(path.join(storage, objectKey), svg);
+      await db.query(
+        `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,source,license)
+         VALUES($1,'testpack','server','image/svg+xml',$2,'test','CC0')`,
+        [workspace, objectKey],
+      );
+      const rpc = async (name, args, id = 1) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        });
+        const text = await response.text();
+        return text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : JSON.parse(text);
+      };
+      const listed = await rpc("list_icons", {});
+      assert.ok(
+        listed.result.structuredContent.icons.includes("testpack/server"),
+        "the library is listed for the assistant",
+      );
+      assert.equal(
+        listed.result.structuredContent.fetching_allowed,
+        false,
+        "fetching from the internet stays off until an admin turns it on",
+      );
+      const drawn = await rpc(
+        "create_drawing",
+        {
+          name: "With icons",
+          nodes: [
+            { id: "a", label: "API", icon: "testpack/server" },
+            { id: "b", label: "Worker" },
+          ],
+          edges: [{ from: "a", to: "b" }],
+        },
+        2,
+      );
+      const made = drawn.result.structuredContent;
+      const scene = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
+        .body.scene;
+      const image = scene.elements.find((e) => e.type === "image");
+      assert.ok(image, "the icon is placed as an image");
+      assert.ok(
+        scene.files[image.fileId]?.dataURL.startsWith("data:image/svg+xml"),
+        "the icon travels with the drawing",
+      );
+      const box = scene.elements.find(
+        (e) => e.type === "rectangle" && e.x === image.x - (e.width - 52) / 2,
+      );
+      assert.ok(box, "the icon sits inside its box");
+      // an unknown icon leaves the drawing intact rather than failing
+      const plain = await rpc(
+        "create_drawing",
+        {
+          name: "Unknown icon",
+          nodes: [{ id: "a", label: "API", icon: "testpack/missing" }],
+        },
+        3,
+      );
+      assert.ok(plain.result.structuredContent.id);
+      assert.equal(
+        (
+          await call(`/scenes/${plain.result.structuredContent.id}/data`, {
+            cookie: admin,
+          })
+        ).body.scene.elements.filter((e) => e.type === "image").length,
+        0,
       );
     },
   );
