@@ -88,10 +88,18 @@ export async function installCollaboration(
       fail(400, "Expected encrypted scene bytes.");
     const key = `rooms/${req.params.roomId}/${crypto.randomUUID()}.bin`;
     await storage.put(key, req.body);
-    await db.query("UPDATE scenes SET collab_s3_key=$2 WHERE id=$1", [
-      scene.id,
-      key,
-    ]);
+    // A live session writes a snapshot repeatedly; only the newest is ever read,
+    // so the one it replaces is dropped rather than left behind forever.
+    const { rows } = await db.query(
+      `WITH previous AS (SELECT collab_s3_key FROM scenes WHERE id=$1)
+       UPDATE scenes SET collab_s3_key=$2 WHERE id=$1
+       RETURNING (SELECT collab_s3_key FROM previous) AS replaced`,
+      [scene.id, key],
+    );
+    const stale = rows[0]?.replaced;
+    // The fallback name is reachable without a row, so it is never removed here.
+    if (stale && stale !== key && !/\/scene\.bin$/.test(stale))
+      await storage.remove(stale).catch(() => {});
     res.json({ ok: true });
   });
   const assetAccess = async (req, write = false) => {

@@ -648,10 +648,20 @@ export function installDrawings(app, db, storage, security) {
       req.params.id
     }/${version}-${crypto.randomUUID()}.png`;
     await storage.put(key, req.body, "image/png");
-    await db.query(
-      "UPDATE scenes SET thumb_s3_key=$2 WHERE id=$1 AND scene_version=$3",
+    // Every save used to leave its predecessor behind: 87 thumbnails in use had
+    // accumulated 17,459 abandoned ones. The row is updated and the object it
+    // replaced is dropped; a stale version matches no row, so the preview just
+    // written is the one that goes.
+    const { rows } = await db.query(
+      `WITH previous AS (SELECT thumb_s3_key FROM scenes WHERE id=$1)
+       UPDATE scenes SET thumb_s3_key=$2 WHERE id=$1 AND scene_version=$3
+       RETURNING (SELECT thumb_s3_key FROM previous) AS replaced`,
       [req.params.id, key, version],
     );
+    const stale = rows[0] ? rows[0].replaced : key;
+    // Losing a preview never fails the upload; it is regenerated on next open.
+    if (stale && stale !== key) await storage.remove(stale).catch(() => {});
+    else if (!rows[0]) await storage.remove(key).catch(() => {});
     res.json({ ok: true });
   });
   app.get("/api/scenes/:id/thumbnail", auth, async (req, res) => {

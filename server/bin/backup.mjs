@@ -1,4 +1,4 @@
-// Scheduled backup: database every run, drawing files weekly.
+// Scheduled backup: database and drawing files every run.
 // Everything lands compressed in the bucket under backups/ and a copy of the
 // database dump stays on the droplet. Run by excalidraw-backup.timer.
 import { spawn } from "node:child_process";
@@ -15,7 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import crypto from "node:crypto";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
 
 const LOCAL_DIR = process.env.BACKUP_DIR || "/opt/excalidraw/backups";
 const KEEP_LOCAL_DAYS = Number(process.env.BACKUP_KEEP_DAYS) || 14;
@@ -24,8 +30,10 @@ const PREFIX = process.env.BACKUP_PREFIX || "backups";
 const TARGET_BUCKET = process.env.BACKUP_BUCKET || process.env.S3_BUCKET;
 const SOURCE_BUCKET = process.env.SOURCE_BUCKET || process.env.S3_BUCKET;
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
-const weekly =
-  process.env.BACKUP_SCOPE === "full" || new Date().getUTCDay() === 0;
+// Drawings used to be archived on Sundays only, which left up to a week of work
+// with no copy of its contents. Set BACKUP_SCOPE=database to go back to that.
+const withDrawings = process.env.BACKUP_SCOPE !== "database";
+const sha256 = (body) => crypto.createHash("sha256").update(body).digest("hex");
 
 const run = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
@@ -71,22 +79,62 @@ const upload = async (key, file, contentType) => {
         ContentType: contentType,
       }),
     );
+  // Each piece is checksummed as it goes up and read back afterwards: a part
+  // that was refused or truncated is otherwise indistinguishable from a good one
+  // until the day someone tries to restore it.
+  const written = [];
   if (size <= PART_BYTES) {
-    await put("", await readFile(file));
-    return size;
+    const body = await readFile(file);
+    await put("", body);
+    written.push({ suffix: "", bytes: body.length, sha256: sha256(body) });
+  } else {
+    let part = 0;
+    for (let offset = 0; offset < size; offset += PART_BYTES) {
+      const chunk = [];
+      for await (const piece of createReadStream(file, {
+        start: offset,
+        end: Math.min(offset + PART_BYTES, size) - 1,
+      }))
+        chunk.push(piece);
+      const body = Buffer.concat(chunk);
+      const suffix = `.part-${String(++part).padStart(3, "0")}`;
+      await put(suffix, body);
+      written.push({ suffix, bytes: body.length, sha256: sha256(body) });
+    }
+    console.log(`uploaded in ${part} parts`);
   }
-  let part = 0;
-  for (let offset = 0; offset < size; offset += PART_BYTES) {
-    const chunk = [];
-    for await (const piece of createReadStream(file, {
-      start: offset,
-      end: Math.min(offset + PART_BYTES, size) - 1,
-    }))
-      chunk.push(piece);
-    await put(`.part-${String(++part).padStart(3, "0")}`, Buffer.concat(chunk));
-  }
-  console.log(`uploaded in ${part} parts`);
+  await verify(key, written);
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: TARGET_BUCKET,
+      Key: `${key}.sha256`,
+      Body: Buffer.from(
+        written.map((w) => `${w.sha256}  ${path.basename(key)}${w.suffix}\n`).join(""),
+      ),
+      ContentType: "text/plain",
+    }),
+  );
   return size;
+};
+
+// Reads back what was just written and compares it byte for byte.
+const verify = async (key, written) => {
+  for (const w of written) {
+    const head = await s3.send(
+      new HeadObjectCommand({ Bucket: TARGET_BUCKET, Key: key + w.suffix }),
+    );
+    if (head.ContentLength !== w.bytes)
+      throw new Error(
+        `${key}${w.suffix} is ${head.ContentLength} bytes in the bucket, expected ${w.bytes}`,
+      );
+    const object = await s3.send(
+      new GetObjectCommand({ Bucket: TARGET_BUCKET, Key: key + w.suffix }),
+    );
+    const got = sha256(Buffer.from(await object.Body.transformToByteArray()));
+    if (got !== w.sha256)
+      throw new Error(`${key}${w.suffix} does not match its checksum`);
+  }
+  console.log(`  verified ${written.length} object(s) by checksum`);
 };
 // Reading the app's bucket and writing the backup Space can use different keys.
 const sourceS3 = new S3Client({
@@ -140,8 +188,8 @@ async function backupDrawings() {
        UNION ALL SELECT f.scene_id,f.file_id,f.s3_key FROM scene_files f
        JOIN scenes s ON s.id=f.scene_id WHERE s.deleted_at IS NULL`,
     );
-    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
     const index = [];
+    const failures = [];
     let copied = 0;
     for (const row of rows) {
       try {
@@ -163,7 +211,10 @@ async function backupDrawings() {
         });
         copied += body.length;
       } catch (error) {
-        console.error(`skipped ${row.s3_key}: ${error.message}`);
+        // A skipped drawing used to leave a short archive that still reported
+        // success, so a lapsed key produced a backup missing half the workspace.
+        failures.push({ key: row.s3_key, error: error.message });
+        console.error(`FAILED ${row.s3_key}: ${error.message}`);
       }
     }
     await writeFile(
@@ -183,6 +234,14 @@ async function backupDrawings() {
         size,
       )} archive`,
     );
+    if (failures.length)
+      throw new Error(
+        `${failures.length} of ${rows.length} files could not be read; the archive is incomplete`,
+      );
+    if (index.length !== rows.length)
+      throw new Error(
+        `archive holds ${index.length} files but the workspace has ${rows.length}`,
+      );
   } finally {
     await rm(work, { recursive: true, force: true });
     await db.end();
@@ -191,8 +250,8 @@ async function backupDrawings() {
 
 try {
   await backupDatabase();
-  if (weekly) await backupDrawings();
-  else console.log("drawings archive runs on Sundays");
+  if (withDrawings) await backupDrawings();
+  else console.log("drawings archive disabled by BACKUP_SCOPE=database");
   console.log("backup complete");
 } catch (error) {
   console.error("backup failed:", error.message);
