@@ -1,9 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
 import { isAnimatedRaster } from "./imageInput";
-import { parseHexColor, recolorPixels, removeFlatBackground } from "./pixels";
+import {
+  parseHexColor,
+  recolorPixels,
+  removeFlatBackground,
+  removeIconSheetBackground,
+  replaceFlatBackground,
+} from "./pixels";
 
-type Operation = "recolor" | "flat-background";
+type Operation =
+  | "recolor"
+  | "flat-background"
+  | "background-color"
+  | "icon-sheet"
+  | "ai-background";
 
 export const ImageProcessingDialog = ({
   operation,
@@ -72,6 +83,10 @@ export const ImageProcessingDialog = ({
     }
     setBusy(true);
     setError("");
+    if (operation === "ai-background") {
+      void processWithAI(requestRef.current);
+      return;
+    }
     // Allow the progress message to paint before decoding and pixel processing.
     ownerWindow.setTimeout(() => {
       const image = new ownerWindow.Image();
@@ -101,6 +116,21 @@ export const ImageProcessingDialog = ({
           pixels.data.set(
             operation === "recolor"
               ? recolorPixels(pixels.data, rgb)
+              : operation === "icon-sheet"
+              ? removeIconSheetBackground(
+                  pixels.data,
+                  canvas.width,
+                  canvas.height,
+                )
+              : operation === "background-color"
+              ? replaceFlatBackground(
+                  pixels.data,
+                  canvas.width,
+                  canvas.height,
+                  [255, 255, 255],
+                  rgb,
+                  tolerance,
+                )
               : removeFlatBackground(
                   pixels.data,
                   canvas.width,
@@ -143,13 +173,93 @@ export const ImageProcessingDialog = ({
     }, 0);
   };
 
+  const processWithAI = async (request: number) => {
+    try {
+      const moduleUrl: string =
+        "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2/+esm";
+      const { pipeline } = await import(
+        /* @vite-ignore */
+        moduleUrl
+      );
+      const segmenter = await pipeline("background-removal", "Xenova/modnet", {
+        device: "wasm",
+      });
+      const result = await segmenter(source);
+      if (request !== requestRef.current) {
+        return;
+      }
+      const output = result[0] as {
+        toCanvas?: () => Promise<HTMLCanvasElement> | HTMLCanvasElement;
+        toDataURL?: () => string;
+        data?: Uint8ClampedArray;
+        width?: number;
+        height?: number;
+        channels?: number;
+      };
+      const canvas = output.toCanvas ? await output.toCanvas() : undefined;
+      let dataURL =
+        output.toDataURL?.() ||
+        (canvas && typeof (canvas as HTMLCanvasElement).toDataURL === "function"
+          ? (canvas as HTMLCanvasElement).toDataURL("image/png")
+          : undefined);
+      if (!dataURL && output.data && output.width && output.height) {
+        const document = dialogRef.current?.ownerDocument;
+        const rgba = document?.createElement("canvas");
+        if (!document || !rgba) {
+          throw new Error("The AI output cannot be rendered.");
+        }
+        rgba.width = output.width;
+        rgba.height = output.height;
+        const context = rgba.getContext("2d");
+        if (!context) {
+          throw new Error("The AI output cannot be rendered.");
+        }
+        const imageData = context.createImageData(output.width, output.height);
+        if (output.channels === 4) {
+          imageData.data.set(output.data);
+        } else {
+          for (let i = 0; i < output.width * output.height; i++) {
+            const alpha = output.data[i] ?? 255;
+            imageData.data.set([255, 255, 255, alpha], i * 4);
+          }
+        }
+        context.putImageData(imageData, 0, 0);
+        dataURL = rgba.toDataURL("image/png");
+      }
+      if (!dataURL) {
+        throw new Error("The AI model returned no image.");
+      }
+      setPreview(dataURL);
+    } catch (cause) {
+      if (request === requestRef.current) {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "AI background removal failed.",
+        );
+      }
+    } finally {
+      if (request === requestRef.current) {
+        setBusy(false);
+      }
+    }
+  };
+
   return (
     <div
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={
-        operation === "recolor" ? "Recolor icon" : "Remove flat background"
+        operation === "recolor"
+          ? "Recolor icon"
+          : operation === "ai-background"
+          ? "Remove background with AI"
+          : operation === "icon-sheet"
+          ? "Remove tile colors"
+          : operation === "background-color"
+          ? "Change icon background color"
+          : "Remove background"
       }
       tabIndex={-1}
       onKeyDown={(event) => {
@@ -205,33 +315,53 @@ export const ImageProcessingDialog = ({
         }}
       >
         <h2>
-          {operation === "recolor" ? "Recolor icon" : "Remove flat background"}
+          {operation === "recolor"
+            ? "Recolor icon"
+            : operation === "ai-background"
+            ? "Remove background with AI"
+            : operation === "icon-sheet"
+            ? "Remove tile colors"
+            : operation === "background-color"
+            ? "Change icon background color"
+            : "Remove background"}
         </h2>
         <p>
           {operation === "recolor"
             ? "Visible pixels become one color. Multicolor artwork becomes a silhouette; remove its background first if needed."
+            : operation === "ai-background"
+            ? "Runs MODNet locally in your browser. The first run downloads the model; the image is not sent to a processing service. Best results are expected for a single prominent foreground subject."
+            : operation === "icon-sheet"
+            ? "Removes the white page and each colored icon tile, leaving the central artwork. Preview the result before applying it."
+            : operation === "background-color"
+            ? "Changes the edge-connected white background while preserving the icon artwork. This is intended for icon sheets and flat illustrations."
             : "Removes only areas matching this color that connect to an image edge. Best for icons and images with a solid background."}
         </p>
         <p>
           Processing happens on this device. Applying the result to a shared
           drawing uses its normal save and sync flow.
         </p>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {operation === "recolor" ? "New icon color" : "Background color"}
-          <input
-            type="color"
-            value={color}
-            disabled={busy}
-            onChange={(event) => setColor(event.target.value)}
-          />
-          <input
-            aria-label="Hex color"
-            value={color}
-            disabled={busy}
-            onChange={(event) => setColor(event.target.value)}
-            style={{ width: 90 }}
-          />
-        </label>
+        {operation !== "ai-background" && operation !== "icon-sheet" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {operation === "recolor"
+              ? "New icon color"
+              : operation === "background-color"
+              ? "New background color"
+              : "Background color"}
+            <input
+              type="color"
+              value={color}
+              disabled={busy}
+              onChange={(event) => setColor(event.target.value)}
+            />
+            <input
+              aria-label="Hex color"
+              value={color}
+              disabled={busy}
+              onChange={(event) => setColor(event.target.value)}
+              style={{ width: 90 }}
+            />
+          </label>
+        )}
         {operation === "flat-background" && (
           <label style={{ display: "block", marginTop: 12 }}>
             Color tolerance: {tolerance}

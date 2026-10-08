@@ -15,6 +15,7 @@ import {
   DEFAULT_CATEGORIES,
 } from "@excalidraw/excalidraw/components/CommandPalette/CommandPalette";
 import { ErrorDialog } from "@excalidraw/excalidraw/components/ErrorDialog";
+import { IconButton } from "@excalidraw/excalidraw/components/IconButton";
 import { OverwriteConfirmDialog } from "@excalidraw/excalidraw/components/OverwriteConfirm/OverwriteConfirm";
 import { openConfirmModal } from "@excalidraw/excalidraw/components/OverwriteConfirm/OverwriteConfirmState";
 import { ShareableLinkDialog } from "@excalidraw/excalidraw/components/ShareableLinkDialog";
@@ -436,7 +437,12 @@ const ExcalidrawWrapper = () => {
   const [selectedImage, setSelectedImage] =
     useState<InitializedExcalidrawImageElement | null>(null);
   const [imageJob, setImageJob] = useState<{
-    operation: "recolor" | "flat-background";
+    operation:
+      | "recolor"
+      | "flat-background"
+      | "background-color"
+      | "icon-sheet"
+      | "ai-background";
     targetId: string;
     fileId: FileId;
     version: number;
@@ -1121,107 +1127,85 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
-        renderTopRightUI={(isMobile) => {
+        renderToolbarActions={() => {
           const canProcessImage =
             selectedImage &&
             excalidrawAPI &&
             !excalidrawAPI.getAppState().viewModeEnabled &&
             (!workspacePermissions || workspacePermissions["drawing.edit"]);
-          if (
-            !canProcessImage &&
-            (isMobile || !collabAPI || isCollabDisabled)
-          ) {
+
+          return (
+            <IconButton
+              type="button"
+              aria-label="Remove background"
+              title="Remove background"
+              data-testid="toolbar-remove-background"
+              disabled={!canProcessImage}
+              icon={
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 12h9V3M12 12h9M12 12v9" />
+                  <path
+                    d="m7 17 2 2 3-4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              }
+              onClick={() => {
+                if (!selectedImage || !excalidrawAPI) {
+                  return;
+                }
+                const source =
+                  excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
+                if (source) {
+                  setImageJob({
+                    operation: "flat-background",
+                    targetId: selectedImage.id,
+                    fileId: selectedImage.fileId,
+                    version: selectedImage.version,
+                    sceneId: getWorkspaceSceneId(),
+                    location:
+                      wrapperRef.current?.ownerDocument.defaultView?.location
+                        .href || "",
+                    source,
+                  });
+                }
+              }}
+            />
+          );
+        }}
+        renderTopRightUI={(isMobile) => {
+          if (isMobile || !collabAPI || isCollabDisabled) {
             return null;
           }
 
           return (
             <div className="excalidraw-ui-top-right">
-              {canProcessImage && (
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    style={{
-                      padding: "7px 10px",
-                      borderRadius: 8,
-                      border: "1px solid #bcb9e8",
-                      background: "#f1f0ff",
-                      color: "#34308f",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => {
-                      const source =
-                        excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
-                      if (source) {
-                        setImageJob({
-                          operation: "flat-background",
-                          targetId: selectedImage.id,
-                          fileId: selectedImage.fileId,
-                          version: selectedImage.version,
-                          sceneId: getWorkspaceSceneId(),
-                          location:
-                            wrapperRef.current?.ownerDocument.defaultView
-                              ?.location.href || "",
-                          source,
-                        });
-                      }
-                    }}
-                  >
-                    Remove flat background
-                  </button>
-                  <button
-                    type="button"
-                    style={{
-                      padding: "7px 10px",
-                      borderRadius: 8,
-                      border: "1px solid #bcb9e8",
-                      background: "#f1f0ff",
-                      color: "#34308f",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => {
-                      const source =
-                        excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
-                      if (source) {
-                        setImageJob({
-                          operation: "recolor",
-                          targetId: selectedImage.id,
-                          fileId: selectedImage.fileId,
-                          version: selectedImage.version,
-                          sceneId: getWorkspaceSceneId(),
-                          location:
-                            wrapperRef.current?.ownerDocument.defaultView
-                              ?.location.href || "",
-                          source,
-                        });
-                      }
-                    }}
-                  >
-                    Recolor icon
-                  </button>
-                </div>
-              )}
-              {!isMobile && collabAPI && !isCollabDisabled && (
-                <>
-                  {import.meta.env.VITE_APP_PLUS_LP &&
-                    excalidrawAPI?.getEditorInterface().formFactor ===
-                      "desktop" && (
-                      <ExcalidrawPlusPromoBanner
-                        isSignedIn={isExcalidrawPlusSignedUser}
-                      />
-                    )}
-
-                  {collabError.message && (
-                    <CollabError collabError={collabError} />
-                  )}
-                  <LiveCollaborationTrigger
-                    isCollaborating={isCollaborating}
-                    onSelect={() =>
-                      setShareDialogState({ isOpen: true, type: "share" })
-                    }
-                    editorInterface={editorInterface}
+              {import.meta.env.VITE_APP_PLUS_LP &&
+                excalidrawAPI?.getEditorInterface().formFactor ===
+                  "desktop" && (
+                  <ExcalidrawPlusPromoBanner
+                    isSignedIn={isExcalidrawPlusSignedUser}
                   />
-                </>
-              )}
+                )}
+
+              {collabError.message && <CollabError collabError={collabError} />}
+              <LiveCollaborationTrigger
+                isCollaborating={isCollaborating}
+                onSelect={() =>
+                  setShareDialogState({ isOpen: true, type: "share" })
+                }
+                editorInterface={editorInterface}
+              />
             </div>
           );
         }}

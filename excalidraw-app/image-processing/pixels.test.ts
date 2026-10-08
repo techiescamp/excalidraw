@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHexColor, recolorPixels, removeFlatBackground } from "./pixels";
+import {
+  parseHexColor,
+  recolorPixels,
+  removeFlatBackground,
+  removeIconSheetBackground,
+} from "./pixels";
 
 describe("image pixel operations", () => {
   it("recolors RGB without changing transparent or antialiased alpha", () => {
@@ -37,5 +42,30 @@ describe("image pixel operations", () => {
       removeFlatBackground(new Uint8ClampedArray(4), 2, 2, [255, 255, 255], 0),
     ).toThrow();
     expect(() => parseHexColor("red")).toThrow();
+  });
+
+  it("keeps artwork while removing a separate colored icon tile", () => {
+    const width = 60;
+    const height = 60;
+    const source = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const offset = (y * width + x) * 4;
+        const tile = x >= 10 && x < 50 && y >= 10 && y < 50;
+        const logo = x >= 25 && x < 35 && y >= 20 && y < 40;
+        source.set(
+          logo
+            ? [15, 20, 120, 255]
+            : tile
+            ? [255, 180, 100, 255]
+            : [255, 255, 255, 255],
+          offset,
+        );
+      }
+    }
+    const result = removeIconSheetBackground(source, width, height);
+    expect(result[(5 * width + 5) * 4 + 3]).toBe(0);
+    expect(result[(15 * width + 15) * 4 + 3]).toBe(0);
+    expect(result[(30 * width + 30) * 4 + 3]).toBe(255);
   });
 });
