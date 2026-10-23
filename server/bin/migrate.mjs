@@ -23,6 +23,7 @@ try {
     "migration-011-mcp-keys.sql",
     "migration-012-oauth.sql",
     "migration-013-icons.sql",
+    "migration-014-blobs.sql",
   ];
   const checks = [
     "users",
@@ -38,6 +39,7 @@ try {
     "mcp_keys",
     "oauth_clients",
     "icons",
+    "workspace_blobs",
   ];
   for (const [index, file] of files.entries()) {
     if (

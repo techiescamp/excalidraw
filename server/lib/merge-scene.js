@@ -23,5 +23,10 @@ export function mergeSceneSnapshots(current, incoming) {
     ...incoming,
     elements: ordered,
     files: { ...current.files, ...incoming.files },
+    // Images may arrive as bytes from one participant and as references from
+    // another; keep both sides so neither loses an image the other still uses.
+    ...(current.blobRefs || incoming.blobRefs
+      ? { blobRefs: { ...current.blobRefs, ...incoming.blobRefs } }
+      : {}),
   };
 }

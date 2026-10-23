@@ -1,5 +1,6 @@
 import { protectSecret, revealSecret } from "./secrets.js";
 import { mergeSceneSnapshots } from "./merge-scene.js";
+import { installSceneBlobs } from "./scene-blobs.js";
 import { collectionTeamVisibility } from "./teams.js";
 import crypto from "node:crypto";
 import { fail, uuid, transaction, sha256 } from "./core.js";
@@ -11,6 +12,7 @@ const VERSION_WINDOW_SECONDS = Math.max(
 );
 
 export function installDrawings(app, db, storage, security) {
+  const blobs = installSceneBlobs(db, storage);
   const { auth, permit } = security;
   // Keep legacy view-only scene grants and private collection visibility restrictions.
   const visibility = `(s.private_owner_id IS NULL OR s.private_owner_id=$1 OR $2::boolean) AND (NOT EXISTS(SELECT 1 FROM legacy_scene_visibility pv WHERE pv.scene_id=s.id AND pv.visible_to<>$1)
@@ -293,10 +295,12 @@ export function installDrawings(app, db, storage, security) {
       Array.isArray(payload.files)
     )
       fail(400, "Invalid Excalidraw scene.");
+    const refs = payload.blobRefs || {};
     for (const element of payload.elements)
       if (
         element.type === "image" &&
         !element.isDeleted &&
+        !refs[element.fileId]?.sha256 &&
         (!payload.files[element.fileId]?.dataURL ||
           !/^data:image\//.test(payload.files[element.fileId].dataURL))
       )
@@ -315,6 +319,7 @@ export function installDrawings(app, db, storage, security) {
         gridStep: payload.appState.gridStep,
       },
       files: payload.files,
+      ...(payload.blobRefs ? { blobRefs: payload.blobRefs } : {}),
     };
   };
   const readScene = async (scene) => {
@@ -325,12 +330,24 @@ export function installDrawings(app, db, storage, security) {
         503,
         "Saved drawing data is unavailable. Try again; do not overwrite it.",
       );
+    let parsed;
     try {
-      return JSON.parse(body.toString("utf8"));
+      parsed = JSON.parse(body.toString("utf8"));
     } catch {
       fail(
         409,
         "This legacy drawing is encrypted. Open its authorized collaboration room.",
+      );
+    }
+    try {
+      // Older scenes carry their images inline and come back untouched.
+      return await blobs.hydrate(scene.workspace_id, parsed);
+    } catch (error) {
+      // Never hand back a scene with images quietly dropped; the caller would
+      // save that back and make the loss permanent.
+      fail(
+        503,
+        `Saved drawing data is unavailable (${error.message}). Try again; do not overwrite it.`,
       );
     }
   };
@@ -353,9 +370,10 @@ export function installDrawings(app, db, storage, security) {
     }
     const id = crypto.randomUUID(),
       key = `scenes/${id}/${crypto.randomUUID()}.json`;
+    const fresh = await blobs.split(workspace, payload);
     await storage.put(
       key,
-      Buffer.from(JSON.stringify(payload)),
+      Buffer.from(JSON.stringify(fresh.payload)),
       "application/json",
     );
     const { rows } = await tx.query(
@@ -374,6 +392,7 @@ export function installDrawings(app, db, storage, security) {
         "INSERT INTO collection_drawings(workspace_id,collection_id,drawing_id,added_by) VALUES($1,$2,$3,$4)",
         [workspace, collection, id, req.user.id],
       );
+    await blobs.record(tx, id, workspace, fresh.refs);
     await tx.query(
       "INSERT INTO scene_versions(scene_id,s3_key,scene_version,created_by) VALUES($1,$2,1,$3)",
       [id, key, req.user.id],
@@ -473,7 +492,16 @@ export function installDrawings(app, db, storage, security) {
           mergeSceneSnapshots(await readScene(scene), payload),
         );
       const nextVersion = scene.scene_version + 1;
-      const body = Buffer.from(JSON.stringify(payload));
+      // Images are stored once per workspace and referenced, so what goes into
+      // the object is elements and pointers rather than megabytes of base64.
+      // `payload` keeps its files, so a collaborative caller still gets a whole
+      // scene back.
+      const { payload: stored, refs } = await blobs.split(
+        scene.workspace_id,
+        payload,
+      );
+      await blobs.record(tx, scene.id, scene.workspace_id, refs);
+      const body = Buffer.from(JSON.stringify(stored));
       // Autosave writes a full copy about a second after every pause, so an hour of
       // drawing used to leave hundreds of near-identical restore points, each a
       // separate stored file. Saves that land inside the newest restore point's

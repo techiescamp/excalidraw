@@ -139,6 +139,7 @@ before(async () => {
     "migration-011-mcp-keys.sql",
     "migration-012-oauth.sql",
     "migration-013-icons.sql",
+    "migration-014-blobs.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -958,6 +959,146 @@ test("private workspace backend", async (t) => {
           .body.files,
         data.files,
       );
+    },
+  );
+  await t.test(
+    "an image is stored once however many drawings use it, and reads are unchanged",
+    async () => {
+      const image = {
+        id: "shared",
+        dataURL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+        mimeType: "image/png",
+        created: 1700000000,
+      };
+      const scene = (fileId) => ({
+        type: "excalidraw",
+        version: 2,
+        elements: [
+          { id: "el", type: "image", fileId, isDeleted: false, version: 1 },
+        ],
+        appState: { viewBackgroundColor: "#fff" },
+        files: { [fileId]: { ...image, id: fileId } },
+      });
+      const first = await createDrawing();
+      const second = await createDrawing();
+      for (const [drawing, fileId] of [
+        [first, "fileA"],
+        // the same bytes under a different file id in another drawing
+        [second, "fileB"],
+      ])
+        assert.equal(
+          (
+            await call(`/scenes/${drawing.id}/data`, {
+              cookie: admin,
+              method: "PUT",
+              body: { version: 1, scene: scene(fileId) },
+            })
+          ).status,
+          200,
+        );
+
+      // Both drawings point at the same bytes, and those bytes are stored once.
+      const refs = await db.query(
+        "SELECT scene_id,file_id,sha256 FROM scene_blob_refs WHERE scene_id = ANY($1::uuid[]) ORDER BY file_id",
+        [[first.id, second.id]],
+      );
+      assert.deepEqual(
+        refs.rows.map((r) => r.file_id),
+        ["fileA", "fileB"],
+      );
+      const digests = new Set(refs.rows.map((r) => r.sha256));
+      assert.equal(digests.size, 1, "identical bytes share one digest");
+      const blobs = await db.query(
+        "SELECT sha256,size_bytes FROM workspace_blobs WHERE sha256=$1",
+        [[...digests][0]],
+      );
+      assert.equal(blobs.rows.length, 1, "stored once, not once per drawing");
+
+      // Readers still receive the image exactly as it was saved.
+      for (const [drawing, fileId] of [
+        [first, "fileA"],
+        [second, "fileB"],
+      ]) {
+        const loaded = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+        assert.equal(loaded.status, 200);
+        assert.deepEqual(loaded.body.scene.files, {
+          [fileId]: { ...image, id: fileId },
+        });
+      }
+
+      // The stored object carries references, not the bytes.
+      const key = (
+        await db.query("SELECT s3_key FROM scenes WHERE id=$1", [first.id])
+      ).rows[0].s3_key;
+      const stored = JSON.parse(
+        await readFile(path.join(storage, key), "utf8"),
+      );
+      assert.deepEqual(stored.files, {});
+      assert.equal(stored.blobRefs.fileA.sha256, blobs.rows[0].sha256);
+      assert.ok(
+        !JSON.stringify(stored).includes(image.dataURL),
+        "the scene object no longer carries the image bytes",
+      );
+    },
+  );
+  await t.test(
+    "a scene saved the old way still reads, and a lost image fails loudly",
+    async () => {
+      const drawing = await createDrawing();
+      const legacy = {
+        type: "excalidraw",
+        version: 2,
+        elements: [
+          { id: "el", type: "image", fileId: "old", isDeleted: false },
+        ],
+        appState: { viewBackgroundColor: "#fff" },
+        files: {
+          old: {
+            id: "old",
+            dataURL: "data:image/png;base64,aGVsbG8gb2xk",
+            mimeType: "image/png",
+            created: 2,
+          },
+        },
+      };
+      // Write the pre-split shape straight to storage, as it was before.
+      const key = (
+        await db.query("SELECT s3_key FROM scenes WHERE id=$1", [drawing.id])
+      ).rows[0].s3_key;
+      await mkdir(path.dirname(path.join(storage, key)), { recursive: true });
+      await writeFile(path.join(storage, key), JSON.stringify(legacy));
+      const loaded = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      assert.equal(loaded.status, 200);
+      assert.deepEqual(loaded.body.scene.files, legacy.files);
+
+      // A reference whose bytes were never stored must not come back as a
+      // scene with the image silently removed: saving that would make the
+      // loss permanent.
+      const other = await createDrawing();
+      const orphanKey = (
+        await db.query("SELECT s3_key FROM scenes WHERE id=$1", [other.id])
+      ).rows[0].s3_key;
+      await mkdir(path.dirname(path.join(storage, orphanKey)), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(storage, orphanKey),
+        JSON.stringify({
+          ...legacy,
+          files: {},
+          blobRefs: {
+            old: {
+              id: "old",
+              mimeType: "image/png",
+              created: 2,
+              sha256: "0".repeat(64),
+            },
+          },
+        }),
+      );
+      const broken = await call(`/scenes/${other.id}/data`, { cookie: admin });
+      assert.equal(broken.status, 503);
+      assert.match(broken.body.error, /do not overwrite/i);
     },
   );
   await t.test(
