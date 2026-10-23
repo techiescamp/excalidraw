@@ -1,6 +1,7 @@
 import { protectSecret, revealSecret } from "./secrets.js";
 import { mergeSceneSnapshots } from "./merge-scene.js";
 import { installSceneBlobs } from "./scene-blobs.js";
+import { canvasLogicalBytes } from "./canvas-disk-cache.js";
 import { collectionTeamVisibility } from "./teams.js";
 import crypto from "node:crypto";
 import { fail, uuid, transaction, sha256 } from "./core.js";
@@ -11,7 +12,13 @@ const VERSION_WINDOW_SECONDS = Math.max(
   Number(process.env.VERSION_WINDOW_SECONDS) || 600,
 );
 
-export function installDrawings(app, db, storage, security) {
+export function installDrawings(
+  app,
+  db,
+  storage,
+  security,
+  { canvasDiskCache = null, cacheEnabled = () => false } = {},
+) {
   const blobs = installSceneBlobs(db, storage);
   const { auth, permit } = security;
   // Keep legacy view-only scene grants and private collection visibility restrictions.
@@ -323,6 +330,20 @@ export function installDrawings(app, db, storage, security) {
     };
   };
   const readScene = async (scene) => {
+    const useCache = canvasDiskCache && cacheEnabled();
+    if (useCache) {
+      try {
+        const cached = await canvasDiskCache.read(
+          scene.id,
+          scene.scene_version,
+        );
+        if (cached) {
+          return cached;
+        }
+      } catch (error) {
+        console.warn("canvas disk cache unavailable:", error.message);
+      }
+    }
     const body = await storage.read(scene.s3_key);
     if (body === null && scene.scene_version === 0) return empty;
     if (body === null)
@@ -341,7 +362,20 @@ export function installDrawings(app, db, storage, security) {
     }
     try {
       // Older scenes carry their images inline and come back untouched.
-      return await blobs.hydrate(scene.workspace_id, parsed);
+      const hydrated = await blobs.hydrate(scene.workspace_id, parsed);
+      if (useCache) {
+        try {
+          await canvasDiskCache.write(
+            scene.id,
+            scene.scene_version,
+            hydrated,
+            canvasLogicalBytes(body.length, parsed, hydrated),
+          );
+        } catch (error) {
+          console.warn("canvas disk cache unavailable:", error.message);
+        }
+      }
+      return hydrated;
     } catch (error) {
       // Never hand back a scene with images quietly dropped; the caller would
       // save that back and make the loss permanent.
@@ -473,7 +507,8 @@ export function installDrawings(app, db, storage, security) {
   // Shared by the editor's save route and the MCP drawing tools.
   const saveScene = async (user, id, incoming, { expected, roomId } = {}) => {
     let payload = validateScene(incoming);
-    return transaction(db, async (tx) => {
+    let cacheCandidate;
+    const result = await transaction(db, async (tx) => {
       await tx.query("SELECT id FROM scenes WHERE id=$1 FOR UPDATE", [id]);
       const { scene } = await sceneAccess(user, id, "drawing.edit", tx);
       const expectedVersion =
@@ -542,11 +577,48 @@ export function installDrawings(app, db, storage, security) {
           [scene.id, key, nextVersion, body.length, user.id],
         );
       await activity(tx, user, scene, "edited");
+      if (canvasDiskCache && cacheEnabled()) {
+        const snapshot = { ...stored, files: {} };
+        let complete = true;
+        for (const [fileId, ref] of Object.entries(stored.blobRefs || {})) {
+          const dataURL = payload.files[fileId]?.dataURL;
+          if (typeof dataURL !== "string") {
+            complete = false;
+            break;
+          }
+          const { sha256, ...file } = ref;
+          snapshot.files[fileId] = { ...file, dataURL };
+        }
+        if (complete) {
+          delete snapshot.blobRefs;
+          cacheCandidate = {
+            sceneId: scene.id,
+            version: nextVersion,
+            snapshot,
+            logicalBytes: canvasLogicalBytes(body.length, stored, snapshot),
+          };
+        }
+      }
       return {
         version: nextVersion,
         ...(collaborative ? { scene: payload } : {}),
       };
     });
+    if (cacheCandidate) {
+      // The remote object and transaction have succeeded. Disk cache failures
+      // must not make a completed autosave fail.
+      void canvasDiskCache
+        .write(
+          cacheCandidate.sceneId,
+          cacheCandidate.version,
+          cacheCandidate.snapshot,
+          cacheCandidate.logicalBytes,
+        )
+        .catch((error) =>
+          console.warn("canvas disk cache unavailable:", error.message),
+        );
+    }
+    return result;
   };
   app.put("/api/scenes/:id/data", auth, async (req, res) => {
     const expected = req.body?.version;

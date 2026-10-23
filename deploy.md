@@ -481,6 +481,19 @@ Switching to Spaces does **not** move existing objects. Use
 verify afterwards — a scene whose object is missing still lists but fails to
 open.
 
+When Spaces is active, the API keeps a disposable disk cache of fully hydrated
+canvases whose stored scene plus distinct raw images exceed 5 MB. The cache is
+limited to 20 GB by default and lives beside `LOCAL_STORAGE_ROOT`
+(`storage-canvas-cache` with the example paths above). It is keyed by scene ID
+and version, so autosaves cannot serve an older drawing. Access is checked in
+PostgreSQL before every cache read. Cache entries have a SHA-256 checksum; a
+miss or local disk failure falls back to Spaces. Saves can warm the cache after
+Spaces and PostgreSQL succeed; the first read of an existing large canvas also
+warms it. Set `CANVAS_DISK_CACHE_BYTES` and
+`CANVAS_DISK_CACHE_DIR` to change the limit or location. Keep the cache outside
+`LOCAL_STORAGE_ROOT`, since storage migration copies that root. It can be
+deleted without losing saved drawings.
+
 ### 7.4 systemd unit
 
 ```bash

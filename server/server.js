@@ -5,6 +5,7 @@ import { installOAuth } from "./lib/oauth.js";
 import { installIcons } from "./lib/icons.js";
 import { installWorkspaceTransfer } from "./lib/workspace-transfer.js";
 import { installTeams } from "./lib/teams.js";
+import { createCanvasDiskCache } from "./lib/canvas-disk-cache.js";
 import { createServer } from "node:http";
 import { installCollaboration } from "./lib/collaboration.js";
 import { installAuth } from "./lib/auth.js";
@@ -47,6 +48,21 @@ const db = new pg.Pool({ connectionString: DATABASE_URL, max: 10 });
 // is fully functional before object storage is provisioned. Both drivers expose
 // presigned PUT/GET so the browser upload path is identical either way.
 const LOCAL_ROOT = process.env.LOCAL_STORAGE_ROOT || "/opt/excalidraw/storage";
+const diskCacheBytes = Number(process.env.CANVAS_DISK_CACHE_BYTES);
+const canvasDiskCache = createCanvasDiskCache({
+  // The storage migration walks LOCAL_STORAGE_ROOT recursively, so keep this
+  // disposable cache in a sibling directory.
+  root:
+    process.env.CANVAS_DISK_CACHE_DIR ||
+    path.join(
+      path.dirname(LOCAL_ROOT),
+      `${path.basename(LOCAL_ROOT)}-canvas-cache`,
+    ),
+  maxBytes:
+    Number.isFinite(diskCacheBytes) && diskCacheBytes > 0
+      ? diskCacheBytes
+      : undefined,
+});
 
 const realKey = (k) => Boolean(k && !/^REPLACE_ME$|^<.*>$/.test(k));
 
@@ -281,7 +297,11 @@ const rawBlob = express.raw({ type: "*/*", limit: "64mb" });
 const security = installAuth(app, db, APP_ORIGIN);
 const { auth, admin: requireSuperadmin, recent } = security;
 installTeams(app, db, security);
-const drawings = installDrawings(app, db, storage, security);
+const drawings = installDrawings(app, db, storage, security, {
+  canvasDiskCache,
+  cacheEnabled: () =>
+    hasObjectStore() || process.env.CANVAS_DISK_CACHE_TEST_LOCAL === "true",
+});
 const httpServer = createServer(app);
 await installCollaboration(
   app,
@@ -645,6 +665,13 @@ app.use((error, req, res, _next) => {
   });
 });
 await loadStorageFromDb();
+if (hasObjectStore()) {
+  void canvasDiskCache
+    .prime()
+    .catch((error) =>
+      console.warn("canvas disk cache unavailable:", error.message),
+    );
+}
 httpServer.listen(Number(PORT), "127.0.0.1", () =>
   console.log(
     `excalidraw-api listening on 127.0.0.1:${PORT} (storage: ${store.driver})`,

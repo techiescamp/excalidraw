@@ -23,7 +23,15 @@ const control = new pg.Pool({ connectionString: base });
 const database = "excalidraw_test_" + process.pid;
 const origin = "http://127.0.0.1:55440";
 const password = "A private orchard under moonlight 742!";
-let db, server, storage, admin, workspace, otherWorkspace, editor, viewer;
+let db,
+  server,
+  storage,
+  cacheStorage,
+  admin,
+  workspace,
+  otherWorkspace,
+  editor,
+  viewer;
 async function call(
   endpoint,
   {
@@ -155,6 +163,7 @@ before(async () => {
   workspace = workspaces.rows[0].id;
   otherWorkspace = workspaces.rows[1].id;
   storage = await mkdtemp(path.join(tmpdir(), "excalidraw-storage-"));
+  cacheStorage = await mkdtemp(path.join(tmpdir(), "excalidraw-canvas-cache-"));
   server = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
@@ -165,6 +174,8 @@ before(async () => {
       COOKIE_SECURE: "false",
       JWT_SECRET: crypto.randomBytes(32).toString("hex"),
       LOCAL_STORAGE_ROOT: storage,
+      CANVAS_DISK_CACHE_DIR: cacheStorage,
+      CANVAS_DISK_CACHE_TEST_LOCAL: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -195,6 +206,7 @@ after(async () => {
   await control.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
   await control.end();
   if (storage) await rm(storage, { recursive: true, force: true });
+  if (cacheStorage) await rm(cacheStorage, { recursive: true, force: true });
 });
 test("private workspace backend", async (t) => {
   await t.test(
@@ -1019,7 +1031,9 @@ test("private workspace backend", async (t) => {
         [first, "fileA"],
         [second, "fileB"],
       ]) {
-        const loaded = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+        const loaded = await call(`/scenes/${drawing.id}/data`, {
+          cookie: admin,
+        });
         assert.equal(loaded.status, 200);
         assert.deepEqual(loaded.body.scene.files, {
           [fileId]: { ...image, id: fileId },
@@ -1039,6 +1053,66 @@ test("private workspace backend", async (t) => {
         !JSON.stringify(stored).includes(image.dataURL),
         "the scene object no longer carries the image bytes",
       );
+    },
+  );
+  await t.test(
+    "large canvas reopens from the private disk cache after source files are unavailable",
+    async () => {
+      const drawing = await createDrawing();
+      const dataURL = `data:image/png;base64,${crypto
+        .randomBytes(5_010_000)
+        .toString("base64")}`;
+      const save = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: 1,
+          scene: {
+            type: "excalidraw",
+            version: 2,
+            elements: [
+              { id: "large", type: "image", fileId: "large", isDeleted: false },
+            ],
+            appState: { viewBackgroundColor: "#fff" },
+            files: {
+              large: {
+                id: "large",
+                dataURL,
+                mimeType: "image/png",
+                created: 1,
+              },
+            },
+          },
+        },
+      });
+      assert.equal(save.status, 200, JSON.stringify(save.body));
+      const first = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      assert.equal(first.status, 200);
+      assert.equal(first.body.scene.files.large.dataURL, dataURL);
+      const cacheFile = path.join(cacheStorage, drawing.id, "2.json");
+      assert.ok((await readFile(cacheFile)).length > 5_000_000);
+
+      const stored = await db.query(
+        "SELECT s.s3_key,b.s3_key AS blob_key FROM scenes s JOIN scene_blob_refs r ON r.scene_id=s.id JOIN workspace_blobs b ON b.workspace_id=r.workspace_id AND b.sha256=r.sha256 WHERE s.id=$1",
+        [drawing.id],
+      );
+      const scenePath = path.join(storage, stored.rows[0].s3_key);
+      const blobPath = path.join(storage, stored.rows[0].blob_key);
+      const sceneBytes = await readFile(scenePath);
+      const blobBytes = await readFile(blobPath);
+      try {
+        await rm(scenePath);
+        await rm(blobPath);
+        const cached = await call(`/scenes/${drawing.id}/data`, {
+          cookie: admin,
+        });
+        assert.equal(cached.status, 200);
+        assert.equal(cached.body.scene.files.large.dataURL, dataURL);
+        assert.equal((await call(`/scenes/${drawing.id}/data`)).status, 401);
+      } finally {
+        await writeFile(scenePath, sceneBytes);
+        await writeFile(blobPath, blobBytes);
+      }
     },
   );
   await t.test(
@@ -1067,7 +1141,9 @@ test("private workspace backend", async (t) => {
       ).rows[0].s3_key;
       await mkdir(path.dirname(path.join(storage, key)), { recursive: true });
       await writeFile(path.join(storage, key), JSON.stringify(legacy));
-      const loaded = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      const loaded = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
       assert.equal(loaded.status, 200);
       assert.deepEqual(loaded.body.scene.files, legacy.files);
 
