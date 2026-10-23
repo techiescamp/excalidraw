@@ -7,8 +7,6 @@ import type { Theme } from "@excalidraw/element/types";
 
 import { t } from "../i18n";
 
-import Spinner from "./Spinner";
-
 export const LoadingMessage: React.FC<{ delay?: number; theme?: Theme }> = ({
   delay,
   theme,
@@ -34,9 +32,13 @@ export const LoadingMessage: React.FC<{ delay?: number; theme?: Theme }> = ({
       className={clsx("LoadingMessage", {
         "LoadingMessage--dark": theme === THEME.DARK,
       })}
+      role="status"
+      aria-label={t("labels.loadingScene")}
     >
-      <div>
-        <Spinner />
+      <div className="LoadingMessage-shapes" aria-hidden="true">
+        <span className="LoadingMessage-shape LoadingMessage-shape--square" />
+        <span className="LoadingMessage-shape LoadingMessage-shape--circle" />
+        <span className="LoadingMessage-shape LoadingMessage-shape--diamond" />
       </div>
       <div className="LoadingMessage-text">{t("labels.loadingScene")}</div>
     </div>

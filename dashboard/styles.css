@@ -731,25 +731,114 @@ textarea:focus {
 .toast.error {
   color: #bb3046;
 }
-.loading-state {
+.workspace-loader {
+  min-height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 120px 20px;
-  color: var(--muted);
+  background: var(--surface);
 }
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--line);
-  border-top-color: var(--accent);
+.workspace-loader--page {
+  min-height: calc(100dvh - 80px);
+}
+.workspace-loader__shapes {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 58px;
+}
+.workspace-loader__shape {
+  position: relative;
+  display: block;
+  width: 33px;
+  height: 33px;
+  border: 1.5px solid #25242a;
+  animation: workspace-loader-bounce 1.15s ease-in-out infinite;
+}
+.workspace-loader__shape::after {
+  content: "";
+  position: absolute;
+  left: 10%;
+  bottom: -18px;
+  width: 80%;
+  height: 4px;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  background: #29253122;
+  filter: blur(2px);
+  animation: workspace-loader-shadow 1.15s ease-in-out infinite;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+.workspace-loader__shape--square {
+  background: #4ddc81;
+  border-radius: 7px;
+}
+.workspace-loader__shape--circle {
+  width: 32px;
+  height: 27px;
+  margin-top: 12px;
+  background: #ff8087;
+  border-radius: 50%;
+  animation-delay: 0.13s;
+}
+.workspace-loader__shape--circle::after {
+  animation-delay: 0.13s;
+}
+.workspace-loader__shape--diamond {
+  width: 28px;
+  height: 28px;
+  margin: 7px 3px 0;
+  background: #ffdb55;
+  transform: rotate(45deg);
+  animation-name: workspace-loader-diamond-bounce;
+  animation-delay: 0.26s;
+}
+.workspace-loader__shape--diamond::after {
+  animation-delay: 0.26s;
+}
+.workspace-loader__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@keyframes workspace-loader-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-13px);
+  }
+}
+@keyframes workspace-loader-diamond-bounce {
+  0%,
+  60%,
+  100% {
+    transform: rotate(45deg) translateY(0);
+  }
+  30% {
+    transform: rotate(45deg) translate(-9px, -9px);
+  }
+}
+@keyframes workspace-loader-shadow {
+  0%,
+  60%,
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  30% {
+    opacity: 0.45;
+    transform: scaleX(0.65);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-loader__shape,
+  .workspace-loader__shape::after {
+    animation: none;
   }
 }
 .login {

@@ -205,6 +205,78 @@
         }
       }
     </style>
+    <style>
+      /* Visible while the editor bundle and workspace session initialize. */
+      #root > .initial-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+      }
+      html.dark #root > .initial-loader {
+        background: #17171e;
+      }
+      .initial-loader .LoadingMessage-shapes {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        height: 58px;
+      }
+      .initial-loader .LoadingMessage-shape {
+        display: block;
+        width: 33px;
+        height: 33px;
+        border: 1.5px solid #25242a;
+        animation: initial-loader-bounce 1.15s ease-in-out infinite;
+      }
+      .initial-loader .LoadingMessage-shape--square {
+        background: #4ddc81;
+        border-radius: 7px;
+      }
+      .initial-loader .LoadingMessage-shape--circle {
+        width: 32px;
+        height: 27px;
+        margin-top: 12px;
+        background: #ff8087;
+        border-radius: 50%;
+        animation-delay: 0.13s;
+      }
+      .initial-loader .LoadingMessage-shape--diamond {
+        width: 28px;
+        height: 28px;
+        margin: 7px 3px 0;
+        background: #ffdb55;
+        transform: rotate(45deg);
+        animation: initial-loader-diamond 1.15s ease-in-out 0.26s infinite;
+      }
+      @keyframes initial-loader-bounce {
+        0%,
+        60%,
+        100% {
+          transform: translateY(0);
+        }
+        30% {
+          transform: translateY(-13px);
+        }
+      }
+      @keyframes initial-loader-diamond {
+        0%,
+        60%,
+        100% {
+          transform: rotate(45deg) translateY(0);
+        }
+        30% {
+          transform: rotate(45deg) translate(-9px, -9px);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .initial-loader .LoadingMessage-shape {
+          animation: none;
+        }
+      }
+    </style>
   </head>
 
   <body>
@@ -212,7 +284,19 @@
     <header>
       <h1 class="visually-hidden">Excalidraw</h1>
     </header>
-    <div id="root"></div>
+    <div id="root">
+      <div class="initial-loader" role="status" aria-label="Loading scene">
+        <div class="LoadingMessage-shapes" aria-hidden="true">
+          <span class="LoadingMessage-shape LoadingMessage-shape--square"></span
+          ><span
+            class="LoadingMessage-shape LoadingMessage-shape--circle"
+          ></span
+          ><span
+            class="LoadingMessage-shape LoadingMessage-shape--diamond"
+          ></span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="index.tsx"></script>
     <% if (typeof PROD != 'undefined' && PROD == true) { %>
     <!-- 100% privacy friendly analytics -->

@@ -538,7 +538,7 @@ function shell() {
    "menu",
  )}</button><span>${escape(
     work?.name || "Workspace",
-  )}</span></div><div id="page"><div class="loading-state" role="status"><span class="spinner"></span>Loading workspace…</div></div></main></div>`;
+  )}</span></div><div id="page"><div class="workspace-loader workspace-loader--page" role="status" aria-label="Loading workspace"><div class="workspace-loader__shapes" aria-hidden="true"><span class="workspace-loader__shape workspace-loader__shape--square"></span><span class="workspace-loader__shape workspace-loader__shape--circle"></span><span class="workspace-loader__shape workspace-loader__shape--diamond"></span></div><span class="workspace-loader__label">Loading workspace…</span></div></div></main></div>`;
   $("#workspace-switch").onclick = (e) =>
     menu(
       e.currentTarget,
