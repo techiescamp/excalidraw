@@ -18,18 +18,19 @@ const CACHE_BYTES = Math.max(
   Number(process.env.BLOB_CACHE_BYTES) || 192 * 1024 * 1024,
 );
 
-export function installSceneBlobs(db, storage) {
+export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}) {
   const cache = new Map();
+  const limit = Math.max(1, cacheBytes);
   let held = 0;
 
   const remember = (sha256, dataURL) => {
-    if (dataURL.length > CACHE_BYTES) return;
+    if (dataURL.length > limit) return;
     if (cache.has(sha256)) cache.delete(sha256);
     cache.set(sha256, dataURL);
     held += dataURL.length;
     // Least recently used first; Map preserves insertion order.
     for (const key of cache.keys()) {
-      if (held <= CACHE_BYTES) break;
+      if (held <= limit) break;
       held -= cache.get(key).length;
       cache.delete(key);
     }
@@ -102,9 +103,16 @@ export function installSceneBlobs(db, storage) {
     const refs = scene?.blobRefs;
     if (!refs || !Object.keys(refs).length) return scene;
     const files = { ...(scene.files || {}) };
-    const wanted = [...new Set(Object.values(refs).map((r) => r.sha256))].filter(
-      (sha) => recall(sha) === undefined,
-    );
+    // What this read needs is held here, not in the shared cache. The cache can
+    // evict at any time, including an image this same read fetched a moment
+    // ago, which showed up as a drawing refusing to open.
+    const resolved = new Map();
+    const wanted = [];
+    for (const sha of new Set(Object.values(refs).map((r) => r.sha256))) {
+      const cached = recall(sha);
+      if (cached === undefined) wanted.push(sha);
+      else resolved.set(sha, cached);
+    }
     if (wanted.length) {
       const { rows } = await db.query(
         "SELECT sha256,mime,s3_key FROM workspace_blobs WHERE workspace_id=$1 AND sha256 = ANY($2::text[])",
@@ -126,14 +134,16 @@ export function installSceneBlobs(db, storage) {
             const body = await storage.read(row.s3_key);
             if (body === null)
               throw new Error(`image ${sha256.slice(0, 12)} is missing from storage`);
-            remember(sha256, `data:${row.mime};base64,${body.toString("base64")}`);
+            const dataURL = `data:${row.mime};base64,${body.toString("base64")}`;
+            resolved.set(sha256, dataURL);
+            remember(sha256, dataURL);
           }
         },
       );
       await Promise.all(workers);
     }
     for (const [fileId, ref] of Object.entries(refs)) {
-      const dataURL = recall(ref.sha256);
+      const dataURL = resolved.get(ref.sha256);
       if (dataURL === undefined)
         throw new Error(`image ${ref.sha256.slice(0, 12)} could not be read`);
       const { sha256, ...rest } = ref;
