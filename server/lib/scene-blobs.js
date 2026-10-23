@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/s;
 // The same icons recur across a workspace, so a small cache turns most reads of
 // a shared drawing into no object reads at all.
+const FETCH_CONCURRENCY = Math.max(1, Number(process.env.BLOB_FETCH_CONCURRENCY) || 24);
 const CACHE_BYTES = Math.max(
   16 * 1024 * 1024,
   Number(process.env.BLOB_CACHE_BYTES) || 192 * 1024 * 1024,
@@ -110,14 +111,26 @@ export function installSceneBlobs(db, storage) {
         [workspace, wanted],
       );
       const known = new Map(rows.map((r) => [r.sha256, r]));
-      for (const sha256 of wanted) {
-        const row = known.get(sha256);
-        if (!row) throw new Error(`image ${sha256.slice(0, 12)} is not stored`);
-        const body = await storage.read(row.s3_key);
-        if (body === null)
-          throw new Error(`image ${sha256.slice(0, 12)} is missing from storage`);
-        remember(sha256, `data:${row.mime};base64,${body.toString("base64")}`);
-      }
+      // A drawing can reference a hundred images. Read them together: one at a
+      // time costs a round trip each, which on a cold cache was slower than
+      // carrying the images inside the scene ever was.
+      const queue = [...wanted];
+      const workers = Array.from(
+        { length: Math.min(FETCH_CONCURRENCY, queue.length) },
+        async () => {
+          for (;;) {
+            const sha256 = queue.shift();
+            if (!sha256) return;
+            const row = known.get(sha256);
+            if (!row) throw new Error(`image ${sha256.slice(0, 12)} is not stored`);
+            const body = await storage.read(row.s3_key);
+            if (body === null)
+              throw new Error(`image ${sha256.slice(0, 12)} is missing from storage`);
+            remember(sha256, `data:${row.mime};base64,${body.toString("base64")}`);
+          }
+        },
+      );
+      await Promise.all(workers);
     }
     for (const [fileId, ref] of Object.entries(refs)) {
       const dataURL = recall(ref.sha256);
