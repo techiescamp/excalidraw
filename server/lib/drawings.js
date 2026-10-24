@@ -508,6 +508,16 @@ export function installDrawings(
   const saveScene = async (user, id, incoming, { expected, roomId } = {}) => {
     let payload = validateScene(incoming);
     let cacheCandidate;
+    // The images go to storage before the transaction opens. Uploading inside
+    // it held this drawing's row for as long as the upload took, so a large
+    // drawing could block every other save of it for minutes.
+    const workspaceOf = (
+      await db.query("SELECT workspace_id FROM scenes WHERE id=$1", [
+        uuid(id) ? id : null,
+      ])
+    ).rows[0];
+    if (!workspaceOf) fail(404, "Drawing not found.");
+    const prepared = await blobs.split(workspaceOf.workspace_id, payload);
     const result = await transaction(db, async (tx) => {
       await tx.query("SELECT id FROM scenes WHERE id=$1 FOR UPDATE", [id]);
       const { scene } = await sceneAccess(user, id, "drawing.edit", tx);
@@ -527,14 +537,12 @@ export function installDrawings(
           mergeSceneSnapshots(await readScene(scene), payload),
         );
       const nextVersion = scene.scene_version + 1;
-      // Images are stored once per workspace and referenced, so what goes into
-      // the object is elements and pointers rather than megabytes of base64.
-      // `payload` keeps its files, so a collaborative caller still gets a whole
-      // scene back.
-      const { payload: stored, refs } = await blobs.split(
-        scene.workspace_id,
-        payload,
-      );
+      // A collaborative save merged more elements in after the upload, so any
+      // image that arrived with them is stored now; for an ordinary save this
+      // finds everything already uploaded and does nothing.
+      const { payload: stored, refs } = collaborative
+        ? await blobs.split(scene.workspace_id, payload)
+        : prepared;
       await blobs.record(tx, scene.id, scene.workspace_id, refs);
       const body = Buffer.from(JSON.stringify(stored));
       // Autosave writes a full copy about a second after every pause, so an hour of

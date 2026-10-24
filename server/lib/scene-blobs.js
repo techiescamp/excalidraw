@@ -44,6 +44,11 @@ export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}
   };
 
   // Returns the scene as it should be stored, plus the references to record.
+  // Uploading happens here and must stay outside any database transaction: an
+  // upload takes seconds, and holding a row lock across it made every other
+  // save of the same drawing queue behind it. Writing a blob that a failed save
+  // never references is harmless, because the key is the digest and an unused
+  // one is simply collectable.
   const split = async (workspace, scene) => {
     const files = scene.files || {};
     const blobRefs = { ...(scene.blobRefs || {}) };
