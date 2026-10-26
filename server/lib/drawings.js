@@ -523,7 +523,17 @@ export function installDrawings(
           (req.user.is_superadmin || scene.explicit_permission !== "view"),
       },
       // The editor resolves images itself; everything else receives them inline.
-      scene: await readScene(scene, { withReferences: true }),
+      scene: await (async () => {
+        const payload = await readScene(scene, { withReferences: true });
+        // Fetched together here rather than one request at a time from the
+        // browser, which cost fourteen seconds on a drawing with a hundred
+        // images. Deliberately not awaited: the scene should not wait for it.
+        if (payload?.blobRefs)
+          void blobs
+            .warm(scene.workspace_id, payload.blobRefs)
+            .catch(() => {});
+        return payload;
+      })(),
     });
   });
   // Shared by the editor's save route and the MCP drawing tools.
@@ -787,7 +797,13 @@ export function installDrawings(
       "Cache-Control": "private, max-age=31536000, immutable",
       "Cross-Origin-Resource-Policy": "same-origin",
     });
-    if (!(await storage.pipe(found.s3_key, res))) res.sendStatus(404);
+    const body = await blobs.serve(
+      req.params.sha256,
+      found.s3_key,
+      found.mime,
+    );
+    if (!body) return res.sendStatus(404);
+    res.send(body);
   });
   app.get("/api/scenes/:id/export", auth, async (req, res) => {
     const { scene } = await sceneAccess(

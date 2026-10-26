@@ -196,11 +196,58 @@ export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}
     return rows[0] || null;
   };
 
+  // Serves one image, preferring the copy already in memory. Going to object
+  // storage costs roughly half a second per image from this host, so a drawing
+  // with a hundred of them took fourteen seconds to appear when every request
+  // made that trip.
+  const serve = async (sha256, s3Key, mime) => {
+    const cached = recall(sha256);
+    if (cached !== undefined) {
+      const comma = cached.indexOf(",");
+      return Buffer.from(cached.slice(comma + 1), "base64");
+    }
+    const body = await storage.read(s3Key);
+    if (body === null) return null;
+    remember(sha256, `data:${mime};base64,${body.toString("base64")}`);
+    return body;
+  };
+
+  // Loads a drawing's images into memory without making anyone wait. The editor
+  // asks for the scene first and the images immediately after, so starting here
+  // means they are in memory by the time they are asked for, fetched together
+  // rather than one slow request at a time.
+  const warm = async (workspace, refs) => {
+    const wanted = [
+      ...new Set(Object.values(refs || {}).map((r) => r.sha256)),
+    ].filter((sha) => cache.get(sha) === undefined);
+    if (!wanted.length) return;
+    const { rows } = await db.query(
+      "SELECT sha256,mime,s3_key FROM workspace_blobs WHERE workspace_id=$1 AND sha256 = ANY($2::text[])",
+      [workspace, wanted],
+    );
+    const queue = [...rows];
+    await Promise.all(
+      Array.from({ length: Math.min(FETCH_CONCURRENCY, queue.length) }, async () => {
+        for (;;) {
+          const row = queue.shift();
+          if (!row) return;
+          try {
+            await serve(row.sha256, row.s3_key, row.mime);
+          } catch {
+            // a warm that fails changes nothing; the request will try again
+          }
+        }
+      }),
+    );
+  };
+
   return {
     split,
     record,
     hydrate,
     locate,
+    serve,
+    warm,
     stats: () => ({ entries: cache.size, bytes: held }),
   };
 }

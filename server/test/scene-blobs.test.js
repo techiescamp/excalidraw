@@ -153,3 +153,81 @@ test("uploading is refused when the caller holds a lock", async () => {
   assert.equal(puts.length, 1, "no second upload");
   assert.equal(again.refs.length, 1);
 });
+
+// Object storage answers in roughly half a second from the application host,
+// which is why a drawing with a hundred images took fourteen seconds when every
+// request made that trip. This asserts the images are fetched together and
+// answered from memory afterwards, using a storage that is deliberately slow.
+test("images are fetched together and then served without going to storage", async () => {
+  const LATENCY = 50;
+  const objects = new Map();
+  const blobs = new Map();
+  let reads = 0;
+  const db = {
+    async query(sql, params) {
+      if (/INSERT INTO workspace_blobs/.test(sql)) {
+        if (blobs.has(params[1])) return { rowCount: 0, rows: [] };
+        blobs.set(params[1], {
+          sha256: params[1],
+          mime: params[2],
+          s3_key: params[4],
+        });
+        return { rowCount: 1, rows: [] };
+      }
+      if (/SELECT sha256,mime,s3_key FROM workspace_blobs/.test(sql))
+        return { rows: params[1].map((sha) => blobs.get(sha)).filter(Boolean) };
+      return { rowCount: 0, rows: [] };
+    },
+  };
+  const storage = {
+    async put(key, body) {
+      objects.set(key, body);
+    },
+    async read(key) {
+      reads++;
+      await new Promise((resolve) => setTimeout(resolve, LATENCY));
+      return objects.get(key) ?? null;
+    },
+  };
+  const store = installSceneBlobs(db, storage, { cacheBytes: 64 * 1024 * 1024 });
+
+  const files = {};
+  for (let i = 0; i < 20; i++) {
+    files[`f${i}`] = {
+      id: `f${i}`,
+      mimeType: "image/png",
+      created: i,
+      dataURL: `data:image/png;base64,${Buffer.alloc(512, i + 1).toString("base64")}`,
+    };
+  }
+  const { payload } = await store.split("ws-1", {
+    elements: [],
+    appState: {},
+    files,
+  });
+  // Saving leaves the images in memory, so a second instance stands in for the
+  // ordinary case: a drawing opened later, or after a restart.
+  const cold = installSceneBlobs(db, storage, { cacheBytes: 64 * 1024 * 1024 });
+  reads = 0;
+
+  // Fetched together, so twenty slow reads cost far less than twenty in turn.
+  const started = Date.now();
+  await cold.warm("ws-1", payload.blobRefs);
+  const warmMs = Date.now() - started;
+  assert.equal(reads, 20, "every image was read once");
+  assert.ok(
+    warmMs < 20 * LATENCY,
+    `warming ran them together: ${warmMs}ms against ${20 * LATENCY}ms in turn`,
+  );
+
+  // Afterwards the images come from memory, which is what the browser's
+  // hundred separate requests then hit instead of object storage.
+  reads = 0;
+  const t = Date.now();
+  for (const ref of Object.values(payload.blobRefs)) {
+    const body = await cold.serve(ref.sha256, `blobs/ws-1/${ref.sha256}`, ref.mimeType);
+    assert.ok(body && body.length === 512);
+  }
+  assert.equal(reads, 0, "serving touched storage not once");
+  assert.ok(Date.now() - t < LATENCY, "and so returned immediately");
+});
