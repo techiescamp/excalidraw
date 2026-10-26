@@ -917,7 +917,7 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
-    "images persist and simultaneous stale saves cannot overwrite",
+    "images persist and simultaneous saves merge instead of overwriting",
     async () => {
       const s = await createDrawing(),
         data = {
@@ -945,9 +945,12 @@ test("private workspace backend", async (t) => {
           }),
         ),
       );
-      assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+      // Both land now: whichever arrives second is merged with what the first
+      // stored rather than refused. The image survives either way, which is
+      // what this is really about — neither save may erase the other's work.
+      assert.deepEqual(results.map((r) => r.status), [200, 200]);
       const loaded = await call(`/scenes/${s.id}/data`, { cookie: admin });
-      assert.equal(loaded.body.version, 2);
+      assert.equal(loaded.body.version, 3);
       assert.deepEqual(loaded.body.scene.files, data.files);
       assert.equal(
         (
@@ -1175,6 +1178,65 @@ test("private workspace backend", async (t) => {
       const broken = await call(`/scenes/${other.id}/data`, { cookie: admin });
       assert.equal(broken.status, 503);
       assert.match(broken.body.error, /do not overwrite/i);
+    },
+  );
+  await t.test(
+    "a save made against an older version is merged, not refused",
+    async () => {
+      const drawing = await createDrawing();
+      const base = (elements) => ({
+        type: "excalidraw",
+        version: 2,
+        elements,
+        appState: { viewBackgroundColor: "#fff" },
+        files: {},
+      });
+      const element = (id, version) => ({
+        id,
+        type: "rectangle",
+        version,
+        versionNonce: 1,
+        isDeleted: false,
+      });
+
+      // Someone saves a rectangle. The drawing moves to version 2.
+      const first = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene: base([element("from-first", 1)]) },
+      });
+      assert.equal(first.status, 200);
+      assert.equal(first.body.version, 2);
+
+      // A second tab still believes it is on version 1 and saves its own work.
+      // That used to be refused, leaving the author to reconcile by hand.
+      const stale = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene: base([element("from-second", 1)]) },
+      });
+      assert.equal(stale.status, 200, JSON.stringify(stale.body));
+      assert.equal(stale.body.merged, true);
+
+      // Both rectangles survive, and the merged scene comes back so the caller
+      // can adopt it instead of drawing on a version that no longer exists.
+      const returned = stale.body.scene.elements.map((e) => e.id).sort();
+      assert.deepEqual(returned, ["from-first", "from-second"]);
+
+      const stored = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      assert.deepEqual(
+        stored.body.scene.elements.map((e) => e.id).sort(),
+        ["from-first", "from-second"],
+      );
+
+      // A version ahead of the server is still refused: nothing could have
+      // produced it, so it means the caller is confused rather than behind.
+      const impossible = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 99, scene: base([element("future", 1)]) },
+      });
+      assert.equal(impossible.status, 409);
     },
   );
   await t.test(
@@ -2471,20 +2533,28 @@ test("private workspace backend", async (t) => {
         true,
       );
       assert.equal(loaded.scene.elements.length, 2);
+      // A save from behind is merged rather than refused, whatever room it
+      // claims. What matters is that it cannot undo newer work: the deletion
+      // of `a` stands, because merging compares each element's own version.
+      const behind = await call(`/scenes/${s.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: 1,
+          room_id: "unrelated-room",
+          scene: payload([a]),
+        },
+      });
+      assert.equal(behind.status, 200, JSON.stringify(behind.body));
+      const afterBehind = (
+        await call(`/scenes/${s.id}/data`, { cookie: admin })
+      ).body;
       assert.equal(
-        (
-          await call(`/scenes/${s.id}/data`, {
-            cookie: admin,
-            method: "PUT",
-            body: {
-              version: 1,
-              room_id: "unrelated-room",
-              scene: payload([a]),
-            },
-          })
-        ).status,
-        409,
+        afterBehind.scene.elements.find((x) => x.id === "a").isDeleted,
+        true,
+        "a stale save must not resurrect a deleted element",
       );
+      assert.equal(afterBehind.scene.elements.length, 2);
       const history = (
         await call(`/scenes/${s.id}/versions`, { cookie: admin })
       ).body;
@@ -2492,7 +2562,7 @@ test("private workspace backend", async (t) => {
         `/scenes/${s.id}/versions/${
           history.items.find((v) => v.scene_version === 1).id
         }/restore`,
-        { cookie: admin, method: "POST", body: { version: loaded.version } },
+        { cookie: admin, method: "POST", body: { version: afterBehind.version } },
       );
       assert.equal(
         (await call(`/rooms/${room}/scene`, { cookie: editor.cookie })).status,

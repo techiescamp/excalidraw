@@ -1449,21 +1449,34 @@ async function flush(session: EditorSession): Promise<void> {
           scene: pending,
         });
         showStatus(session, "Saving…");
-        const saved = await request<{ version: number; scene?: Payload }>(
-          `/scenes/${session.id}/data`,
-          {
-            method: "PUT",
-            body: JSON.stringify({
-              version: session.version,
-              scene: pending,
-              room_id: node.ownerDocument.defaultView!.location.hash.match(
-                /^#room=([a-zA-Z0-9_-]+),/,
-              )?.[1],
-            }),
-          },
-        );
+        const saved = await request<{
+          version: number;
+          scene?: Payload;
+          merged?: boolean;
+        }>(`/scenes/${session.id}/data`, {
+          method: "PUT",
+          body: JSON.stringify({
+            version: session.version,
+            scene: pending,
+            room_id: node.ownerDocument.defaultView!.location.hash.match(
+              /^#room=([a-zA-Z0-9_-]+),/,
+            )?.[1],
+          }),
+        });
         session.version = saved.version;
         session.acknowledged = generation;
+        // The server merges a save that was behind rather than refusing it, so
+        // what is stored now holds other people's elements too. Adopt it.
+        if (saved.merged && saved.scene && applyToCanvas) {
+          session.current = JSON.stringify(
+            scenePayload(
+              saved.scene.elements,
+              saved.scene.appState,
+              saved.scene.files,
+            ),
+          );
+          applyToCanvas(saved.scene);
+        }
         if (session.pending === pending) {
           session.pending = undefined;
           await draftStore("delete", session.key);
@@ -1493,6 +1506,16 @@ async function flush(session: EditorSession): Promise<void> {
     session.running = undefined;
   }
 }
+// The data layer has no handle on the canvas, so the app registers one. It is
+// used when the server merges a save: the copy being drawn on is then no longer
+// what is stored, and without this the author would keep working from it and
+// only discover the difference on reload.
+type SceneApplier = (payload: Payload) => void;
+let applyToCanvas: SceneApplier | undefined;
+export const registerWorkspaceSceneApplier = (apply: SceneApplier) => {
+  applyToCanvas = apply;
+};
+
 export function saveWorkspaceScene(
   id: string,
   elements: readonly OrderedExcalidrawElement[],

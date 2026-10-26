@@ -524,15 +524,20 @@ export function installDrawings(
       const expectedVersion =
         expected === undefined ? scene.scene_version : expected;
       const collaborative = Boolean(scene.room_id && roomId === scene.room_id);
-      if (
-        expectedVersion > scene.scene_version ||
-        (scene.scene_version !== expectedVersion && !collaborative)
-      )
+      // A version ahead of the server's cannot be honest: the caller is
+      // claiming to have saved something this drawing never received.
+      if (expectedVersion > scene.scene_version)
         fail(
           409,
           "Drawing changed on the server. Reload or save your draft as a copy.",
         );
-      if (collaborative)
+      // Behind the server is ordinary — a second tab, another person, or a save
+      // that landed while this one was in flight. Refusing it made the author
+      // reconcile by hand, and on a drawing that takes seconds to save the
+      // window for it is wide. Merge instead, by the same element rules
+      // collaboration uses, and hand the result back so the caller adopts it.
+      const stale = scene.scene_version !== expectedVersion;
+      if (collaborative || stale)
         payload = validateScene(
           mergeSceneSnapshots(await readScene(scene), payload),
         );
@@ -540,8 +545,8 @@ export function installDrawings(
       // A collaborative save merged more elements in after the upload, so any
       // image that arrived with them is stored now; for an ordinary save this
       // finds everything already uploaded and does nothing.
-      const { payload: stored, refs } = collaborative
-        ? // merging can bring in another participant's elements, but their
+      const { payload: stored, refs } = collaborative || stale
+        ? // merging can bring in elements saved by someone else, but their
           // images are already stored, so this records references only
           await blobs.split(scene.workspace_id, payload, { mayUpload: false })
         : prepared;
@@ -611,7 +616,10 @@ export function installDrawings(
       }
       return {
         version: nextVersion,
-        ...(collaborative ? { scene: payload } : {}),
+        // Whenever the save was merged, the caller's copy is no longer what is
+        // stored; return the merged scene so it can adopt it rather than keep
+        // drawing on top of a version that no longer exists.
+        ...(collaborative || stale ? { scene: payload, merged: stale } : {}),
       };
     });
     if (cacheCandidate) {
