@@ -329,8 +329,10 @@ export function installDrawings(
       ...(payload.blobRefs ? { blobRefs: payload.blobRefs } : {}),
     };
   };
-  const readScene = async (scene) => {
-    const useCache = canvasDiskCache && cacheEnabled();
+  const readScene = async (scene, { withReferences = false } = {}) => {
+    // The disk cache holds scenes with their images put back, so a caller that
+    // wants references must not be served from it.
+    const useCache = canvasDiskCache && cacheEnabled() && !withReferences;
     if (useCache) {
       try {
         const cached = await canvasDiskCache.read(
@@ -346,11 +348,26 @@ export function installDrawings(
     }
     const body = await storage.read(scene.s3_key);
     if (body === null && scene.scene_version === 0) return empty;
-    if (body === null)
+    if (body === null) {
+      // The editor is normally served references and skips the cache, but when
+      // the stored scene itself cannot be read the cache is the only copy left.
+      // A larger answer that opens beats a small one that does not.
+      if (withReferences && canvasDiskCache && cacheEnabled()) {
+        try {
+          const cached = await canvasDiskCache.read(
+            scene.id,
+            scene.scene_version,
+          );
+          if (cached) return cached;
+        } catch (error) {
+          console.warn("canvas disk cache unavailable:", error.message);
+        }
+      }
       fail(
         503,
         "Saved drawing data is unavailable. Try again; do not overwrite it.",
       );
+    }
     let parsed;
     try {
       parsed = JSON.parse(body.toString("utf8"));
@@ -360,6 +377,10 @@ export function installDrawings(
         "This legacy drawing is encrypted. Open its authorized collaboration room.",
       );
     }
+    // The editor fetches images itself, so it is handed the references. Every
+    // other reader -- export, import, the drawing tools, a thumbnail -- wants a
+    // scene that stands on its own and gets the images put back.
+    if (withReferences && parsed?.blobRefs) return parsed;
     try {
       // Older scenes carry their images inline and come back untouched.
       const hydrated = await blobs.hydrate(scene.workspace_id, parsed);
@@ -501,7 +522,8 @@ export function installDrawings(
           permissions["drawing.edit"] &&
           (req.user.is_superadmin || scene.explicit_permission !== "view"),
       },
-      scene: await readScene(scene),
+      // The editor resolves images itself; everything else receives them inline.
+      scene: await readScene(scene, { withReferences: true }),
     });
   });
   // Shared by the editor's save route and the MCP drawing tools.
@@ -740,6 +762,32 @@ export function installDrawings(
       create(req, tx, await readScene(scene)),
     );
     res.status(201).json(result);
+  });
+  // Serves one image. The editor asks for these by digest instead of receiving
+  // them inside the drawing, so a drawing carrying a hundred images is a small
+  // document plus a hundred cacheable files rather than one 28 MB response.
+  //
+  // The database connection is released before storage is touched. Holding one
+  // across that read would let a single drawing's images exhaust the pool, and
+  // a pool exhausted by slow work inside a transaction is what once stopped the
+  // whole site from loading.
+  app.get("/api/workspaces/:workspaceId/blobs/:sha256", auth, async (req, res) => {
+    if (!uuid(req.params.workspaceId)) fail(404, "Image not found.");
+    const found = await blobs.locate(
+      req.user,
+      req.params.workspaceId,
+      req.params.sha256,
+    );
+    // Absent and not-allowed answer the same way: knowing a digest exists is
+    // itself something a reader should not learn.
+    if (!found) fail(404, "Image not found.");
+    res.set({
+      "Content-Type": found.mime,
+      // The address is the digest of the bytes, so the answer can never change.
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "Cross-Origin-Resource-Policy": "same-origin",
+    });
+    if (!(await storage.pipe(found.s3_key, res))) res.sendStatus(404);
   });
   app.get("/api/scenes/:id/export", auth, async (req, res) => {
     const { scene } = await sceneAccess(

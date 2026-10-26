@@ -14,13 +14,76 @@ import type {
 } from "@excalidraw/excalidraw/types";
 
 const API = import.meta.env.VITE_APP_API_URL || "/api";
+type BlobRef = {
+  id?: string;
+  sha256: string;
+  mimeType: string;
+  created?: number;
+};
 type Payload = {
   type: string;
   version: number;
   elements: readonly OrderedExcalidrawElement[];
   appState: Partial<AppState>;
   files: BinaryFiles;
+  // Images are addressed by the digest of their own bytes rather than carried
+  // inside the drawing, so one holding a hundred of them is a small document
+  // and a hundred files the browser caches and shares with every other drawing
+  // that uses the same icons.
+  blobRefs?: Record<string, BlobRef>;
 };
+
+// Fetches the images a drawing refers to. A single unreadable one becomes a
+// blank image rather than stopping the drawing from opening: the author can
+// see and fix the rest, which refusing the whole scene never allowed.
+async function resolveBlobRefs(
+  workspace: string,
+  payload: Payload,
+): Promise<Payload> {
+  const refs = payload.blobRefs;
+  if (!refs || !Object.keys(refs).length) {
+    return payload;
+  }
+  const files: BinaryFiles = { ...(payload.files || {}) };
+  const missing: string[] = [];
+  await Promise.all(
+    Object.entries(refs).map(async ([fileId, ref]) => {
+      try {
+        const response = await fetch(
+          `${API}/workspaces/${workspace}/blobs/${ref.sha256}`,
+          { credentials: "include" },
+        );
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const blob = await response.blob();
+        const dataURL = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        files[fileId] = {
+          id: fileId as BinaryFiles[string]["id"],
+          mimeType: ref.mimeType as BinaryFiles[string]["mimeType"],
+          dataURL: dataURL as BinaryFiles[string]["dataURL"],
+          created: ref.created ?? Date.now(),
+        };
+      } catch {
+        missing.push(fileId);
+      }
+    }),
+  );
+  if (missing.length) {
+    // Saving now would write the drawing back without them, so the editor is
+    // told, and the author decides.
+    console.warn(
+      `${missing.length} image(s) could not be loaded for this drawing`,
+    );
+  }
+  const { blobRefs, ...rest } = payload;
+  return { ...rest, files };
+}
 type Draft = { key: string; version: number; scene: Payload };
 type SavedScene = {
   room_id: string | null;
@@ -1337,7 +1400,10 @@ export async function loadWorkspaceScene(
   };
   active = session;
   sessions.set(id, session);
-  let payload = result.scene;
+  // The server hands the editor references rather than the image bytes; fetch
+  // them before anything reads the scene, so the rest of this file sees the
+  // same shape it always has.
+  let payload = await resolveBlobRefs(result.workspace_id, result.scene);
   const draft = await draftStore("get", session.key);
   if (draft && session.editable) {
     // A conflict is never uploaded implicitly. Keep the server canvas until the user chooses a copy.
