@@ -22,11 +22,12 @@ import {
   newImageElement,
   newLinearElement,
   newMagicFrameElement,
+  newStickyNoteElement,
   newTextElement,
 } from "@excalidraw/element";
 
 import { isUsingAdaptiveRadius, getSelectedElements } from "@excalidraw/element";
-import { selectGroupsForSelectedElements } from "@excalidraw/element";
+
 
 import { FONT_SIZES } from "@excalidraw/common";
 
@@ -43,12 +44,15 @@ import type {
   ExcalidrawMagicFrameElement,
   ExcalidrawElbowArrowElement,
   ExcalidrawArrowElement,
+  ExcalidrawStickyNoteElement,
   FixedSegment,
   NonDeleted,
   NonDeletedExcalidrawElement,
 } from "@excalidraw/element/types";
 
 import type { Mutable } from "@excalidraw/common/utility-types";
+
+import { selectGroupsForSelectedElements } from "../../components/App.selection";
 
 import { getMimeType } from "../../data/blob";
 import { createTestHook } from "../../components/App";
@@ -151,8 +155,7 @@ export class API {
 
   static clearSelection = () => {
     act(() => {
-      // @ts-ignore
-      h.app.clearSelection(null);
+      h.app.selectionTool.clearSelection(null);
     });
     expect(API.getSelectedElements().length).toBe(0);
   };
@@ -205,6 +208,9 @@ export class API {
       ? ExcalidrawTextElement["verticalAlign"]
       : never;
     boundElements?: ExcalidrawGenericElement["boundElements"];
+    baseHeight?: T extends "stickynote"
+      ? ExcalidrawStickyNoteElement["baseHeight"]
+      : never;
     containerId?: T extends "text"
       ? ExcalidrawTextElement["containerId"]
       : never;
@@ -244,6 +250,8 @@ export class API {
       ? ExcalidrawFrameElement
       : T extends "magicframe"
       ? ExcalidrawMagicFrameElement
+      : T extends "stickynote"
+      ? ExcalidrawStickyNoteElement
       : ExcalidrawGenericElement
   > => {
     let element: Mutable<ExcalidrawElement> = null!;
@@ -269,9 +277,16 @@ export class API {
       frameId: rest.frameId ?? null,
       index: rest.index ?? null,
       angle: (rest.angle ?? 0) as Radians,
-      strokeColor: rest.strokeColor ?? appState.currentItemStrokeColor,
+      strokeColor:
+        rest.strokeColor ??
+        (type === "stickynote"
+          ? appState.currentItemStickynoteStrokeColor
+          : appState.currentItemStrokeColor),
       backgroundColor:
-        rest.backgroundColor ?? appState.currentItemBackgroundColor,
+        rest.backgroundColor ??
+        (type === "stickynote"
+          ? appState.currentItemStickynoteBackgroundColor
+          : appState.currentItemBackgroundColor),
       fillStyle: rest.fillStyle ?? appState.currentItemFillStyle,
       strokeWidth:
         rest.strokeWidth ??
@@ -313,6 +328,15 @@ export class API {
         element = newIframeElement({
           type: "iframe",
           ...base,
+        });
+        break;
+      case "stickynote":
+        element = newStickyNoteElement({
+          ...base,
+          width,
+          height,
+          type,
+          baseHeight: rest.baseHeight ?? height,
         });
         break;
       case "text":

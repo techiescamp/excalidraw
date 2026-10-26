@@ -15,9 +15,13 @@ import {
   isDevEnv,
   toBrandedType,
   getLineHeight,
+  DEFAULT_STICKY_NOTE_SIZE,
+  isTransparent,
+  DEFAULT_ZOOM,
 } from "@excalidraw/common";
 
 import type { MarkOptional } from "@excalidraw/common/utility-types";
+import type { Zoom } from "@excalidraw/excalidraw/types";
 
 import { bindBindingElement } from "./binding";
 import {
@@ -32,9 +36,12 @@ import {
   newMagicFrameElement,
   newTextElement,
   type ElementConstructorOpts,
+  newStickyNoteElement,
+  normalizeStickyNoteGeometry,
 } from "./newElement";
+import { normalizeStickyNoteStrokeColor } from "./stickyNote";
 import { measureText, normalizeText } from "./textMeasurements";
-import { isArrowElement } from "./typeChecks";
+import { isArrowElement, isStickyNoteElement } from "./typeChecks";
 
 import { syncInvalidIndices } from "./fractionalIndex";
 
@@ -48,6 +55,8 @@ import { LinearElementEditor } from "./linearElementEditor";
 import { getCommonBounds } from "./bounds";
 
 import { Scene } from "./Scene";
+
+import type { RenderEnvironment } from "./renderEnvironment";
 
 import type {
   ExcalidrawArrowElement,
@@ -70,6 +79,7 @@ import type {
   Ordered,
   TextAlign,
   VerticalAlign,
+  ExcalidrawStickyNoteElement,
 } from "./types";
 
 /**
@@ -192,6 +202,18 @@ export type ValidContainer =
       } & FragmentConstructorOpts;
     } & ElementConstructorOpts;
 
+/**
+ * A sticky note: an always-filled note whose label auto-fits. `label.fontSize`
+ * is the font ceiling the fit shrinks from; the note grows past its height
+ * (kept as `baseHeight`) only once the label hits the minimum font size.
+ */
+export type ValidStickyNote = {
+  type: "stickynote";
+  id?: ExcalidrawStickyNoteElement["id"];
+  label?: Extract<ValidContainer, { label?: unknown }>["label"];
+} & ElementConstructorOpts &
+  Partial<Pick<ExcalidrawStickyNoteElement, "baseHeight">>;
+
 export type ExcalidrawElementSkeleton =
   | Extract<
       Exclude<ExcalidrawElement, ExcalidrawSelectionElement>,
@@ -203,6 +225,7 @@ export type ExcalidrawElementSkeleton =
       y: number;
     } & Partial<ExcalidrawLinearElement>)
   | ValidContainer
+  | ValidStickyNote
   | ValidLinearElement
   | ({
       type: "text";
@@ -239,7 +262,18 @@ const bindTextToContainer = (
   container: ExcalidrawElement,
   textProps: { text: string } & FragmentConstructorOpts,
   scene: Scene,
+  renderEnvironment?: RenderEnvironment,
 ) => {
+  // a note and its label share one ink: a label that sets its own color
+  // gives it to the note (the footer paints with it); transparent falls
+  // back to the note's
+  const stickyInk = isStickyNoteElement(container)
+    ? normalizeStickyNoteStrokeColor(
+        textProps.strokeColor && !isTransparent(textProps.strokeColor)
+          ? textProps.strokeColor
+          : container.strokeColor,
+      )
+    : null;
   const textElement: ExcalidrawTextElement = newTextElement({
     x: 0,
     y: 0,
@@ -247,10 +281,11 @@ const bindTextToContainer = (
     verticalAlign: VERTICAL_ALIGN.MIDDLE,
     ...textProps,
     containerId: container.id,
-    strokeColor: textProps.strokeColor || container.strokeColor,
+    strokeColor: stickyInk ?? (textProps.strokeColor || container.strokeColor),
     labelPosition: isArrowElement(container)
       ? DEFAULT_BOUND_TEXT_LABEL_POSITION
       : null,
+    renderEnvironment,
   });
 
   Object.assign(container, {
@@ -258,9 +293,12 @@ const bindTextToContainer = (
       type: "text",
       id: textElement.id,
     }),
+    ...(stickyInk && stickyInk !== container.strokeColor
+      ? { strokeColor: stickyInk }
+      : null),
   });
 
-  redrawTextBoundingBox(textElement, container, scene);
+  redrawTextBoundingBox(textElement, container, scene, renderEnvironment);
 
   return [container, textElement] as const;
 };
@@ -271,6 +309,8 @@ const bindLinearElementToElement = (
   end: ValidLinearElement["end"],
   elementStore: ElementStore,
   scene: Scene,
+  zoom: Zoom,
+  renderEnvironment?: RenderEnvironment,
 ): {
   linearElement: ExcalidrawLinearElement;
   startBoundElement?: ExcalidrawElement;
@@ -320,6 +360,7 @@ const bindLinearElementToElement = (
           ...existingElement,
           ...start,
           text,
+          renderEnvironment,
         });
         // to position the text correctly when coordinates not provided
         Object.assign(startBoundElement, {
@@ -358,6 +399,7 @@ const bindLinearElementToElement = (
         "orbit",
         "start",
         scene,
+        zoom,
       );
     }
   }
@@ -397,6 +439,7 @@ const bindLinearElementToElement = (
           ...existingElement,
           ...end,
           text,
+          renderEnvironment,
         });
         // to position the text correctly when coordinates not provided
         Object.assign(endBoundElement, {
@@ -434,6 +477,7 @@ const bindLinearElementToElement = (
         "orbit",
         "end",
         scene,
+        zoom,
       );
     }
   }
@@ -534,7 +578,7 @@ class ElementStore {
 
 export const convertToExcalidrawElements = (
   elementsSkeleton: ExcalidrawElementSkeleton[] | null,
-  opts?: { regenerateIds: boolean },
+  opts?: { regenerateIds?: boolean; renderEnvironment?: RenderEnvironment },
 ) => {
   if (!elementsSkeleton) {
     return [];
@@ -615,6 +659,7 @@ export const convertToExcalidrawElements = (
           normalizedText,
           getFontString({ fontFamily, fontSize }),
           lineHeight,
+          opts?.renderEnvironment,
         );
 
         excalidrawElement = newTextElement({
@@ -623,6 +668,7 @@ export const convertToExcalidrawElements = (
           fontFamily,
           fontSize,
           ...element,
+          renderEnvironment: opts?.renderEnvironment,
         });
         break;
       }
@@ -657,6 +703,22 @@ export const convertToExcalidrawElements = (
       }
       case "iframe": {
         excalidrawElement = newIframeElement({ ...element });
+        break;
+      }
+      case "stickynote": {
+        const width = element.width || DEFAULT_STICKY_NOTE_SIZE;
+        const height = element.height || DEFAULT_STICKY_NOTE_SIZE;
+        // finalized geometry (min size, baseHeight ≤ height) — only a
+        // pointer-down draft is exempt from it
+        excalidrawElement = normalizeStickyNoteGeometry(
+          newStickyNoteElement({
+            ...element,
+            type: "stickynote",
+            width,
+            height,
+            baseHeight: element.baseHeight ?? height,
+          }),
+        );
         break;
       }
       case "embeddable": {
@@ -697,12 +759,16 @@ export const convertToExcalidrawElements = (
       case "rectangle":
       case "ellipse":
       case "diamond":
+      case "stickynote":
       case "arrow": {
         if (element.label?.text) {
+          // for a sticky note this runs the sticky fit (via
+          // `redrawTextBoundingBox`): the label's font size becomes its ceiling
           let [container, text] = bindTextToContainer(
             excalidrawElement,
             element?.label,
             scene,
+            opts?.renderEnvironment,
           );
           elementStore.add(container);
           elementStore.add(text);
@@ -731,6 +797,8 @@ export const convertToExcalidrawElements = (
                 originalEnd,
                 elementStore,
                 scene,
+                DEFAULT_ZOOM,
+                opts?.renderEnvironment,
               );
             container = linearElement;
             elementStore.add(linearElement);
@@ -756,6 +824,8 @@ export const convertToExcalidrawElements = (
                   end,
                   elementStore,
                   scene,
+                  DEFAULT_ZOOM,
+                  opts?.renderEnvironment,
                 );
 
               elementStore.add(linearElement);
