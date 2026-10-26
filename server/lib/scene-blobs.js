@@ -167,5 +167,40 @@ export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}
     return { ...rest, files };
   };
 
-  return { split, record, hydrate, stats: () => ({ entries: cache.size, bytes: held }) };
+  // Resolves one image for a reader, returning only what is needed to serve it.
+  // Deliberately a single indexed query: a drawing can reference a hundred
+  // images, so the editor asks for a hundred of these at once, and anything
+  // slower here becomes a queue on the connection pool.
+  const locate = async (user, workspace, sha256) => {
+    if (!/^[0-9a-f]{64}$/.test(String(sha256 || ""))) return null;
+    const { rows } = await db.query(
+      `SELECT b.s3_key, b.mime
+         FROM workspace_blobs b
+         JOIN scene_blob_refs r
+           ON r.workspace_id = b.workspace_id AND r.sha256 = b.sha256
+         JOIN scenes s ON s.id = r.scene_id
+         -- an administrator reaches a workspace without a membership row, the
+         -- same way every other read here does
+         LEFT JOIN workspace_members m
+           ON m.workspace_id = s.workspace_id AND m.user_id = $1
+        WHERE b.workspace_id = $2
+          AND (m.user_id IS NOT NULL OR $4::boolean)
+          AND b.sha256 = $3
+          AND s.deleted_at IS NULL
+          -- a private drawing is readable only by its owner, so holding the
+          -- digest of its image is not enough to be shown it
+          AND (s.private_owner_id IS NULL OR s.private_owner_id = $1 OR $4::boolean)
+        LIMIT 1`,
+      [user.id, workspace, sha256, Boolean(user.is_superadmin)],
+    );
+    return rows[0] || null;
+  };
+
+  return {
+    split,
+    record,
+    hydrate,
+    locate,
+    stats: () => ({ entries: cache.size, bytes: held }),
+  };
 }

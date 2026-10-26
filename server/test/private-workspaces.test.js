@@ -917,7 +917,7 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
-    "images persist and simultaneous stale saves cannot overwrite",
+    "images persist and simultaneous saves merge instead of overwriting",
     async () => {
       const s = await createDrawing(),
         data = {
@@ -945,10 +945,19 @@ test("private workspace backend", async (t) => {
           }),
         ),
       );
-      assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+      // Both land now: whichever arrives second is merged with what the first
+      // stored rather than refused. The image survives either way, which is
+      // what this is really about — neither save may erase the other's work.
+      assert.deepEqual(results.map((r) => r.status), [200, 200]);
       const loaded = await call(`/scenes/${s.id}/data`, { cookie: admin });
-      assert.equal(loaded.body.version, 2);
-      assert.deepEqual(loaded.body.scene.files, data.files);
+      assert.equal(loaded.body.version, 3);
+      // The editor is handed a reference and fetches the image itself; a reader
+      // that wants a whole scene uses export.
+      assert.equal(loaded.body.scene.blobRefs.image1.mimeType, "image/png");
+      assert.deepEqual(
+        (await call(`/scenes/${s.id}/export`, { cookie: admin })).body.files,
+        data.files,
+      );
       assert.equal(
         (
           await call(`/scenes/${s.id}/data`, {
@@ -1035,9 +1044,12 @@ test("private workspace backend", async (t) => {
           cookie: admin,
         });
         assert.equal(loaded.status, 200);
-        assert.deepEqual(loaded.body.scene.files, {
-          [fileId]: { ...image, id: fileId },
-        });
+        assert.equal(loaded.body.scene.blobRefs[fileId].sha256.length, 64);
+        assert.deepEqual(
+          (await call(`/scenes/${drawing.id}/export`, { cookie: admin })).body
+            .files,
+          { [fileId]: { ...image, id: fileId } },
+        );
       }
 
       // The stored object carries references, not the bytes.
@@ -1056,7 +1068,7 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
-    "large canvas reopens from the private disk cache after source files are unavailable",
+    "large canvas is served from the private disk cache when its source files are unavailable",
     async () => {
       const drawing = await createDrawing();
       const dataURL = `data:image/png;base64,${crypto
@@ -1086,9 +1098,13 @@ test("private workspace backend", async (t) => {
         },
       });
       assert.equal(save.status, 200, JSON.stringify(save.body));
-      const first = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      // The cache holds whole scenes, so it is filled by the readers that want
+      // one. The editor route is no longer among them: it receives references
+      // and fetches each image separately, which is what lets the browser cache
+      // them and keeps one unreadable image from blocking a drawing.
+      const first = await call(`/scenes/${drawing.id}/export`, { cookie: admin });
       assert.equal(first.status, 200);
-      assert.equal(first.body.scene.files.large.dataURL, dataURL);
+      assert.equal(first.body.files.large.dataURL, dataURL);
       const cacheFile = path.join(cacheStorage, drawing.id, "2.json");
       assert.ok((await readFile(cacheFile)).length > 5_000_000);
 
@@ -1103,12 +1119,24 @@ test("private workspace backend", async (t) => {
       try {
         await rm(scenePath);
         await rm(blobPath);
-        const cached = await call(`/scenes/${drawing.id}/data`, {
+        const cached = await call(`/scenes/${drawing.id}/export`, {
           cookie: admin,
         });
         assert.equal(cached.status, 200);
-        assert.equal(cached.body.scene.files.large.dataURL, dataURL);
-        assert.equal((await call(`/scenes/${drawing.id}/data`)).status, 401);
+        assert.equal(cached.body.files.large.dataURL, dataURL);
+        assert.equal((await call(`/scenes/${drawing.id}/export`)).status, 401);
+
+        // The editor route still answers, because the scene it returns is
+        // small and does not depend on the image being readable. The image
+        // itself is gone, so it is fetched separately and fails on its own --
+        // one blank image instead of a drawing that will not open.
+        const forEditor = await call(`/scenes/${drawing.id}/data`, {
+          cookie: admin,
+        });
+        // With the stored scene gone, the cache is the only copy, so the
+        // editor is served the whole thing from it rather than being refused.
+        assert.equal(forEditor.status, 200);
+        assert.equal(forEditor.body.scene.files.large.dataURL, dataURL);
       } finally {
         await writeFile(scenePath, sceneBytes);
         await writeFile(blobPath, blobBytes);
@@ -1145,6 +1173,8 @@ test("private workspace backend", async (t) => {
         cookie: admin,
       });
       assert.equal(loaded.status, 200);
+      // A scene saved before the split has no references, so it is returned
+      // with its images exactly as before.
       assert.deepEqual(loaded.body.scene.files, legacy.files);
 
       // A reference whose bytes were never stored must not come back as a
@@ -1172,9 +1202,169 @@ test("private workspace backend", async (t) => {
           },
         }),
       );
-      const broken = await call(`/scenes/${other.id}/data`, { cookie: admin });
-      assert.equal(broken.status, 503);
-      assert.match(broken.body.error, /do not overwrite/i);
+      // The editor is handed the reference and resolves the image itself, so a
+      // missing one is a blank image in an otherwise working drawing rather
+      // than a drawing that refuses to open.
+      const forEditor = await call(`/scenes/${other.id}/data`, { cookie: admin });
+      assert.equal(forEditor.status, 200);
+      assert.equal(forEditor.body.scene.blobRefs.old.sha256, "0".repeat(64));
+      // Anything that must produce a scene standing on its own still refuses,
+      // because handing back a whole scene with images quietly dropped invites
+      // the caller to save it and lose them.
+      const exported = await call(`/scenes/${other.id}/export`, { cookie: admin });
+      assert.equal(exported.status, 503);
+      assert.match(exported.body.error, /do not overwrite/i);
+    },
+  );
+  await t.test(
+    "a save made against an older version is merged, not refused",
+    async () => {
+      const drawing = await createDrawing();
+      const base = (elements) => ({
+        type: "excalidraw",
+        version: 2,
+        elements,
+        appState: { viewBackgroundColor: "#fff" },
+        files: {},
+      });
+      const element = (id, version) => ({
+        id,
+        type: "rectangle",
+        version,
+        versionNonce: 1,
+        isDeleted: false,
+      });
+
+      // Someone saves a rectangle. The drawing moves to version 2.
+      const first = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene: base([element("from-first", 1)]) },
+      });
+      assert.equal(first.status, 200);
+      assert.equal(first.body.version, 2);
+
+      // A second tab still believes it is on version 1 and saves its own work.
+      // That used to be refused, leaving the author to reconcile by hand.
+      const stale = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene: base([element("from-second", 1)]) },
+      });
+      assert.equal(stale.status, 200, JSON.stringify(stale.body));
+      assert.equal(stale.body.merged, true);
+
+      // Both rectangles survive, and the merged scene comes back so the caller
+      // can adopt it instead of drawing on a version that no longer exists.
+      const returned = stale.body.scene.elements.map((e) => e.id).sort();
+      assert.deepEqual(returned, ["from-first", "from-second"]);
+
+      const stored = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
+      assert.deepEqual(
+        stored.body.scene.elements.map((e) => e.id).sort(),
+        ["from-first", "from-second"],
+      );
+
+      // A version ahead of the server is still refused: nothing could have
+      // produced it, so it means the caller is confused rather than behind.
+      const impossible = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 99, scene: base([element("future", 1)]) },
+      });
+      assert.equal(impossible.status, 409);
+    },
+  );
+  await t.test(
+    "images are served by digest, and only to someone allowed to see them",
+    async () => {
+      const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE=";
+      const scene = {
+        type: "excalidraw",
+        version: 2,
+        elements: [
+          { id: "pic", type: "image", fileId: "f1", isDeleted: false },
+        ],
+        appState: { viewBackgroundColor: "#fff" },
+        files: {
+          f1: { id: "f1", dataURL, mimeType: "image/png", created: 7 },
+        },
+      };
+      const shared = await createDrawing();
+      assert.equal(
+        (
+          await call(`/scenes/${shared.id}/data`, {
+            cookie: admin,
+            method: "PUT",
+            body: { version: 1, scene },
+          })
+        ).status,
+        200,
+      );
+
+      // The editor is handed references, not the bytes.
+      const forEditor = await call(`/scenes/${shared.id}/data`, {
+        cookie: admin,
+      });
+      assert.equal(forEditor.status, 200);
+      assert.deepEqual(forEditor.body.scene.files, {});
+      const digest = forEditor.body.scene.blobRefs.f1.sha256;
+      assert.match(digest, /^[0-9a-f]{64}$/);
+
+      // Export still produces a scene that stands on its own.
+      const exported = await call(`/scenes/${shared.id}/export`, {
+        cookie: admin,
+      });
+      assert.equal(exported.body.files.f1.dataURL, dataURL);
+
+      // Someone who belongs to a different workspace entirely, so membership
+      // of this one is genuinely absent rather than merely reassigned.
+      const created = await call("/admin/users", {
+        cookie: admin,
+        method: "POST",
+        body: {
+          username: "blob-outsider",
+          assignments: [{ workspace_id: otherWorkspace, role: "editor" }],
+        },
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      await call("/auth/reset-password", {
+        method: "POST",
+        body: {
+          token: new URL(created.body.url).hash.slice(7),
+          purpose: "setup",
+          password,
+          confirmation: password,
+        },
+      });
+      const outsider = { cookie: await login("blob-outsider") };
+
+      const url = `/workspaces/${workspace}/blobs/${digest}`;
+      assert.equal((await call(url, { cookie: admin })).status, 200);
+      // A member of the workspace may read an image used by a shared drawing.
+      assert.equal((await call(url, { cookie: editor.cookie })).status, 200);
+      // Someone outside the workspace may not, even holding the digest.
+      assert.equal((await call(url, { cookie: outsider.cookie })).status, 404);
+      // Nor may an unauthenticated caller.
+      assert.equal((await call(url, {})).status, 401);
+
+      // The same image inside a private drawing is not reachable by another
+      // member: holding the digest must not be enough.
+      const privateDrawing = await createDrawing(admin, undefined, {
+        private: true,
+      });
+      await call(`/scenes/${privateDrawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene },
+      });
+      await call(`/scenes/${shared.id}`, { cookie: admin, method: "DELETE" });
+      assert.equal(
+        (await call(url, { cookie: editor.cookie })).status,
+        404,
+        "an image only used by someone else's private drawing must stay hidden",
+      );
+      assert.equal((await call(url, { cookie: admin })).status, 200);
     },
   );
   await t.test(
@@ -1928,8 +2118,10 @@ test("private workspace backend", async (t) => {
         2,
       );
       const made = drawn.result.structuredContent;
-      const scene = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
-        .body.scene;
+      // Read through export: the editor route hands back references, and this
+      // is checking that the icon itself was stored with the drawing.
+      const scene = (await call(`/scenes/${made.id}/export`, { cookie: admin }))
+        .body;
       const image = scene.elements.find((e) => e.type === "image");
       assert.ok(image, "the icon is placed as an image");
       assert.ok(
@@ -2471,20 +2663,28 @@ test("private workspace backend", async (t) => {
         true,
       );
       assert.equal(loaded.scene.elements.length, 2);
+      // A save from behind is merged rather than refused, whatever room it
+      // claims. What matters is that it cannot undo newer work: the deletion
+      // of `a` stands, because merging compares each element's own version.
+      const behind = await call(`/scenes/${s.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: 1,
+          room_id: "unrelated-room",
+          scene: payload([a]),
+        },
+      });
+      assert.equal(behind.status, 200, JSON.stringify(behind.body));
+      const afterBehind = (
+        await call(`/scenes/${s.id}/data`, { cookie: admin })
+      ).body;
       assert.equal(
-        (
-          await call(`/scenes/${s.id}/data`, {
-            cookie: admin,
-            method: "PUT",
-            body: {
-              version: 1,
-              room_id: "unrelated-room",
-              scene: payload([a]),
-            },
-          })
-        ).status,
-        409,
+        afterBehind.scene.elements.find((x) => x.id === "a").isDeleted,
+        true,
+        "a stale save must not resurrect a deleted element",
       );
+      assert.equal(afterBehind.scene.elements.length, 2);
       const history = (
         await call(`/scenes/${s.id}/versions`, { cookie: admin })
       ).body;
@@ -2492,7 +2692,7 @@ test("private workspace backend", async (t) => {
         `/scenes/${s.id}/versions/${
           history.items.find((v) => v.scene_version === 1).id
         }/restore`,
-        { cookie: admin, method: "POST", body: { version: loaded.version } },
+        { cookie: admin, method: "POST", body: { version: afterBehind.version } },
       );
       assert.equal(
         (await call(`/rooms/${room}/scene`, { cookie: editor.cookie })).status,

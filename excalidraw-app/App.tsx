@@ -142,6 +142,7 @@ import {
   subscribeWorkspacePermissions,
   loadWorkspaceScene,
   saveWorkspaceScene,
+  registerWorkspaceSceneApplier,
 } from "./data/workspaceScene";
 import {
   LibraryIndexedDBAdapter,
@@ -835,6 +836,14 @@ const ExcalidrawWrapper = () => {
 
     const workspaceSceneId = getWorkspaceSceneId();
     if (workspaceSceneId) {
+      // A save that was behind comes back merged with whatever else was stored;
+      // put that on the canvas so the author is drawing on what exists.
+      registerWorkspaceSceneApplier((scene) =>
+        excalidrawAPI?.updateScene({
+          elements: scene.elements,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        }),
+      );
       saveWorkspaceScene(workspaceSceneId, elements, appState, files);
       return;
     }

@@ -14,13 +14,76 @@ import type {
 } from "@excalidraw/excalidraw/types";
 
 const API = import.meta.env.VITE_APP_API_URL || "/api";
+type BlobRef = {
+  id?: string;
+  sha256: string;
+  mimeType: string;
+  created?: number;
+};
 type Payload = {
   type: string;
   version: number;
   elements: readonly OrderedExcalidrawElement[];
   appState: Partial<AppState>;
   files: BinaryFiles;
+  // Images are addressed by the digest of their own bytes rather than carried
+  // inside the drawing, so one holding a hundred of them is a small document
+  // and a hundred files the browser caches and shares with every other drawing
+  // that uses the same icons.
+  blobRefs?: Record<string, BlobRef>;
 };
+
+// Fetches the images a drawing refers to. A single unreadable one becomes a
+// blank image rather than stopping the drawing from opening: the author can
+// see and fix the rest, which refusing the whole scene never allowed.
+async function resolveBlobRefs(
+  workspace: string,
+  payload: Payload,
+): Promise<Payload> {
+  const refs = payload.blobRefs;
+  if (!refs || !Object.keys(refs).length) {
+    return payload;
+  }
+  const files: BinaryFiles = { ...(payload.files || {}) };
+  const missing: string[] = [];
+  await Promise.all(
+    Object.entries(refs).map(async ([fileId, ref]) => {
+      try {
+        const response = await fetch(
+          `${API}/workspaces/${workspace}/blobs/${ref.sha256}`,
+          { credentials: "include" },
+        );
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const blob = await response.blob();
+        const dataURL = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        files[fileId] = {
+          id: fileId as BinaryFiles[string]["id"],
+          mimeType: ref.mimeType as BinaryFiles[string]["mimeType"],
+          dataURL: dataURL as BinaryFiles[string]["dataURL"],
+          created: ref.created ?? Date.now(),
+        };
+      } catch {
+        missing.push(fileId);
+      }
+    }),
+  );
+  if (missing.length) {
+    // Saving now would write the drawing back without them, so the editor is
+    // told, and the author decides.
+    console.warn(
+      `${missing.length} image(s) could not be loaded for this drawing`,
+    );
+  }
+  const { blobRefs, ...rest } = payload;
+  return { ...rest, files };
+}
 type Draft = { key: string; version: number; scene: Payload };
 type SavedScene = {
   room_id: string | null;
@@ -1337,7 +1400,10 @@ export async function loadWorkspaceScene(
   };
   active = session;
   sessions.set(id, session);
-  let payload = result.scene;
+  // The server hands the editor references rather than the image bytes; fetch
+  // them before anything reads the scene, so the rest of this file sees the
+  // same shape it always has.
+  let payload = await resolveBlobRefs(result.workspace_id, result.scene);
   const draft = await draftStore("get", session.key);
   if (draft && session.editable) {
     // A conflict is never uploaded implicitly. Keep the server canvas until the user chooses a copy.
@@ -1449,21 +1515,34 @@ async function flush(session: EditorSession): Promise<void> {
           scene: pending,
         });
         showStatus(session, "Saving…");
-        const saved = await request<{ version: number; scene?: Payload }>(
-          `/scenes/${session.id}/data`,
-          {
-            method: "PUT",
-            body: JSON.stringify({
-              version: session.version,
-              scene: pending,
-              room_id: node.ownerDocument.defaultView!.location.hash.match(
-                /^#room=([a-zA-Z0-9_-]+),/,
-              )?.[1],
-            }),
-          },
-        );
+        const saved = await request<{
+          version: number;
+          scene?: Payload;
+          merged?: boolean;
+        }>(`/scenes/${session.id}/data`, {
+          method: "PUT",
+          body: JSON.stringify({
+            version: session.version,
+            scene: pending,
+            room_id: node.ownerDocument.defaultView!.location.hash.match(
+              /^#room=([a-zA-Z0-9_-]+),/,
+            )?.[1],
+          }),
+        });
         session.version = saved.version;
         session.acknowledged = generation;
+        // The server merges a save that was behind rather than refusing it, so
+        // what is stored now holds other people's elements too. Adopt it.
+        if (saved.merged && saved.scene && applyToCanvas) {
+          session.current = JSON.stringify(
+            scenePayload(
+              saved.scene.elements,
+              saved.scene.appState,
+              saved.scene.files,
+            ),
+          );
+          applyToCanvas(saved.scene);
+        }
         if (session.pending === pending) {
           session.pending = undefined;
           await draftStore("delete", session.key);
@@ -1493,6 +1572,16 @@ async function flush(session: EditorSession): Promise<void> {
     session.running = undefined;
   }
 }
+// The data layer has no handle on the canvas, so the app registers one. It is
+// used when the server merges a save: the copy being drawn on is then no longer
+// what is stored, and without this the author would keep working from it and
+// only discover the difference on reload.
+type SceneApplier = (payload: Payload) => void;
+let applyToCanvas: SceneApplier | undefined;
+export const registerWorkspaceSceneApplier = (apply: SceneApplier) => {
+  applyToCanvas = apply;
+};
+
 export function saveWorkspaceScene(
   id: string,
   elements: readonly OrderedExcalidrawElement[],
