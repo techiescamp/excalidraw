@@ -5,6 +5,10 @@ the branch model, the checks that must pass, how releases are cut and deployed,
 and the operational rules that exist because breaking them took the site down.
 It applies to every agent and every person working here.
 
+**Record what you did in [HANDOFF.md](HANDOFF.md) before you stop.** It is the
+shared log between Claude, Codex and whoever reads this next: what is done, what
+is half-done, and what was verified. Read it before you start.
+
 In short: branch per change, never commit to `main` or `develop`, write a test
 that fails before your fix, run every check in its section 4, and never report
 success you have not read back from the system you changed.

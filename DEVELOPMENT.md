@@ -8,6 +8,10 @@ the same rule.
 `AGENTS.md` and `CLAUDE.md` both point here. This file is the source of truth;
 if they disagree with it, this file wins.
 
+This file says **how** to work. [HANDOFF.md](HANDOFF.md) says **what has
+happened** — read that before starting, and add to it before stopping, so the
+next agent does not rediscover, redo or undo your work.
+
 ---
 
 ## 1. What this repository holds

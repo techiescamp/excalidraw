@@ -5,6 +5,10 @@ the branch model, the checks that must pass, how releases are cut and deployed,
 and the operational rules that exist because breaking them took the site down.
 Where this file and DEVELOPMENT.md disagree, DEVELOPMENT.md wins.
 
+**Record what you did in [HANDOFF.md](HANDOFF.md) before you stop.** It is the
+shared log between Claude, Codex and whoever reads this next: what is done, what
+is half-done, and what was verified. Read it before you start.
+
 ## Project Structure
 
 Excalidraw is a **monorepo** with a clear separation between the core library and the application:
