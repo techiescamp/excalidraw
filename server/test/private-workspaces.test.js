@@ -20,6 +20,16 @@ if (!base)
     "Set TEST_DATABASE_URL to an isolated PostgreSQL instance with CREATE DATABASE permission.",
   );
 const control = new pg.Pool({ connectionString: base });
+// Dropping the test database at the end terminates whatever is still connected
+// to it. A pg pool with no error listener turns that into an uncaughtException
+// and fails the whole file, which is how this suite went red on CI while
+// passing locally. Teardown noise is not a test result; a connection dying
+// while the tests are still running is, so only the former is ignored.
+let tearingDown = false;
+const ignoreTeardownNoise = (error) => {
+  if (!tearingDown) throw error;
+};
+control.on("error", ignoreTeardownNoise);
 const database = "excalidraw_test_" + process.pid;
 const origin = "http://127.0.0.1:55440";
 const password = "A private orchard under moonlight 742!";
@@ -129,6 +139,7 @@ before(async () => {
   const url = new URL(base);
   url.pathname = "/" + database;
   db = new pg.Pool({ connectionString: url.href });
+  db.on("error", ignoreTeardownNoise);
   await db.query(
     "DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='excalidraw') THEN CREATE ROLE excalidraw; END IF; END $$;",
   );
@@ -198,11 +209,23 @@ before(async () => {
   viewer = await makeUser("viewer", "viewer");
 });
 after(async () => {
+  tearingDown = true;
   if (server) {
     server.kill();
     await once(server, "exit");
   }
   if (db) await db.end();
+  // Closing a pool closes its sockets, but the backends behind them disappear a
+  // moment later. Dropping the database before they do terminates them, and
+  // that lands as an error on whatever still holds one. Wait for them to go.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const busy = await control.query(
+      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1",
+      [database],
+    );
+    if (busy.rows[0].n === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await control.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
   await control.end();
   if (storage) await rm(storage, { recursive: true, force: true });
