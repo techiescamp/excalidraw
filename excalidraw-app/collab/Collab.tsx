@@ -1,10 +1,4 @@
 import {
-  bindWorkspaceRoom,
-  getWorkspacePermissions,
-  getWorkspaceSceneId,
-  workspaceEditorWindow,
-} from "../data/workspaceScene";
-import {
   CaptureUpdateAction,
   getSceneVersion,
   restoreElements,
@@ -57,6 +51,13 @@ import type {
   UserToFollow,
 } from "@excalidraw/excalidraw/types";
 import type { Mutable, ValueOf } from "@excalidraw/common/utility-types";
+
+import {
+  bindWorkspaceRoom,
+  getWorkspacePermissions,
+  getWorkspaceSceneId,
+  workspaceEditorWindow,
+} from "../data/workspaceScene";
 
 import { appJotaiStore, atom } from "../app-jotai";
 import {

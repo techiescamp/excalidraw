@@ -34,9 +34,11 @@ module.exports.woff2BrowserPlugin = (fontsCdn) => {
 
       @font-face {
         font-family: "Assistant";
-        src: ${selfHosted
-          ? `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2")`
-          : `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2"), url(./Assistant-Regular.woff2) format("woff2")`};
+        src: ${
+          selfHosted
+            ? `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2")`
+            : `url(${ASSISTANT}Assistant-Regular.woff2) format("woff2"), url(./Assistant-Regular.woff2) format("woff2")`
+        };
         font-weight: 400;
         style: normal;
         display: swap;
@@ -44,9 +46,11 @@ module.exports.woff2BrowserPlugin = (fontsCdn) => {
 
       @font-face {
         font-family: "Assistant";
-        src: ${selfHosted
-          ? `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2")`
-          : `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2"), url(./Assistant-Medium.woff2) format("woff2")`};
+        src: ${
+          selfHosted
+            ? `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2")`
+            : `url(${ASSISTANT}Assistant-Medium.woff2) format("woff2"), url(./Assistant-Medium.woff2) format("woff2")`
+        };
         font-weight: 500;
         style: normal;
         display: swap;
@@ -54,9 +58,11 @@ module.exports.woff2BrowserPlugin = (fontsCdn) => {
 
       @font-face {
         font-family: "Assistant";
-        src: ${selfHosted
-          ? `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2")`
-          : `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2"), url(./Assistant-SemiBold.woff2) format("woff2")`};
+        src: ${
+          selfHosted
+            ? `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2")`
+            : `url(${ASSISTANT}Assistant-SemiBold.woff2) format("woff2"), url(./Assistant-SemiBold.woff2) format("woff2")`
+        };
         font-weight: 600;
         style: normal;
         display: swap;
@@ -64,9 +70,11 @@ module.exports.woff2BrowserPlugin = (fontsCdn) => {
 
       @font-face {
         font-family: "Assistant";
-        src: ${selfHosted
-          ? `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2")`
-          : `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2"), url(./Assistant-Bold.woff2) format("woff2")`};
+        src: ${
+          selfHosted
+            ? `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2")`
+            : `url(${ASSISTANT}Assistant-Bold.woff2) format("woff2"), url(./Assistant-Bold.woff2) format("woff2")`
+        };
         font-weight: 700;
         style: normal;
         display: swap;

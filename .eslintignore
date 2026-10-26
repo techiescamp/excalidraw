@@ -28,3 +28,11 @@ excalidraw-*.md
 background-removal-specification.md
 docs/specs/
 server/README.md
+
+# The API is a separate deployable: plain Node ESM, not the editor's React and
+# TypeScript. Running the editor's rules over it reports 749 warnings and no
+# errors — almost all brace style, import order and string concatenation, which
+# is the server's own consistent style rather than a defect. Linting it belongs
+# with a config of its own; reformatting it to the editor's rules inside an
+# unrelated pull request does not.
+server/

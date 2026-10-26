@@ -1,6 +1,11 @@
+// The stylesheet loads first on purpose: moving it below the other imports
+// would let their styles win the cascade. import/order cannot see that.
+// eslint-disable-next-line import/order
 import "./workspaceScene.css";
+
 import { getNonDeletedElements } from "@excalidraw/element";
 import { exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
+
 import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 import type {
   AppState,
@@ -419,8 +424,8 @@ function showToast(text: string, error = false) {
 let closeMenu: (() => void) | undefined;
 function openMenu(anchor: HTMLElement, items: MenuItem[]) {
   closeMenu?.();
-  const doc = node.ownerDocument,
-    win = doc.defaultView!;
+  const doc = node.ownerDocument;
+  const win = doc.defaultView!;
   // menus[0] is the root menu, menus[n] the submenu opened from menus[n - 1]
   const menus: HTMLElement[] = [];
   const closeFrom = (level: number) => {
@@ -691,8 +696,8 @@ function renameScene(
 }
 
 function shareScene(scene: SceneRow) {
-  const doc = node.ownerDocument,
-    win = doc.defaultView!;
+  const doc = node.ownerDocument;
+  const win = doc.defaultView!;
   const link = `${win.location.origin}/editor?scene=${scene.id}`;
   const input = doc.createElement("input");
   input.readOnly = true;
@@ -724,8 +729,8 @@ async function quickExport(
   scene: SceneRow,
   format: "svg" | "png" | "json",
 ) {
-  const doc = node.ownerDocument,
-    win = doc.defaultView!;
+  const doc = node.ownerDocument;
+  const win = doc.defaultView!;
   try {
     if (scene.id === session.id) {
       await flush(session);
@@ -805,8 +810,8 @@ async function destinationDialog(
     ],
     label,
     async () => {
-      const target = select.value,
-        isPrivate = target === "private";
+      const target = select.value;
+      const isPrivate = target === "private";
       if (duplicate) {
         await request(`/scenes/${scene.id}/duplicate`, {
           method: "POST",
@@ -976,10 +981,10 @@ function sceneRow(
   link.href = `/editor?scene=${scene.id}&returnTo=${encodeURIComponent(
     session.returnTo,
   )}`;
-  const caption = doc.createElement("span"),
-    label = doc.createElement("strong"),
-    author = doc.createElement("small"),
-    when = doc.createElement("small");
+  const caption = doc.createElement("span");
+  const label = doc.createElement("strong");
+  const author = doc.createElement("small");
+  const when = doc.createElement("small");
   label.textContent = scene.name;
   author.textContent = `by ${scene.owner_name}`;
   when.textContent = timeAgo(
@@ -1020,8 +1025,8 @@ function sceneRow(
 }
 
 async function showCollectionScenes(session: EditorSession) {
-  const doc = node.ownerDocument,
-    old = doc.querySelector(".workspace-scenes-panel");
+  const doc = node.ownerDocument;
+  const old = doc.querySelector(".workspace-scenes-panel");
   if (old) {
     old.remove();
     doc.documentElement.classList.remove("workspace-sidebar-open");
@@ -1030,9 +1035,9 @@ async function showCollectionScenes(session: EditorSession) {
   const panel = doc.createElement("aside");
   panel.className = "workspace-scenes-panel";
   panel.setAttribute("aria-label", "Collection scenes");
-  const heading = doc.createElement("h2"),
-    close = doc.createElement("button"),
-    list = doc.createElement("nav");
+  const heading = doc.createElement("h2");
+  const close = doc.createElement("button");
+  const list = doc.createElement("nav");
   heading.textContent = "Collection scenes";
   close.textContent = "×";
   close.setAttribute("aria-label", "Close scene list");
@@ -1045,12 +1050,12 @@ async function showCollectionScenes(session: EditorSession) {
   doc.body.append(panel);
   doc.documentElement.classList.add("workspace-sidebar-open");
   const context = new URL(session.returnTo, doc.defaultView!.location.origin)
-      .searchParams,
-    query = new URLSearchParams({
-      workspace: session.workspace,
-      limit: "100",
-      sort: sortOrder(),
-    });
+    .searchParams;
+  const query = new URLSearchParams({
+    workspace: session.workspace,
+    limit: "100",
+    sort: sortOrder(),
+  });
   if (context.get("collection")) {
     query.set("collection", context.get("collection")!);
   } else if (context.get("view") === "private") {
@@ -1203,8 +1208,8 @@ export function initializeWorkspaceEditor(
   node = mounted;
   userId = authenticatedUserId;
   userLabel = authenticatedUserLabel;
-  const doc = node.ownerDocument,
-    win = doc.defaultView!;
+  const doc = node.ownerDocument;
+  const win = doc.defaultView!;
   status = doc.createElement("div");
   status.className = "workspace-save-status";
   doc.documentElement.classList.add("workspace-editor");
@@ -1435,8 +1440,8 @@ async function flush(session: EditorSession): Promise<void> {
   }
   session.running = (async () => {
     while (session.pending && !session.error) {
-      const pending = session.pending,
-        generation = session.generation;
+      const pending = session.pending;
+      const generation = session.generation;
       try {
         await draftStore("put", session.key, {
           key: session.key,
@@ -1514,8 +1519,8 @@ export function saveWorkspaceScene(
     showStatus(session, "Loading images…");
     return;
   }
-  const payload = scenePayload(elements, appState, files),
-    serialized = JSON.stringify(payload);
+  const payload = scenePayload(elements, appState, files);
+  const serialized = JSON.stringify(payload);
   if (serialized === session.current) {
     return;
   }
@@ -1547,11 +1552,12 @@ export function workspaceEditorLocation() {
 }
 export async function bindWorkspaceRoom(roomId: string, roomKey: string) {
   const id = getWorkspaceSceneId();
-  if (id)
+  if (id) {
     return request<{ roomId: string; roomKey: string }>(`/scenes/${id}/room`, {
       method: "POST",
       body: JSON.stringify({ room_id: roomId, room_key: roomKey }),
     });
+  }
   return { roomId, roomKey };
 }
 

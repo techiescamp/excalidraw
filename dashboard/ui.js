@@ -34,17 +34,20 @@ export const icon = (name, size = 20) =>
   }"/></svg>`;
 export function relativeTime(value) {
   const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
-  if (seconds < 60) return "Just now";
+  if (seconds < 60) {
+    return "Just now";
+  }
   for (const [unit, length] of [
     ["year", 31536000],
     ["month", 2592000],
     ["day", 86400],
     ["hour", 3600],
     ["minute", 60],
-  ])
+  ]) {
     if (seconds >= length) {
       const n = Math.floor(seconds / length);
       return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
     }
+  }
   return "Just now";
 }

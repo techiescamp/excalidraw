@@ -9,20 +9,22 @@ export async function renderWorkspaceTransfer({
   kind,
   generation,
 }) {
-  const doc = host.ownerDocument,
-    win = doc.defaultView;
+  const doc = host.ownerDocument;
+  const win = doc.defaultView;
   win.clearTimeout(refreshTimers.get(host));
   const workspace = state.workspace;
   if (!workspace) {
     host.textContent = "Choose a workspace first.";
     return;
   }
-  const base = "/admin/workspaces/" + workspace.id;
+  const base = `/admin/workspaces/${workspace.id}`;
   const previousScope =
     host.querySelector("[name=scope]:checked")?.value || "accessible";
   const previousMember = host.querySelector("[name=member_id]")?.value || "";
-  const data = await api(base + "/transfers");
-  if (generation !== state.generation) return;
+  const data = await api(`${base}/transfers`);
+  if (generation !== state.generation) {
+    return;
+  }
   const title =
     kind === "workspace-export" ? "Workspace export" : "Workspace import";
   host.classList.add("transfer-page");
@@ -72,8 +74,8 @@ export async function renderWorkspaceTransfer({
             .join("")
         : '<tr><td colspan="4" class="muted">No exports yet.</td></tr>'
     }</tbody></table></div></section>`;
-    const form = host.querySelector("form"),
-      submit = form.querySelector("[type=submit]");
+    const form = host.querySelector("form");
+    const submit = form.querySelector("[type=submit]");
     const remaining = () =>
       Math.max(
         0,
@@ -103,8 +105,10 @@ export async function renderWorkspaceTransfer({
       event.preventDefault();
       submit.disabled = true;
       try {
-        if (!(await reauthenticate())) return;
-        await api(base + "/exports", {
+        if (!(await reauthenticate())) {
+          return;
+        }
+        await api(`${base}/exports`, {
           method: "POST",
           body: {
             scope: form.elements.scope.value,
@@ -123,13 +127,17 @@ export async function renderWorkspaceTransfer({
       } catch (error) {
         showError(error);
       } finally {
-        if (form.isConnected) update();
+        if (form.isConnected) {
+          update();
+        }
       }
     };
     const poll = () =>
       win.setTimeout(
         async () => {
-          if (!host.isConnected || generation !== state.generation) return;
+          if (!host.isConnected || generation !== state.generation) {
+            return;
+          }
           try {
             await renderWorkspaceTransfer({
               host,
@@ -159,7 +167,9 @@ export async function renderWorkspaceTransfer({
   let busy = false;
   const progress = host.querySelector("#import-progress");
   async function upload(files, request = win.crypto.randomUUID()) {
-    if (busy || !files.length) return;
+    if (busy || !files.length) {
+      return;
+    }
     if (files.length > 1000) {
       showError(new Error("Select up to 1,000 files."));
       return;
@@ -168,7 +178,9 @@ export async function renderWorkspaceTransfer({
     const controls = host.querySelectorAll("button,input,select");
     controls.forEach((c) => (c.disabled = true));
     try {
-      if (!(await reauthenticate())) return;
+      if (!(await reauthenticate())) {
+        return;
+      }
       const summary = { imported: 0, skipped: 0, errors: [] };
       let index = 0;
       for (const { file, path } of files) {
@@ -186,12 +198,11 @@ export async function renderWorkspaceTransfer({
         const destination = host.querySelector("#import-destination").value;
         try {
           const response = await win.fetch(
-            "/api" +
-              base +
-              "/imports" +
-              (destination
-                ? "?collection_id=" + encodeURIComponent(destination)
-                : ""),
+            `/api${base}/imports${
+              destination
+                ? `?collection_id=${encodeURIComponent(destination)}`
+                : ""
+            }`,
             {
               method: "POST",
               credentials: "same-origin",
@@ -207,7 +218,9 @@ export async function renderWorkspaceTransfer({
             },
           );
           const result = await response.json();
-          if (!response.ok) throw new Error(result.error || "Import failed.");
+          if (!response.ok) {
+            throw new Error(result.error || "Import failed.");
+          }
           summary.imported += result.imported;
           summary.skipped += result.skipped;
           summary.errors.push(...result.errors);
@@ -231,7 +244,9 @@ export async function renderWorkspaceTransfer({
           : ""
       }`;
       const retry = host.querySelector("#retry-import");
-      if (retry) retry.onclick = () => void upload(files, request);
+      if (retry) {
+        retry.onclick = () => void upload(files, request);
+      }
     } catch (error) {
       showError(error);
     } finally {
@@ -240,8 +255,8 @@ export async function renderWorkspaceTransfer({
     }
   }
   for (const kind of ["folders", "files"]) {
-    const input = host.querySelector("#import-" + kind);
-    host.querySelector("#select-" + kind).onclick = () => input.click();
+    const input = host.querySelector(`#import-${kind}`);
+    host.querySelector(`#select-${kind}`).onclick = () => input.click();
     input.onchange = () =>
       void upload(
         Array.from(input.files, (file) => ({
@@ -252,19 +267,26 @@ export async function renderWorkspaceTransfer({
   }
   host.ondragover = (event) => {
     event.preventDefault();
-    if (!busy) host.classList.add("import-dragging");
+    if (!busy) {
+      host.classList.add("import-dragging");
+    }
   };
   host.ondragleave = (event) => {
-    if (!host.contains(event.relatedTarget))
+    if (!host.contains(event.relatedTarget)) {
       host.classList.remove("import-dragging");
+    }
   };
   host.ondrop = async (event) => {
     event.preventDefault();
     host.classList.remove("import-dragging");
-    if (busy) return;
+    if (busy) {
+      return;
+    }
     const files = [];
     async function walk(entry) {
-      if (files.length >= 1000) throw new Error("Select up to 1,000 files.");
+      if (files.length >= 1000) {
+        throw new Error("Select up to 1,000 files.");
+      }
       if (entry.isFile) {
         const file = await new Promise((resolve, reject) =>
           entry.file(resolve, reject),
@@ -277,7 +299,9 @@ export async function renderWorkspaceTransfer({
           batch = await new Promise((resolve, reject) =>
             reader.readEntries(resolve, reject),
           );
-          for (const child of batch) await walk(child);
+          for (const child of batch) {
+            await walk(child);
+          }
         } while (batch.length);
       }
     }
@@ -286,10 +310,14 @@ export async function renderWorkspaceTransfer({
         item.webkitGetAsEntry?.(),
       ).filter(Boolean);
       if (entries.length) {
-        for (const entry of entries) await walk(entry);
-      } else
-        for (const file of event.dataTransfer.files)
+        for (const entry of entries) {
+          await walk(entry);
+        }
+      } else {
+        for (const file of event.dataTransfer.files) {
           files.push({ file, path: file.name });
+        }
+      }
       await upload(files);
     } catch (error) {
       showError(error);

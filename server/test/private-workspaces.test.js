@@ -125,17 +125,6 @@ const createCollection = async (name, cookie = admin) => {
   return result.body;
 };
 before(async () => {
-  // The schema grants to the role the service runs as. On a developer's machine
-  // that role usually already exists, so these tests passed there while failing
-  // on any clean instance; create it when absent rather than depending on
-  // machine state nobody wrote down.
-  await control.query(`DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'excalidraw') THEN
-        CREATE ROLE excalidraw LOGIN;
-      END IF;
-    END
-  $$;`);
   await control.query(`CREATE DATABASE ${database}`);
   const url = new URL(base);
   url.pathname = "/" + database;
