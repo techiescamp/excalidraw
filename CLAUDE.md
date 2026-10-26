@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+**Read [DEVELOPMENT.md](DEVELOPMENT.md) before changing anything.** It defines
+the branch model, the checks that must pass, how releases are cut and deployed,
+and the operational rules that exist because breaking them took the site down.
+Where this file and DEVELOPMENT.md disagree, DEVELOPMENT.md wins.
+
 ## Project Structure
 
 Excalidraw is a **monorepo** with a clear separation between the core library and the application:

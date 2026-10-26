@@ -1,0 +1,99 @@
+# Checks every change before it can be merged. The workflows inherited from
+# upstream Excalidraw trigger on master and release, which this fork does not
+# develop on, so until this file existed nothing ran on our own branches and the
+# server's tests had never run automatically at all.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [develop, dev, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn test:code
+      - run: yarn test:other
+
+  typecheck:
+    name: Types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn test:typecheck
+
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn test:app --watch=false
+
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    # The suite creates and drops its own databases, so it needs an instance it
+    # is allowed to own rather than a single prepared database.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --no-fund --no-audit
+      - name: Run server tests
+        working-directory: server
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npm test
+
+  build:
+    name: Editor build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - name: Build the editor
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: yarn build:app

@@ -1,0 +1,77 @@
+# Turns a tag into installable artifacts. A deploy installs one of these; it
+# never copies from a working directory, which is what makes rolling back a
+# matter of installing the previous release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Record the version
+        id: v
+        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Build the editor
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: yarn build:app
+
+      - name: Package the editor
+        run: tar -czf excalidraw-editor-${{ steps.v.outputs.version }}.tar.gz -C excalidraw-app/build .
+
+      # The API and dashboard ship as source: the server installs its own
+      # dependencies, so node_modules must not travel inside the artifact.
+      - name: Package the server and dashboard
+        run: |
+          tar -czf excalidraw-server-${{ steps.v.outputs.version }}.tar.gz \
+            --exclude=node_modules --exclude=test \
+            server dashboard
+
+      - name: Checksums
+        run: sha256sum excalidraw-*.tar.gz > checksums.txt
+
+      - name: Release notes from the commits since the previous tag
+        id: notes
+        run: |
+          previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            echo "notes<<EOF"
+            if [ -n "$previous" ]; then
+              echo "Changes since $previous:"
+              git log --no-merges --format='- %s' "$previous..${GITHUB_REF_NAME}"
+            else
+              echo "First tagged release."
+            fi
+            echo
+            echo "Install one of these artifacts; do not deploy from a working copy."
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.v.outputs.version }}
+          body: ${{ steps.notes.outputs.notes }}
+          files: |
+            excalidraw-editor-${{ steps.v.outputs.version }}.tar.gz
+            excalidraw-server-${{ steps.v.outputs.version }}.tar.gz
+            checksums.txt

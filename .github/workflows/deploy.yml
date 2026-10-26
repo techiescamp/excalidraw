@@ -1,0 +1,100 @@
+# Installs a published release onto the production server, announcing itself in
+# Discord before and after, and putting the previous release back if the health
+# check fails. Started by hand, choosing which tag to install.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to install, for example v1.1.0
+        required: true
+      environment:
+        description: Where to install it
+        required: true
+        default: production
+        type: choice
+        options: [production]
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Install ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    # Production waits for a human to approve in the GitHub environment.
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the release and check it is intact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.version }}" --repo "${{ github.repository }}" --dir artifacts
+          cd artifacts && sha256sum --check checksums.txt
+
+      - name: Open the connection
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: What is running now
+        id: current
+        run: |
+          previous=$(ssh -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            'readlink /opt/excalidraw/app/current | xargs basename' 2>/dev/null || echo unknown)
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+
+      - name: Tell Discord it is starting
+        if: ${{ env.DISCORD_WEBHOOK != '' }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          .github/scripts/notify-discord.sh starting \
+            "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
+            "${{ github.actor }}" ""
+
+      # Everything the install does happens in one root-owned script on the
+      # server, so the CI account needs permission to run that and nothing else.
+      - name: Install it
+        id: install
+        run: |
+          scp -i ~/.ssh/id_ed25519 artifacts/*.tar.gz \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/"
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "sudo /usr/local/bin/excalidraw-deploy install ${{ inputs.version }}"
+
+      - name: Health check
+        id: health
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              "https://${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}/api/me" || echo 000)
+            # 401 is a healthy answer here: the endpoint replies, we are not signed in.
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
+              echo "ok=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            sleep 5
+          done
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Put the previous release back
+        if: failure() && steps.install.outcome == 'success'
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "sudo /usr/local/bin/excalidraw-deploy rollback"
+
+      - name: Tell Discord how it went
+        if: always() && env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          .github/scripts/notify-discord.sh "${{ job.status }}" \
+            "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
+            "${{ github.actor }}" "${{ steps.health.outputs.ok }}"
