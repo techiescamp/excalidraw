@@ -9,6 +9,20 @@ if (!base || !["localhost", "127.0.0.1"].includes(new URL(base).hostname))
   throw new Error("An isolated localhost TEST_DATABASE_URL is required.");
 const control = new pg.Pool({ connectionString: base });
 const name = "excalidraw_browser_" + process.pid;
+// The schema grants to the role the service runs as. On a developer's machine
+// that role usually already exists, so the tests passed there while failing on
+// any clean instance; create it when it is absent rather than depending on
+// machine state nobody wrote down.
+const ensureServiceRole = async (client) => {
+  await client.query(`DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'excalidraw') THEN
+        CREATE ROLE excalidraw LOGIN;
+      END IF;
+    END
+  $$;`);
+};
+await ensureServiceRole(control);
 await control.query(`CREATE DATABASE ${name}`);
 await control.end();
 const url = new URL(base);

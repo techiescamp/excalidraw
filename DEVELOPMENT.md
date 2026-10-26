@@ -186,7 +186,10 @@ yarn test:other                    # prettier formatting
 yarn test:app --watch=false        # frontend tests (vitest)
 ```
 
-Server tests need a PostgreSQL instance with permission to create databases:
+Server tests need a PostgreSQL instance the suite is allowed to own: it creates
+and drops its own databases, and creates the `excalidraw` role the schema grants
+to if that role is absent. Connecting as a superuser on a local instance covers
+both.
 
 ```bash
 cd server
