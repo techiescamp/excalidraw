@@ -30,10 +30,40 @@ jobs:
 
       - run: yarn install --frozen-lockfile
 
+      # Every VITE_APP_* value is compiled into the bundle, so the build needs
+      # them. They lived only in a .env.production.local on one machine, which
+      # is why the first release built without them: the editor then has no API
+      # address, falls back to the plain local Excalidraw, and a workspace
+      # drawing never loads. None of these are secret -- they are public in the
+      # JavaScript either way.
+      - name: Editor configuration
+        run: |
+          cat > .env.production.local <<'ENV'
+          VITE_APP_BACKEND_V2_GET_URL=https://draw.devopsproject.dev/api/v2/
+          VITE_APP_BACKEND_V2_POST_URL=https://draw.devopsproject.dev/api/v2/post/
+          VITE_APP_WS_SERVER_URL=https://draw.devopsproject.dev
+          VITE_APP_API_URL=https://draw.devopsproject.dev/api
+          VITE_APP_FIREBASE_CONFIG={}
+          VITE_APP_ENABLE_TRACKING=false
+          VITE_APP_DISABLE_SENTRY=true
+          VITE_APP_FONTS_CDN=/
+          ENV
+
       - name: Build the editor
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: yarn build:app
+
+      # A bundle without the API address loads as plain Excalidraw and silently
+      # ignores every workspace drawing, which is not visible until someone
+      # opens one. Refuse to publish it.
+      - name: Check the editor was configured
+        run: |
+          if ! grep -rq "draw.devopsproject.dev/api" excalidraw-app/build/assets/*.js; then
+            echo "::error::the built editor has no API address; it would load as plain Excalidraw"
+            exit 1
+          fi
+          echo "editor is configured for the workspace API"
 
       - name: Package the editor
         run: tar -czf excalidraw-editor-${{ steps.v.outputs.version }}.tar.gz -C excalidraw-app/build .
