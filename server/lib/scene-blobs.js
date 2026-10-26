@@ -49,7 +49,7 @@ export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}
   // save of the same drawing queue behind it. Writing a blob that a failed save
   // never references is harmless, because the key is the digest and an unused
   // one is simply collectable.
-  const split = async (workspace, scene) => {
+  const split = async (workspace, scene, { mayUpload = true } = {}) => {
     const files = scene.files || {};
     const blobRefs = { ...(scene.blobRefs || {}) };
     const stored = [];
@@ -67,7 +67,16 @@ export function installSceneBlobs(db, storage, { cacheBytes = CACHE_BYTES } = {}
       );
       // The key is the digest, so writing the same bytes twice is harmless and
       // needs no coordination between concurrent saves.
-      if (rowCount) await storage.put(key, bytes, mime);
+      if (rowCount) {
+        // Callers inside a transaction hold a row lock, and an upload there
+        // once blocked every other save of the drawing for minutes. Refuse
+        // rather than do it quietly, so the mistake cannot be reintroduced.
+        if (!mayUpload)
+          throw new Error(
+            "an image reached storage inside a transaction; upload before it opens",
+          );
+        await storage.put(key, bytes, mime);
+      }
       remember(sha256, file.dataURL);
       // Everything except the bytes is kept, so a reader gets back the entry it
       // saved rather than one rebuilt from guesses.

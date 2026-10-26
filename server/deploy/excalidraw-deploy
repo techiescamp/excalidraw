@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Installs or rolls back a release. Lives at /usr/local/bin/excalidraw-deploy,
+# owned by root, and is the only thing the CI account may run through sudo: a
+# leaked deploy key then reaches this script rather than the whole machine.
+#
+#   excalidraw-deploy install <version>
+#   excalidraw-deploy rollback
+#
+# Artifacts are expected in /tmp, put there by the pipeline.
+set -euo pipefail
+
+APP=/opt/excalidraw
+RELEASES="$APP/app/releases"
+STATE="$APP/.last-release"
+action="${1:?install or rollback}"
+
+log() { echo "[deploy] $*"; }
+
+install_release() {
+  version="${1:?version}"
+  editor="/tmp/excalidraw-editor-${version}.tar.gz"
+  server="/tmp/excalidraw-server-${version}.tar.gz"
+  [ -f "$editor" ] || { echo "missing $editor" >&2; exit 1; }
+  [ -f "$server" ] || { echo "missing $server" >&2; exit 1; }
+
+  # Remember what is live before touching anything, so rollback has a target.
+  if [ -L "$APP/app/current" ]; then
+    basename "$(readlink "$APP/app/current")" > "$STATE"
+  fi
+
+  log "database dump"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  sudo -u postgres pg_dump excalidraw | gzip -9 > "$APP/backups/pre-${version}-${stamp}.sql.gz"
+
+  log "unpacking the server"
+  work=$(mktemp -d)
+  tar -xzf "$server" -C "$work"
+  rsync -a --delete --exclude node_modules "$work/server/" "$APP/api/"
+  rsync -a --delete "$work/dashboard/" "$APP/dashboard/"
+  chown -R excalidraw:excalidraw "$APP/api" "$APP/dashboard"
+  rm -rf "$work"
+
+  log "dependencies"
+  ( cd "$APP/api" && sudo -u excalidraw env HOME="$APP" npm ci --no-fund --no-audit --omit=dev )
+
+  # Migrations run before the new code starts, never after.
+  log "migrations"
+  sudo -u postgres env "DATABASE_URL=postgresql://postgres@/excalidraw?host=/var/run/postgresql" \
+    node "$APP/api/bin/migrate.mjs"
+  sudo -u postgres psql -d excalidraw -q \
+    -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO excalidraw;
+        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO excalidraw;"
+
+  log "unpacking the editor as $version"
+  target="$RELEASES/$version"
+  rm -rf "$target" && mkdir -p "$target"
+  tar -xzf "$editor" -C "$target"
+  chown -R excalidraw:excalidraw "$target"
+  find "$target" -type d -exec chmod 755 {} +
+  find "$target" -type f -exec chmod 644 {} +
+  ln -sfn "$target" "$APP/app/current"
+
+  log "restarting"
+  systemctl restart excalidraw-api
+  systemctl reload nginx
+  rm -f "$editor" "$server"
+  log "installed $version"
+}
+
+rollback() {
+  [ -s "$STATE" ] || { echo "no previous release recorded" >&2; exit 1; }
+  previous=$(cat "$STATE")
+  [ -d "$RELEASES/$previous" ] || { echo "release $previous is not on disk" >&2; exit 1; }
+  log "restoring $previous"
+  ln -sfn "$RELEASES/$previous" "$APP/app/current"
+  systemctl restart excalidraw-api
+  systemctl reload nginx
+  # The database is deliberately not rolled back: migrations are written to be
+  # safe for the previous version, and restoring a dump would discard whatever
+  # people saved since the deploy.
+  log "restored $previous; the database was left as it is"
+}
+
+case "$action" in
+  install)  install_release "${2:-}" ;;
+  rollback) rollback ;;
+  *) echo "usage: excalidraw-deploy install <version> | rollback" >&2; exit 1 ;;
+esac

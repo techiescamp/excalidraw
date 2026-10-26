@@ -30,6 +30,9 @@ jobs:
             chore
             revert
           requireScope: true
+          # Upstream's scopes describe the editor only. This fork also ships an
+          # API, a dashboard and its own pipelines, and without scopes for them
+          # every server or CI pull request fails this check.
           scopes: |
             app
             editor
@@ -37,6 +40,11 @@ jobs:
             packages/utils
             docker
             repo
+            server
+            dashboard
+            ci
+            deploy
+            docs
           ignoreLabels: |
             skip-semantic-title
         env:

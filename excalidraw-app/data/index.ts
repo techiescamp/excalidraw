@@ -1,4 +1,3 @@
-import { workspaceEditorLocation } from "./workspaceScene";
 import {
   compressData,
   decompressData,
@@ -35,6 +34,8 @@ import {
   FILE_UPLOAD_MAX_BYTES,
   ROOM_ID_BYTES,
 } from "../app_constants";
+
+import { workspaceEditorLocation } from "./workspaceScene";
 
 import { encodeFilesForUpload } from "./FileManager";
 import { saveFilesToFirebase } from "./firebase";

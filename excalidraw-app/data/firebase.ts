@@ -1,17 +1,28 @@
 import { reconcileElements } from "@excalidraw/excalidraw";
 import { MIME_TYPES, toBrandedType } from "@excalidraw/common";
 import { decompressData } from "@excalidraw/excalidraw/data/encode";
-import { encryptData, decryptData } from "@excalidraw/excalidraw/data/encryption";
+import {
+  encryptData,
+  decryptData,
+} from "@excalidraw/excalidraw/data/encryption";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 import { getSceneVersion } from "@excalidraw/element";
 
 import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconcile";
-import type { ExcalidrawElement, FileId, OrderedExcalidrawElement }
-  from "@excalidraw/element/types";
-import type { AppState, BinaryFileData, BinaryFileMetadata, DataURL }
-  from "@excalidraw/excalidraw/types";
+import type {
+  ExcalidrawElement,
+  FileId,
+  OrderedExcalidrawElement,
+} from "@excalidraw/element/types";
+import type {
+  AppState,
+  BinaryFileData,
+  BinaryFileMetadata,
+  DataURL,
+} from "@excalidraw/excalidraw/types";
 
 import { getSyncableElements } from ".";
+
 import type { SyncableExcalidrawElement } from ".";
 import type Portal from "../collab/Portal";
 import type { Socket } from "socket.io-client";
@@ -28,7 +39,10 @@ export const loadFirebaseStorage = async (): Promise<FirebaseStorage> => {
   );
 };
 
-const encryptElements = async (key: string, elements: readonly ExcalidrawElement[]) => {
+const encryptElements = async (
+  key: string,
+  elements: readonly ExcalidrawElement[],
+) => {
   const encoded = new TextEncoder().encode(JSON.stringify(elements));
   const { encryptedBuffer, iv } = await encryptData(key, encoded);
   return { ciphertext: encryptedBuffer, iv };
@@ -62,7 +76,8 @@ const unpack = (buf: ArrayBuffer) => {
 const versionCache = new WeakMap<Socket, number>();
 
 export const isSavedToFirebase = (
-  portal: Portal, elements: readonly ExcalidrawElement[],
+  portal: Portal,
+  elements: readonly ExcalidrawElement[],
 ): boolean => {
   if (portal.socket && portal.roomId && portal.roomKey) {
     return versionCache.get(portal.socket) === getSceneVersion(elements);
@@ -96,10 +111,15 @@ export const saveToFirebase = async (
   const res = await fetch(`${API}/rooms/${roomId}/scene`, {
     method: "PUT",
     credentials: "include",
-    headers: { "X-Excalidraw-Request": "1", "content-type": "application/octet-stream" },
+    headers: {
+      "X-Excalidraw-Request": "1",
+      "content-type": "application/octet-stream",
+    },
     body: pack(iv, ciphertext),
   });
-  if (!res.ok) { throw new Error(`scene save failed: ${res.status}`); }
+  if (!res.ok) {
+    throw new Error(`scene save failed: ${res.status}`);
+  }
 
   versionCache.set(socket, getSceneVersion(reconciled));
   // Collab.tsx feeds this straight into _reconcileElements()
@@ -109,11 +129,19 @@ export const saveToFirebase = async (
 };
 
 export const loadFromFirebase = async (
-  roomId: string, roomKey: string, socket: Socket | null,
+  roomId: string,
+  roomKey: string,
+  socket: Socket | null,
 ): Promise<readonly SyncableExcalidrawElement[] | null> => {
-  const res = await fetch(`${API}/rooms/${roomId}/scene`, { credentials: "include" });
-  if (res.status === 404) { return null; }
-  if (!res.ok) { throw new Error(`scene load failed: ${res.status}`); }
+  const res = await fetch(`${API}/rooms/${roomId}/scene`, {
+    credentials: "include",
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`scene load failed: ${res.status}`);
+  }
 
   const { iv, ciphertext } = unpack(await res.arrayBuffer());
   const elements = getSyncableElements(
@@ -121,12 +149,15 @@ export const loadFromFirebase = async (
       deleteInvisibleElements: true,
     }),
   );
-  if (socket) { versionCache.set(socket, getSceneVersion(elements)); }
+  if (socket) {
+    versionCache.set(socket, getSceneVersion(elements));
+  }
   return elements;
 };
 
 export const saveFilesToFirebase = async ({
-  prefix, files,
+  prefix,
+  files,
 }: {
   prefix: string;
   files: { id: FileId; buffer: Uint8Array }[];
@@ -140,7 +171,10 @@ export const saveFilesToFirebase = async ({
         const signed = await fetch(`${API}/files/upload-url`, {
           method: "POST",
           credentials: "include",
-          headers: { "X-Excalidraw-Request": "1", "content-type": "application/json" },
+          headers: {
+            "X-Excalidraw-Request": "1",
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
             prefix: prefix.replace(/^\//, ""),
             file_id: id,
@@ -151,7 +185,10 @@ export const saveFilesToFirebase = async ({
         const put = await fetch(signed.url, {
           credentials: "include",
           method: "PUT",
-          headers: { "X-Excalidraw-Request": "1", "content-type": MIME_TYPES.binary },
+          headers: {
+            "X-Excalidraw-Request": "1",
+            "content-type": MIME_TYPES.binary,
+          },
           body: new Blob(
             [
               buffer.buffer.slice(
@@ -162,7 +199,9 @@ export const saveFilesToFirebase = async ({
             { type: MIME_TYPES.binary },
           ),
         });
-        if (!put.ok) { throw new Error(String(put.status)); }
+        if (!put.ok) {
+          throw new Error(String(put.status));
+        }
         savedFiles.push(id);
       } catch (error: any) {
         console.error(error);
@@ -175,7 +214,9 @@ export const saveFilesToFirebase = async ({
 };
 
 export const loadFilesFromFirebase = async (
-  prefix: string, decryptionKey: string, filesIds: readonly FileId[],
+  prefix: string,
+  decryptionKey: string,
+  filesIds: readonly FileId[],
 ) => {
   const loadedFiles: BinaryFileData[] = [];
   const erroredFiles = new Map<FileId, true>();
@@ -187,7 +228,10 @@ export const loadFilesFromFirebase = async (
         const response = await fetch(`${API}/files/${path}/${id}`, {
           credentials: "include",
         });
-        if (response.status >= 400) { erroredFiles.set(id, true); return; }
+        if (response.status >= 400) {
+          erroredFiles.set(id, true);
+          return;
+        }
 
         const { data, metadata } = await decompressData<BinaryFileMetadata>(
           new Uint8Array(await response.arrayBuffer()),

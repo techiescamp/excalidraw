@@ -1,0 +1,4 @@
+# /etc/sudoers.d/ci-deploy — installed with visudo -c, mode 0440.
+# The CI account may run the deploy script as root and nothing else, so a
+# leaked deploy key cannot be used to take the machine.
+ci-deploy ALL=(root) NOPASSWD: /usr/local/bin/excalidraw-deploy

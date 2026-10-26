@@ -2,8 +2,8 @@ import { renderWorkspaceTransfer } from "./workspace-transfer.js";
 import { icon, relativeTime } from "./ui.js";
 import { PERMISSIONS, effectivePermissions } from "./permissions.js";
 const root = document.getElementById("shell");
-const doc = root.ownerDocument,
-  win = doc.defaultView;
+const doc = root.ownerDocument;
+const win = doc.defaultView;
 const $ = (selector) => doc.querySelector(selector);
 const escape = (value) =>
   String(value ?? "").replace(
@@ -33,7 +33,7 @@ const goto = (path, replace = false) => {
 const api = async (path, { body, method = "GET", key, ...options } = {}) => {
   let response;
   try {
-    response = await win.fetch("/api" + path, {
+    response = await win.fetch(`/api${path}`, {
       credentials: "same-origin",
       method,
       headers: {
@@ -79,7 +79,9 @@ function formHandler(form, run, busy = "Saving…") {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const submit = form.querySelector("[type=submit]");
-    if (submit.disabled) return;
+    if (submit.disabled) {
+      return;
+    }
     const label = submit.textContent;
     submit.disabled = true;
     submit.textContent = busy;
@@ -108,9 +110,13 @@ function modal(title, contents, submitText, onSubmit) {
   dialog.querySelector("[data-close]").onclick = () => dialog.close();
   formHandler(dialog.querySelector("form"), async (values, form) => {
     await onSubmit(values, form);
-    if (dialog.open && dialog.querySelector("form") === form) dialog.close();
+    if (dialog.open && dialog.querySelector("form") === form) {
+      dialog.close();
+    }
   });
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+  }
   return dialog;
 }
 async function reauthenticate() {
@@ -130,23 +136,26 @@ async function reauthenticate() {
     d.addEventListener(
       "close",
       () => {
-        if (!completed) resolve(false);
+        if (!completed) {
+          resolve(false);
+        }
       },
       { once: true },
     );
   });
 }
 async function mcpKeyForm() {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   const d = modal(
     "Create MCP key",
-    input(
+    `${input(
       "Key name",
       "name",
       "",
       'required autofocus placeholder="Claude on my laptop"',
-    ) +
-      `<label>Access<select name="scope"><option value="read">Read only — search and read drawings</option><option value="write">Read and write — also create and change drawings</option></select></label>` +
+    )}<label>Access<select name="scope"><option value="read">Read only — search and read drawings</option><option value="write">Read and write — also create and change drawings</option></select></label>` +
       `<label>Workspace<select name="workspace_id"><option value="">Every workspace this account can reach</option>${state.workspaces
         .map((w) => `<option value="${w.id}">${escape(w.name)}</option>`)
         .join("")}</select></label>` +
@@ -186,7 +195,9 @@ function showKey(token) {
     }
   };
   dialog.querySelector("[data-close]").onclick = () => dialog.close();
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+  }
 }
 function showLink(result) {
   const dialog = $("#dialog");
@@ -209,13 +220,15 @@ function showLink(result) {
     }
   };
   dialog.querySelector("[data-close]").onclick = () => dialog.close();
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+  }
 }
 function authPage(kind) {
-  const login = kind === "login",
-    forgot = kind === "forgot-password",
-    change = kind === "change-password",
-    setup = kind === "set-password";
+  const login = kind === "login";
+  const forgot = kind === "forgot-password";
+  const change = kind === "change-password";
+  const setup = kind === "set-password";
   const title = login
     ? "Sign in"
     : forgot
@@ -244,8 +257,11 @@ function authPage(kind) {
  }
  ${
    login
-     ? password("Password", "password", "current-password") +
-       '<a href="/forgot-password">Forgot password?</a>'
+     ? `${password(
+         "Password",
+         "password",
+         "current-password",
+       )}<a href="/forgot-password">Forgot password?</a>`
      : ""
  }
  ${
@@ -286,8 +302,9 @@ function authPage(kind) {
         )}</p><a href="/login">Back to sign in</a>`;
         return;
       }
-      if (values.password !== values.confirmation)
+      if (values.password !== values.confirmation) {
         throw new Error("Passwords do not match.");
+      }
       const out = await api(change ? "/me/password" : "/auth/reset-password", {
         method: "POST",
         body: change
@@ -308,7 +325,7 @@ function authPage(kind) {
     },
     login ? "Signing in…" : "Submitting…",
   );
-  if (!login && !forgot && !change)
+  if (!login && !forgot && !change) {
     api("/auth/check-token", {
       method: "POST",
       body: { token, purpose: setup ? "setup" : "reset" },
@@ -320,14 +337,20 @@ function authPage(kind) {
         )}</p><a href="/forgot-password">Request a new link</a>`;
       }
     });
+  }
 }
 const viewPath = (changes = {}) => {
   const p = params();
   for (const [k, v] of Object.entries(changes)) {
-    if (v == null || v === "") p.delete(k);
-    else p.set(k, v);
+    if (v == null || v === "") {
+      p.delete(k);
+    } else {
+      p.set(k, v);
+    }
   }
-  if (state.workspace) p.set("workspace", state.workspace.id);
+  if (state.workspace) {
+    p.set("workspace", state.workspace.id);
+  }
   return `/dashboard?${p}`;
 };
 const collectionIcon = (c) =>
@@ -397,10 +420,14 @@ function menu(anchor, items) {
     el.remove();
     doc.removeEventListener("pointerdown", outside);
     doc.removeEventListener("keydown", keys);
-    if (anchor.isConnected) anchor.focus();
+    if (anchor.isConnected) {
+      anchor.focus();
+    }
   };
   const outside = (e) => {
-    if (!el.contains(e.target) && !anchor.contains(e.target)) close();
+    if (!el.contains(e.target) && !anchor.contains(e.target)) {
+      close();
+    }
   };
   const keys = (e) => {
     const buttons = [...el.querySelectorAll("button")];
@@ -420,7 +447,9 @@ function menu(anchor, items) {
             buttons.length
       ]?.focus();
     }
-    if (e.key === "Tab") close();
+    if (e.key === "Tab") {
+      close();
+    }
   };
   el.onclick = (e) => {
     const b = e.target.closest("[data-index]");
@@ -436,10 +465,10 @@ function menu(anchor, items) {
   el.querySelector("button")?.focus();
 }
 function shell() {
-  const p = params(),
-    admin = route().startsWith("/admin/"),
-    col = p.get("collection"),
-    view = p.get("view") || "home";
+  const p = params();
+  const admin = route().startsWith("/admin/");
+  const col = p.get("collection");
+  const view = p.get("view") || "home";
   const work = state.workspace;
   root.innerHTML = `<div class="layout ${
     admin ? "admin-layout" : ""
@@ -597,7 +626,9 @@ function shell() {
       const scene = state.scenes.find(
         (s) => s.id === e.dataTransfer.getData("text/plain"),
       );
-      if (scene) run(() => moveScene(scene, el.dataset.drop));
+      if (scene) {
+        run(() => moveScene(scene, el.dataset.drop));
+      }
     };
   });
 }
@@ -631,8 +662,9 @@ function collectionForm(col) {
     )}</div><div id="emoji-options" hidden></div>`,
     col ? "Edit collection" : "Create collection",
     async (values) => {
-      if (!values.name.trim() || [...values.name.trim()].length > 80)
+      if (!values.name.trim() || [...values.name.trim()].length > 80) {
         throw new Error("Use a name of 1–80 characters.");
+      }
       const result = await api(
         col
           ? `/collections/${col.id}`
@@ -698,19 +730,21 @@ function collectionForm(col) {
 }
 function collectionMenu(col, anchor) {
   const actions = [];
-  if (can("drawing.create"))
+  if (can("drawing.create")) {
     actions.push({
       label: "Create scene",
       icon: "scene",
       action: () => newDrawing(undefined, col.id),
     });
-  if (can("collection.rename"))
+  }
+  if (can("collection.rename")) {
     actions.push({
       label: "Edit",
       icon: "edit",
       action: () => collectionForm(col),
     });
-  if (can("collection.delete"))
+  }
+  if (can("collection.delete")) {
     actions.push({
       label: "Move to trash",
       icon: "trash",
@@ -730,11 +764,14 @@ function collectionMenu(col, anchor) {
           },
         ),
     });
+  }
   menu(anchor, actions);
 }
 let creating = false;
 async function newDrawing(imported, collection = params().get("collection")) {
-  if (creating) return;
+  if (creating) {
+    return;
+  }
   creating = true;
   try {
     const scene = await api("/scenes", {
@@ -761,7 +798,9 @@ function importDrawing() {
   file.accept = ".excalidraw,application/json";
   file.onchange = () =>
     run(async () => {
-      if (!file.files[0]) return;
+      if (!file.files[0]) {
+        return;
+      }
       const scene = JSON.parse(await file.files[0].text());
       await newDrawing({
         scene,
@@ -815,7 +854,9 @@ function destinationPicker(scene, duplicate = false) {
       )}</div><p class="keyboard-hint">Use ↑↓ to navigate, Tab to focus, Enter to confirm</p>`,
     duplicate ? "Duplicate scene" : "Move scene",
     async (values) => {
-      if (!values.collection) throw new Error("Choose a target collection.");
+      if (!values.collection) {
+        throw new Error("Choose a target collection.");
+      }
       if (duplicate) {
         await api(`/scenes/${scene.id}/duplicate`, {
           method: "POST",
@@ -830,7 +871,9 @@ function destinationPicker(scene, duplicate = false) {
         d.close();
         await render();
         notify("Scene duplicated.");
-      } else await moveScene(scene, values.collection);
+      } else {
+        await moveScene(scene, values.collection);
+      }
     },
   );
   $("#destination-search").oninput = (e) =>
@@ -841,7 +884,9 @@ function destinationPicker(scene, duplicate = false) {
           (el.hidden = !el.dataset.name.includes(e.target.value.toLowerCase())),
       );
   d.addEventListener("keydown", (e) => {
-    if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
+    if (!["ArrowDown", "ArrowUp"].includes(e.key)) {
+      return;
+    }
     e.preventDefault();
     const items = [...d.querySelectorAll(".destination:not([hidden]) input")];
     const index = items.indexOf(doc.activeElement);
@@ -908,7 +953,7 @@ function sceneMenu(scene, anchor) {
       action: () => versionHistory(scene),
     },
   ];
-  if (can("drawing.rename"))
+  if (can("drawing.rename")) {
     actions.push(
       {
         label: "Rename",
@@ -940,19 +985,22 @@ function sceneMenu(scene, anchor) {
         },
       },
     );
-  if (can("drawing.duplicate"))
+  }
+  if (can("drawing.duplicate")) {
     actions.push({
       label: "Duplicate",
       icon: "copy",
       action: () => destinationPicker(scene, true),
     });
-  if (can("drawing.edit") && can("collection.remove"))
+  }
+  if (can("drawing.edit") && can("collection.remove")) {
     actions.push({
       label: "Move",
       icon: "arrow",
       action: () => destinationPicker(scene),
     });
-  if (can("drawing.export"))
+  }
+  if (can("drawing.export")) {
     actions.push({
       label: "Export .excalidraw",
       icon: "download",
@@ -968,7 +1016,8 @@ function sceneMenu(scene, anchor) {
         win.setTimeout(() => win.URL.revokeObjectURL(url), 1000);
       },
     });
-  if (can("drawing.trash"))
+  }
+  if (can("drawing.trash")) {
     actions.push({
       label: "Move to trash",
       icon: "trash",
@@ -988,6 +1037,7 @@ function sceneMenu(scene, anchor) {
           },
         ),
     });
+  }
   menu(anchor, actions);
 }
 function card(s, trash = false) {
@@ -1092,8 +1142,11 @@ function bindCards() {
   doc.querySelectorAll("[data-select]").forEach((c) => {
     c.checked = selectedScenes.has(c.dataset.select);
     c.onchange = () => {
-      if (c.checked) selectedScenes.add(c.dataset.select);
-      else selectedScenes.delete(c.dataset.select);
+      if (c.checked) {
+        selectedScenes.add(c.dataset.select);
+      } else {
+        selectedScenes.delete(c.dataset.select);
+      }
       updateSelection();
     };
   });
@@ -1136,12 +1189,13 @@ function emptyState(title, description, action = "") {
   )}</div><h2>${title}</h2><p>${description}</p>${action}</div>`;
 }
 async function drawingsPage(generation) {
-  const p = params(),
-    col = state.collections.find((c) => c.id === p.get("collection")),
-    view = p.get("view") || "home",
-    trash = view === "trash";
-  if (!col && !p.get("collection") && view === "home")
+  const p = params();
+  const col = state.collections.find((c) => c.id === p.get("collection"));
+  const view = p.get("view") || "home";
+  const trash = view === "trash";
+  if (!col && !p.get("collection") && view === "home") {
     return dashboardPage(generation);
+  }
   if (p.get("collection") && !col) {
     $("#page").innerHTML = emptyState(
       "Collection unavailable",
@@ -1156,17 +1210,27 @@ async function drawingsPage(generation) {
     sort: p.get("sort") || "title",
     page: p.get("page") || "0",
   });
-  if (col) query.set("collection", col.id);
-  if (trash) query.set("trashed", "1");
-  if (view === "private") query.set("private", "1");
-  if (view === "unorganized") query.set("unorganized", "1");
+  if (col) {
+    query.set("collection", col.id);
+  }
+  if (trash) {
+    query.set("trashed", "1");
+  }
+  if (view === "private") {
+    query.set("private", "1");
+  }
+  if (view === "unorganized") {
+    query.set("unorganized", "1");
+  }
   const [result, deleted] = await Promise.all([
     api(`/scenes?${query}`),
     trash
       ? api(`/workspaces/${state.workspace.id}/trashed-collections`)
       : Promise.resolve([]),
   ]);
-  if (state.generation !== generation) return;
+  if (state.generation !== generation) {
+    return;
+  }
   state.scenes = result.items;
   const title =
     col?.name ||
@@ -1269,7 +1333,9 @@ async function drawingsPage(generation) {
   $("#sort").onchange = (e) =>
     goto(viewPath({ sort: e.target.value, page: null }));
   $("#rename-heading")?.addEventListener("click", () => {
-    if (can("collection.rename")) collectionForm(col);
+    if (can("collection.rename")) {
+      collectionForm(col);
+    }
   });
   $("#new-drawing")?.addEventListener("click", () => newDrawing());
   $("#import")?.addEventListener("click", importDrawing);
@@ -1280,8 +1346,8 @@ async function drawingsPage(generation) {
     goto(viewPath({ page: result.page + 1 })),
   );
   // Refresh results only. The search input stays mounted so typing never loses focus.
-  let timer,
-    searchGeneration = 0;
+  let timer;
+  let searchGeneration = 0;
   const search = $("[name=search]");
   search.oninput = () => {
     win.clearTimeout(timer);
@@ -1297,8 +1363,9 @@ async function drawingsPage(generation) {
             n !== searchGeneration ||
             !search.isConnected ||
             state.generation !== generation
-          )
+          ) {
             return;
+          }
           win.history.replaceState(
             {},
             "",
@@ -1340,10 +1407,14 @@ async function drawingsPage(generation) {
   bindCards();
   const page = $("#page");
   page.ondragover = (e) => {
-    if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+    }
   };
   page.ondrop = (e) => {
-    if (!e.dataTransfer.files.length) return;
+    if (!e.dataTransfer.files.length) {
+      return;
+    }
     e.preventDefault();
     run(async () => {
       const file = e.dataTransfer.files[0];
@@ -1361,7 +1432,9 @@ async function dashboardPage(generation) {
     api(`/scenes?${base}&sort=visited`),
     api(`/workspaces/${state.workspace.id}/activity`),
   ]);
-  if (state.generation !== generation) return;
+  if (state.generation !== generation) {
+    return;
+  }
   state.scenes = [
     ...new Map(
       [...modified.items, ...visited.items].map((s) => [s.id, s]),
@@ -1431,8 +1504,8 @@ async function quickSearch() {
     async () => {},
   );
   d.classList.add("search-dialog");
-  let timer,
-    generation = 0;
+  let timer;
+  let generation = 0;
   const input = $("#quick-query");
   input.focus();
   input.oninput = () => {
@@ -1446,7 +1519,9 @@ async function quickSearch() {
               state.workspace.id
             }&search=${encodeURIComponent(input.value)}&limit=20`,
           );
-          if (current !== generation || !input.isConnected) return;
+          if (current !== generation || !input.isConnected) {
+            return;
+          }
           $("#quick-results").innerHTML =
             result.items
               .map(
@@ -1475,33 +1550,31 @@ async function quickSearch() {
   });
 }
 function adminNav() {
-  return (
-    '<nav class="admin-nav">' +
-    [
-      ["workspaces", "Workspace settings"],
-      ["users", "Team members"],
-      ["teams", "Teams & access"],
-      ["reset-requests", "Password requests"],
-      ["audit-log", "Audit log"],
-      ["storage", "Storage"],
-      ["mcp-keys", "MCP keys"],
-      ["icons", "Icons"],
-      ["workspace-export", "Workspace export"],
-      ["workspace-import", "Workspace import"],
-    ]
-      .map(
-        ([id, label]) =>
-          `<a href="/admin/${id}" ${
-            route() === "/admin/" + id ? 'aria-current="page"' : ""
-          }>${label}</a>`,
-      )
-      .join("") +
-    "</nav>"
-  );
+  return `<nav class="admin-nav">${[
+    ["workspaces", "Workspace settings"],
+    ["users", "Team members"],
+    ["teams", "Teams & access"],
+    ["reset-requests", "Password requests"],
+    ["audit-log", "Audit log"],
+    ["storage", "Storage"],
+    ["mcp-keys", "MCP keys"],
+    ["icons", "Icons"],
+    ["workspace-export", "Workspace export"],
+    ["workspace-import", "Workspace import"],
+  ]
+    .map(
+      ([id, label]) =>
+        `<a href="/admin/${id}" ${
+          route() === `/admin/${id}` ? 'aria-current="page"' : ""
+        }>${label}</a>`,
+    )
+    .join("")}</nav>`;
 }
 async function deleteWorkspace(workspace) {
   const preview = await api(`/admin/workspaces/${workspace.id}/delete-preview`);
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   modal(
     "Delete workspace",
     `<p>Move <strong>${escape(
@@ -1510,13 +1583,12 @@ async function deleteWorkspace(workspace) {
       preview.collections
     } collections</strong> and <strong>${
       preview.scenes
-    } drawings</strong>, including private and trashed drawings. Workspace access stops immediately.</p><p>You can restore it for 30 days. After that, its drawings, saved versions, images, thumbnails and export archives are permanently removed from storage. User accounts are kept.</p>` +
-      input(
-        `Type <strong>${escape(preview.name)}</strong> to confirm`,
-        "name",
-        "",
-        'required autocomplete="off"',
-      ),
+    } drawings</strong>, including private and trashed drawings. Workspace access stops immediately.</p><p>You can restore it for 30 days. After that, its drawings, saved versions, images, thumbnails and export archives are permanently removed from storage. User accounts are kept.</p>${input(
+      `Type <strong>${escape(preview.name)}</strong> to confirm`,
+      "name",
+      "",
+      'required autocomplete="off"',
+    )}`,
     "Move workspace to Trash",
     async (values) => {
       await api(`/admin/workspaces/${workspace.id}`, {
@@ -1532,12 +1604,16 @@ async function deleteWorkspace(workspace) {
   );
 }
 async function restoreWorkspace(workspace) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   await api(`/admin/workspaces/${workspace.id}/restore`, { method: "POST" });
   await render();
 }
 async function workspaceForm(workspace) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   modal(
     workspace ? "Rename workspace" : "Create workspace",
     input(
@@ -1559,28 +1635,31 @@ async function workspaceForm(workspace) {
   );
 }
 async function teamForm(data, team) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   modal(
     team ? "Edit team" : "Create team",
-    input("Team name", "name", team?.name || "", 'required maxlength="80"') +
-      input("Color", "color", team?.color || "#6965db", 'type="color"') +
-      `<h3>Members</h3><p class="muted">Administrators have access to all teams by default. Assign users to this workspace before adding them here.</p><div class="member-picker">${
-        data.members
-          .map(
-            (m) =>
-              `<label class="check"><input type="checkbox" name="member-${
-                m.id
-              }" ${team?.members.includes(m.id) ? "checked" : ""}>${escape(
-                m.display_name || m.username,
-              )} <small>@${escape(m.username)}</small></label>`,
-          )
-          .join("") || "<p>No assigned workspace members.</p>"
-      }</div>`,
+    `${
+      input("Team name", "name", team?.name || "", 'required maxlength="80"') +
+      input("Color", "color", team?.color || "#6965db", 'type="color"')
+    }<h3>Members</h3><p class="muted">Administrators have access to all teams by default. Assign users to this workspace before adding them here.</p><div class="member-picker">${
+      data.members
+        .map(
+          (m) =>
+            `<label class="check"><input type="checkbox" name="member-${
+              m.id
+            }" ${team?.members.includes(m.id) ? "checked" : ""}>${escape(
+              m.display_name || m.username,
+            )} <small>@${escape(m.username)}</small></label>`,
+        )
+        .join("") || "<p>No assigned workspace members.</p>"
+    }</div>`,
     "Save team",
     async (values) => {
       await api(
         `/admin/workspaces/${state.workspace.id}/teams${
-          team ? "/" + team.id : ""
+          team ? `/${team.id}` : ""
         }`,
         {
           method: team ? "PATCH" : "POST",
@@ -1588,7 +1667,7 @@ async function teamForm(data, team) {
             name: values.name,
             color: values.color,
             members: data.members
-              .filter((m) => values["member-" + m.id])
+              .filter((m) => values[`member-${m.id}`])
               .map((m) => m.id),
             version: team?.version,
           },
@@ -1601,7 +1680,9 @@ async function teamForm(data, team) {
   );
 }
 async function collectionAccessForm(data, col) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   const d = modal(
     "Collection access",
     `<p><strong>${escape(
@@ -1626,7 +1707,7 @@ async function collectionAccessForm(data, col) {
           version: col.version,
           restricted: values.everyone !== "on",
           teams: data.teams
-            .filter((t) => values["team-" + t.id])
+            .filter((t) => values[`team-${t.id}`])
             .map((t) => t.id),
         },
       });
@@ -1650,7 +1731,9 @@ async function teamsPage(generation) {
     return;
   }
   const data = await api(`/admin/workspaces/${state.workspace.id}/teams`);
-  if (generation !== state.generation) return;
+  if (generation !== state.generation) {
+    return;
+  }
   $(
     "#admin-content",
   ).innerHTML = `<div class="section-title"><div><h2>Teams & collection access</h2><p class="muted">${escape(
@@ -1727,7 +1810,9 @@ async function teamsPage(generation) {
       );
 }
 async function deleteUser(user) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   modal(
     "Delete user?",
     `<p><strong>${escape(
@@ -1743,8 +1828,10 @@ async function deleteUser(user) {
   );
 }
 async function userForm(user) {
-  if (!(await reauthenticate())) return;
-  const content =
+  if (!(await reauthenticate())) {
+    return;
+  }
+  const content = `${
     input(
       "Username",
       "username",
@@ -1756,49 +1843,48 @@ async function userForm(user) {
       "display_name",
       user?.display_name || "",
       'maxlength="120"',
-    ) +
-    `<label class="check"><input type="checkbox" name="is_superadmin" ${
-      user?.is_superadmin ? "checked" : ""
-    }>Administrator — access to all application workspaces</label><label class="check"><input type="checkbox" name="confirm_global_admin">I confirm global administrator access when promoting this account</label>${
-      user
-        ? `<label class="check"><input type="checkbox" name="is_active" ${
-            user.is_active ? "checked" : ""
-          }>Account active</label>`
-        : ""
-    }<h3>Workspace assignments and permissions</h3><p>Overrides apply to all eligible resources in each assigned workspace. Administration cannot be granted by an override.</p>` +
-    state.workspaces
-      .map((w) => {
-        const assigned = user?.assignments.find((a) => a.workspace_id === w.id);
-        return `<fieldset data-workspace="${w.id}"><legend>${escape(
-          w.name,
-        )}</legend><label class="check"><input type="checkbox" name="assigned-${
-          w.id
-        }" ${
-          assigned ? "checked" : ""
-        }>Assigned</label><label>Role<select name="role-${
-          w.id
-        }"><option value="editor" ${
-          assigned?.role === "editor" ? "selected" : ""
-        }>Editor</option><option value="viewer" ${
-          assigned?.role === "viewer" ? "selected" : ""
-        }>Viewer</option></select></label><details><summary>Specific permissions · Inherit / Allow / Deny</summary><div class="permission-grid">${Object.entries(
-          PERMISSIONS,
+    )
+  }<label class="check"><input type="checkbox" name="is_superadmin" ${
+    user?.is_superadmin ? "checked" : ""
+  }>Administrator — access to all application workspaces</label><label class="check"><input type="checkbox" name="confirm_global_admin">I confirm global administrator access when promoting this account</label>${
+    user
+      ? `<label class="check"><input type="checkbox" name="is_active" ${
+          user.is_active ? "checked" : ""
+        }>Account active</label>`
+      : ""
+  }<h3>Workspace assignments and permissions</h3><p>Overrides apply to all eligible resources in each assigned workspace. Administration cannot be granted by an override.</p>${state.workspaces
+    .map((w) => {
+      const assigned = user?.assignments.find((a) => a.workspace_id === w.id);
+      return `<fieldset data-workspace="${w.id}"><legend>${escape(
+        w.name,
+      )}</legend><label class="check"><input type="checkbox" name="assigned-${
+        w.id
+      }" ${
+        assigned ? "checked" : ""
+      }>Assigned</label><label>Role<select name="role-${
+        w.id
+      }"><option value="editor" ${
+        assigned?.role === "editor" ? "selected" : ""
+      }>Editor</option><option value="viewer" ${
+        assigned?.role === "viewer" ? "selected" : ""
+      }>Viewer</option></select></label><details><summary>Specific permissions · Inherit / Allow / Deny</summary><div class="permission-grid">${Object.entries(
+        PERMISSIONS,
+      )
+        .map(
+          ([key, [label, deps]]) =>
+            `<label>${label}<small>${
+              deps.length ? `Requires ${deps.join(", ")}` : ""
+            }</small><select name="perm-${
+              w.id
+            }-${key}" data-permission="${key}"><option value="inherit">Inherit</option><option value="allow" ${
+              assigned?.overrides[key] === "allow" ? "selected" : ""
+            }>Allow</option><option value="deny" ${
+              assigned?.overrides[key] === "deny" ? "selected" : ""
+            }>Deny</option></select><span data-effective="${key}"></span></label>`,
         )
-          .map(
-            ([key, [label, deps]]) =>
-              `<label>${label}<small>${
-                deps.length ? "Requires " + deps.join(", ") : ""
-              }</small><select name="perm-${
-                w.id
-              }-${key}" data-permission="${key}"><option value="inherit">Inherit</option><option value="allow" ${
-                assigned?.overrides[key] === "allow" ? "selected" : ""
-              }>Allow</option><option value="deny" ${
-                assigned?.overrides[key] === "deny" ? "selected" : ""
-              }>Deny</option></select><span data-effective="${key}"></span></label>`,
-          )
-          .join("")}</div></details></fieldset>`;
-      })
-      .join("");
+        .join("")}</div></details></fieldset>`;
+    })
+    .join("")}`;
   let link;
   const d = modal(
     user ? "Edit user" : "Create user",
@@ -1829,9 +1915,13 @@ async function userForm(user) {
         { method: user ? "PATCH" : "POST", body },
       );
       d.close();
-      if (result.url) link = result;
+      if (result.url) {
+        link = result;
+      }
       await render();
-      if (link) showLink(link);
+      if (link) {
+        showLink(link);
+      }
     },
   );
   const update = () =>
@@ -1859,7 +1949,9 @@ async function userForm(user) {
   update();
 }
 async function issueLink(userId) {
-  if (!(await reauthenticate())) return;
+  if (!(await reauthenticate())) {
+    return;
+  }
   let result;
   const d = modal(
     "Verify identity before issuing a link",
@@ -1880,9 +1972,9 @@ async function adminPage(generation) {
     $("#page").innerHTML = "<h1>Access denied</h1>";
     return;
   }
-  const p = params(),
-    page = Math.max(0, Number(p.get("page")) || 0),
-    name = route().split("/").pop();
+  const p = params();
+  const page = Math.max(0, Number(p.get("page")) || 0);
+  const name = route().split("/").pop();
   $(
     "#page",
   ).innerHTML = `<h1>Administration</h1>${adminNav()}<div id="admin-content"></div>`;
@@ -1899,10 +1991,14 @@ async function adminPage(generation) {
       generation,
     });
   }
-  if (name === "teams") return teamsPage(generation);
+  if (name === "teams") {
+    return teamsPage(generation);
+  }
   if (name === "workspaces") {
     const rows = await api("/admin/workspaces");
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $(
       "#admin-content",
     ).innerHTML = `<div class="section-title"><div><h2>Workspaces</h2><p class="muted">Organize your team's drawings and collections.</p></div>${button(
@@ -1942,8 +2038,9 @@ async function adminPage(generation) {
                   } drawings · ${
                     w.purging_at
                       ? "Cleanup in progress"
-                      : "Restore until " +
-                        escape(new Date(w.purge_after).toLocaleString())
+                      : `Restore until ${escape(
+                          new Date(w.purge_after).toLocaleString(),
+                        )}`
                   }</small></div>${button(
                     "Restore workspace",
                     `data-workspace-restore="${w.id}" ${
@@ -1996,7 +2093,9 @@ async function adminPage(generation) {
         p.get("search") || "",
       )}`,
     );
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $("#admin-content").innerHTML = `<div class="toolbar">${input(
       "Search users",
       "user-search",
@@ -2069,7 +2168,9 @@ async function adminPage(generation) {
     const rows = await api(
       `/admin/reset-requests?page=${page}&status=${p.get("status") || ""}`,
     );
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $(
       "#admin-content",
     ).innerHTML = `<label>Status<select id="status"><option value="">All</option><option>pending</option><option>resolved</option><option>rejected</option></select></label><table><thead><tr><th>User</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows
@@ -2091,7 +2192,9 @@ async function adminPage(generation) {
     doc.querySelectorAll("[data-reject]").forEach(
       (b) =>
         (b.onclick = async () => {
-          if (!(await reauthenticate())) return;
+          if (!(await reauthenticate())) {
+            return;
+          }
           await api(`/admin/reset-requests/${b.dataset.reject}/reject`, {
             method: "POST",
           });
@@ -2100,7 +2203,9 @@ async function adminPage(generation) {
     );
   } else if (name === "icons") {
     const library = await api(`/admin/icons?workspace=${state.workspace.id}`);
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     const sets = library.icons.reduce((groups, icon) => {
       (groups[icon.set_name] ||= []).push(icon.name);
       return groups;
@@ -2154,16 +2259,22 @@ async function adminPage(generation) {
                 (ref) =>
                   `<button class="icon-result" data-add-icon="${escape(
                     ref.replace(":", "/"),
-                  )}" title="${escape(ref)}"><img src="/api/admin/icons/preview?ref=${encodeURIComponent(
+                  )}" title="${escape(
+                    ref,
+                  )}"><img src="/api/admin/icons/preview?ref=${encodeURIComponent(
                     ref.replace(":", "/"),
-                  )}" alt="" loading="lazy"><small>${escape(ref)}</small></button>`,
+                  )}" alt="" loading="lazy"><small>${escape(
+                    ref,
+                  )}</small></button>`,
               )
               .join("");
             doc.querySelectorAll("[data-add-icon]").forEach(
               (b) =>
                 (b.onclick = () =>
                   run(async () => {
-                    if (!(await reauthenticate())) return;
+                    if (!(await reauthenticate())) {
+                      return;
+                    }
                     const result = await api("/admin/icons/import", {
                       method: "POST",
                       body: {
@@ -2177,7 +2288,9 @@ async function adminPage(generation) {
                         : result.failed[0]?.error || "Could not add that icon.",
                       !result.imported,
                     );
-                    if (result.imported) await render();
+                    if (result.imported) {
+                      await render();
+                    }
                   })),
             );
           }),
@@ -2186,7 +2299,9 @@ async function adminPage(generation) {
     };
     $("#icon-fetch").onchange = (event) =>
       run(async () => {
-        if (!(await reauthenticate())) return render();
+        if (!(await reauthenticate())) {
+          return render();
+        }
         await api("/admin/icons/settings", {
           method: "PUT",
           body: { fetch_enabled: event.target.checked },
@@ -2199,16 +2314,17 @@ async function adminPage(generation) {
       });
     $("#import-icons").onclick = () =>
       run(async () => {
-        if (!(await reauthenticate())) return;
+        if (!(await reauthenticate())) {
+          return;
+        }
         const d = modal(
           "Add icons",
-          input(
+          `${input(
             "Icon names",
             "icons",
             "logos/kubernetes, logos/aws, logos/docker-icon",
             "required autofocus",
-          ) +
-            '<p class="muted">Comma separated, in the form set/name. They are downloaded once from iconify.design and stored in this workspace. Browse names at icon-sets.iconify.design.</p>',
+          )}<p class="muted">Comma separated, in the form set/name. They are downloaded once from iconify.design and stored in this workspace. Browse names at icon-sets.iconify.design.</p>`,
           "Add icons",
           async (values) => {
             const result = await api("/admin/icons/import", {
@@ -2233,7 +2349,9 @@ async function adminPage(generation) {
       });
   } else if (name === "mcp-keys") {
     const keys = await api("/admin/mcp-keys");
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $(
       "#admin-content",
     ).innerHTML = `<div class="section-title"><div><h2>MCP keys</h2><p class="muted">Let Claude or another AI assistant work in this workspace. A key acts as the person who created it, follows that person's permissions, and can be revoked at any time.</p></div>${button(
@@ -2270,7 +2388,9 @@ async function adminPage(generation) {
         (b.onclick = () =>
           run(async () => {
             const key = keys.find((k) => k.id === b.dataset.revokeKey);
-            if (!(await reauthenticate())) return;
+            if (!(await reauthenticate())) {
+              return;
+            }
             modal(
               "Revoke this key?",
               `<p>Assistants using <strong>${escape(
@@ -2288,7 +2408,9 @@ async function adminPage(generation) {
     );
   } else if (name === "storage") {
     const cfg = await api("/admin/storage");
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $(
       "#admin-content",
     ).innerHTML = `<h2>Object storage</h2><p>Current backend: ${escape(
@@ -2320,7 +2442,9 @@ async function adminPage(generation) {
       'id="migrate-storage"',
     )}`;
     formHandler($("#storage-form"), async (values) => {
-      if (!(await reauthenticate())) return;
+      if (!(await reauthenticate())) {
+        return;
+      }
       await api("/admin/storage", {
         method: "PUT",
         body: { ...values, forcePathStyle: values.forcePathStyle === "on" },
@@ -2329,7 +2453,9 @@ async function adminPage(generation) {
       $("#storage-result").textContent = "Storage configuration saved.";
     });
     $("#migrate-storage").onclick = async () => {
-      if (!(await reauthenticate())) return;
+      if (!(await reauthenticate())) {
+        return;
+      }
       try {
         const result = await api("/admin/storage/migrate", { method: "POST" });
         $(
@@ -2346,7 +2472,9 @@ async function adminPage(generation) {
         p.get("action") || "",
       )}&outcome=${encodeURIComponent(p.get("outcome") || "")}`,
     );
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     $("#admin-content").innerHTML = `<div class="toolbar">${input(
       "Filter action",
       "audit-action",
@@ -2397,8 +2525,8 @@ async function boot() {
   state.workspaces = await api("/workspaces");
 }
 async function render() {
-  const generation = ++state.generation,
-    path = route();
+  const generation = ++state.generation;
+  const path = route();
   closeMenu?.();
   selectedScenes.clear();
   $("#selection-toolbar")?.remove();
@@ -2419,7 +2547,9 @@ async function render() {
   }
   try {
     const workspaces = await api("/workspaces");
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     state.workspaces = workspaces;
     const selected = params().get("workspace");
     state.workspace =
@@ -2432,14 +2562,22 @@ async function render() {
         const batch = await api(
           `/workspaces/${state.workspace.id}/collections?page=${page}`,
         );
-        if (generation !== state.generation) return;
+        if (generation !== state.generation) {
+          return;
+        }
         state.collections.push(...batch);
-        if (batch.length < 100) break;
+        if (batch.length < 100) {
+          break;
+        }
       }
     }
-    if (generation !== state.generation) return;
+    if (generation !== state.generation) {
+      return;
+    }
     shell();
-    if (path.startsWith("/admin/")) return await adminPage(generation);
+    if (path.startsWith("/admin/")) {
+      return await adminPage(generation);
+    }
     if (!state.workspace) {
       $("#page").innerHTML =
         "<h1>No workspace assigned. Contact your administrator.</h1>";
@@ -2447,12 +2585,17 @@ async function render() {
     }
     await drawingsPage(generation);
   } catch (error) {
-    if (generation !== state.generation) return;
-    if ($("#page"))
+    if (generation !== state.generation) {
+      return;
+    }
+    if ($("#page")) {
       $("#page").innerHTML = `<p role="alert">${escape(
         error.message,
       )}</p><button id="retry">Retry</button>`;
-    if ($("#retry")) $("#retry").onclick = render;
+    }
+    if ($("#retry")) {
+      $("#retry").onclick = render;
+    }
   }
 }
 doc.addEventListener("click", (event) => {
@@ -2499,7 +2642,9 @@ win.addEventListener("keydown", (e) => {
     state.workspace
   ) {
     e.preventDefault();
-    if (!$("#dialog").open) quickSearch();
+    if (!$("#dialog").open) {
+      quickSearch();
+    }
   }
 });
 try {
@@ -2514,12 +2659,16 @@ doc.addEventListener("visibilitychange", () => {
     state.me &&
     !$("#dialog").open &&
     !["INPUT", "TEXTAREA", "SELECT"].includes(doc.activeElement?.tagName)
-  )
+  ) {
     render();
+  }
 });
-if (["/forgot-password", "/reset-password", "/set-password"].includes(route()))
+if (
+  ["/forgot-password", "/reset-password", "/set-password"].includes(route())
+) {
   render();
-else
+} else {
   boot()
     .catch(() => {})
     .then(render);
+}

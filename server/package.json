@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "migrate": "node bin/migrate.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "keywords": [],
   "author": "",
@@ -36,5 +36,8 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "jsdom": "^22.1.0"
   }
 }

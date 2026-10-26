@@ -104,3 +104,52 @@ test("identical bytes under different file ids are stored once", async () => {
     refs[0].sha256,
   );
 });
+
+// The save path uploads before it opens a transaction. Holding a drawing's row
+// across an upload once blocked every other save of it for minutes, so the
+// in-transaction call is told it must not upload and fails loudly if it would.
+test("uploading is refused when the caller holds a lock", async () => {
+  const blobs = new Map();
+  const puts = [];
+  const db = {
+    async query(sql, params) {
+      if (/INSERT INTO workspace_blobs/.test(sql)) {
+        if (blobs.has(params[1])) return { rowCount: 0, rows: [] };
+        blobs.set(params[1], { sha256: params[1], mime: params[2], s3_key: params[4] });
+        return { rowCount: 1, rows: [] };
+      }
+      return { rowCount: 0, rows: [] };
+    },
+  };
+  const storage = {
+    async put(key) { puts.push(key); },
+    async read() { return null; },
+  };
+  const store = installSceneBlobs(db, storage);
+  const scene = (text) => ({
+    elements: [],
+    appState: {},
+    files: {
+      a: {
+        id: "a",
+        mimeType: "image/png",
+        created: 1,
+        dataURL: `data:image/png;base64,${Buffer.from(text).toString("base64")}`,
+      },
+    },
+  });
+
+  // A new image offered while locked is a mistake, not something to do slowly.
+  await assert.rejects(
+    () => store.split("ws-1", scene("brand new"), { mayUpload: false }),
+    /inside a transaction/,
+  );
+  assert.equal(puts.length, 0, "nothing was uploaded under the lock");
+
+  // One already stored records its reference without touching storage.
+  await store.split("ws-1", scene("already here"));
+  assert.equal(puts.length, 1);
+  const again = await store.split("ws-1", scene("already here"), { mayUpload: false });
+  assert.equal(puts.length, 1, "no second upload");
+  assert.equal(again.refs.length, 1);
+});

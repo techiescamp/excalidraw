@@ -1,4 +1,3 @@
-import { getWorkspacePermissions } from "../data/workspaceScene";
 import { CaptureUpdateAction } from "@excalidraw/excalidraw";
 import { trackEvent } from "@excalidraw/excalidraw/analytics";
 import { encryptData } from "@excalidraw/excalidraw/data/encryption";
@@ -11,6 +10,8 @@ import type {
   OnUserFollowedPayload,
   SocketId,
 } from "@excalidraw/excalidraw/types";
+
+import { getWorkspacePermissions } from "../data/workspaceScene";
 
 import { WS_EVENTS, FILE_UPLOAD_TIMEOUT, WS_SUBTYPES } from "../app_constants";
 import { isSyncableElement } from "../data";

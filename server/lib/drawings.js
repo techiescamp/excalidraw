@@ -541,7 +541,9 @@ export function installDrawings(
       // image that arrived with them is stored now; for an ordinary save this
       // finds everything already uploaded and does nothing.
       const { payload: stored, refs } = collaborative
-        ? await blobs.split(scene.workspace_id, payload)
+        ? // merging can bring in another participant's elements, but their
+          // images are already stored, so this records references only
+          await blobs.split(scene.workspace_id, payload, { mayUpload: false })
         : prepared;
       await blobs.record(tx, scene.id, scene.workspace_id, refs);
       const body = Buffer.from(JSON.stringify(stored));
