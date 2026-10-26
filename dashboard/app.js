@@ -487,21 +487,6 @@ function shell() {
    "dashboard",
    !admin && !col && view === "home",
  )}${
-    state.me.is_superadmin
-      ? navLink(
-          "/admin/workspaces",
-          "Workspace settings",
-          "settings",
-          route() === "/admin/workspaces",
-        ) +
-        navLink(
-          "/admin/users",
-          "Team members",
-          "users",
-          route() === "/admin/users",
-        )
-      : ""
-  }${
     can("trash.read")
       ? navLink(
           viewPath({
@@ -690,23 +675,73 @@ function collectionForm(col) {
   $("#icon-picker").onclick = () => {
     const options = $("#emoji-options");
     options.hidden = !options.hidden;
+    // Grouped roughly by what people name collections after: work, building,
+    // learning, planning, people, and a few to mark one out from the rest.
     options.innerHTML = [
       "folder",
       "📁",
-      "🚀",
-      "💡",
-      "☸️",
-      "🧪",
-      "🎨",
-      "📚",
-      "⚙️",
+      "📂",
+      "🗂️",
+      "📦",
+      "🗃️",
+      "📋",
+      "📄",
       "📝",
-      "🌐",
-      "🧠",
-      "📊",
       "💻",
-      "⭐",
+      "⌨️",
+      "🖥️",
+      "🐳",
+      "☸️",
+      "⚙️",
+      "🔧",
+      "🛠️",
+      "🔌",
+      "🧩",
+      "🗄️",
+      "☁️",
+      "🌐",
+      "🔐",
+      "🛡️",
+      "🧪",
+      "🐞",
+      "📈",
+      "📊",
+      "💰",
+      "🧾",
+      "🚀",
+      "🔥",
+      "⚡",
+      "✨",
+      "💡",
+      "🧠",
+      "🎓",
+      "📚",
+      "🔖",
+      "🗒️",
       "🎯",
+      "🏁",
+      "🗓️",
+      "⏰",
+      "✅",
+      "📌",
+      "🔍",
+      "🎨",
+      "🖌️",
+      "📸",
+      "🎬",
+      "🎵",
+      "👥",
+      "🤝",
+      "💬",
+      "📣",
+      "🏢",
+      "🏠",
+      "🌱",
+      "🌍",
+      "⭐",
+      "❤️",
+      "🍀",
+      "🐧",
     ]
       .map((v) =>
         button(
@@ -1499,7 +1534,7 @@ async function dashboardPage(generation) {
 async function quickSearch() {
   const d = modal(
     "Quick search",
-    `<label class="sr-only" for="quick-query">Search workspace scenes</label><input id="quick-query" type="search" placeholder="Search scenes…" autofocus><div id="quick-results"><p class="muted">Start typing to find a scene.</p></div>`,
+    `<label class="sr-only" for="quick-query">Search workspace scenes and collections</label><input id="quick-query" type="search" placeholder="Search scenes and collections…" autofocus><div id="quick-results"><p class="muted">Start typing to find a scene or a collection.</p></div>`,
     "Close",
     async () => {},
   );
@@ -1522,18 +1557,40 @@ async function quickSearch() {
           if (current !== generation || !input.isConnected) {
             return;
           }
-          $("#quick-results").innerHTML =
-            result.items
-              .map(
-                (s) =>
-                  `<a class="search-result" href="${editorPath(s)}">${icon(
-                    s.private_owner_id ? "lock" : "scene",
-                  )}<span>${escape(s.name)}<small>${escape(
-                    s.collections.map((c) => c.name).join(", ") ||
-                      "Private / unorganized",
-                  )}</small></span>${icon("arrow", 16)}</a>`,
+          // Collections are already in memory, so they are matched here
+          // rather than asked for; a search that only found scenes could not
+          // find a folder by name at all.
+          const needle = input.value.trim().toLowerCase();
+          const collections = needle
+            ? state.collections.filter((c) =>
+                c.name.toLowerCase().includes(needle),
               )
-              .join("") || '<p class="quiet-empty">No scenes found.</p>';
+            : [];
+          $("#quick-results").innerHTML =
+            collections
+              .map(
+                (c) =>
+                  `<a class="search-result" href="${viewPath({
+                    collection: c.id,
+                    view: null,
+                    search: null,
+                    page: null,
+                  })}">${collectionIcon(c)}<span>${escape(
+                    c.name,
+                  )}<small>Collection</small></span>${icon("arrow", 16)}</a>`,
+              )
+              .join("") +
+              result.items
+                .map(
+                  (s) =>
+                    `<a class="search-result" href="${editorPath(s)}">${icon(
+                      s.private_owner_id ? "lock" : "scene",
+                    )}<span>${escape(s.name)}<small>${escape(
+                      s.collections.map((c) => c.name).join(", ") ||
+                        "Private / unorganized",
+                    )}</small></span>${icon("arrow", 16)}</a>`,
+                )
+                .join("") || '<p class="quiet-empty">Nothing found.</p>';
         }),
       200,
     );
