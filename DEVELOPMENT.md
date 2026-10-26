@@ -553,6 +553,19 @@ announcing success deleted nothing while claiming otherwise.
 Returning the drawing without it invites the client to save that version back
 and lose the image permanently.
 
+**A deploy is not finished until someone has opened the application and
+looked.** A release was published whose editor had no API address, because the
+configuration compiled into it lived in a file that is not in the repository.
+It built, it passed, it installed, it served pages, and it answered every check
+made against the API -- and it silently ignored every workspace drawing. The
+fault appeared only on screen, as an empty canvas that read as missing images.
+Check the thing the person uses, not the pieces underneath it.
+
+**A build that depends on configuration must prove it has it.** The release now
+refuses to publish an editor that does not contain the API address. A check
+that fails loudly at build time is worth more than one that waits for a user to
+open a drawing.
+
 **Back up before anything irreversible, and verify the backup by reading it
 back.** Not "the command exited zero" — read a sample and parse it.
 

@@ -95,6 +95,31 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-26 — Claude — a release that built, passed and did nothing
+
+The first two releases cut through the pipeline, v1.0.0 and v1.1.0, were built
+without `.env.production.local`, which is not in the repository and held the
+editor's API address. Everything compiled, every check passed, the install
+succeeded, and the editor loaded as plain local Excalidraw: it ignores
+workspace drawings entirely, so opening one showed an empty canvas that looked
+like the images had gone.
+
+It was not found by any check because every check looked at the pieces -- the
+API, the artifacts, the service -- and none opened a drawing. **Open the
+application and look, every time.**
+
+release.yml now writes that configuration and refuses to publish a bundle
+without the API address in it.
+
+Separately, handing the editor image references made a drawing with a hundred
+images take fourteen seconds to appear, because each request went to object
+storage, about half a second each. The images were already held in memory for
+other readers; the endpoint now uses that, and reading a scene starts loading
+its images in the background. The test for it uses a storage with latency,
+since the earlier one ran against a local directory where a read costs nothing
+-- which is why the cost only showed in production.
+
+
 ### 2026-10-26 — Codex — local Proxima Nova Extra Condensed preview
 
 Plan: add regular and bold picker options on a separate local branch, verify
