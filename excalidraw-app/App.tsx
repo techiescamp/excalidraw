@@ -298,6 +298,14 @@ const initializeScene = async (opts: {
     appState: restoreAppState(localDataState?.appState, null),
   };
 
+  // Snapping is what makes two images line up instead of nearly lining up, but
+  // the editor ships with it off and the toggle is buried in a menu, so nobody
+  // finds it. Turn it on for someone who has never expressed a preference; the
+  // menu toggle still decides for everyone who has.
+  if (localDataState?.appState?.objectsSnapModeEnabled === undefined) {
+    scene.appState.objectsSnapModeEnabled = true;
+  }
+
   let roomLinkData = getCollaborationLinkData(window.location.href);
   const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
   if (isExternalScene) {
