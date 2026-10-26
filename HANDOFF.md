@@ -10,10 +10,11 @@ next agent does not rediscover it, redo it, or undo it.
 
 ## Rules for this file
 
-1. **Read it first.** Before touching anything, read the Current state and the
-   open items. Do not re-investigate something already recorded here.
-2. **Write before you stop.** Any session that changed code, configuration or a
-   server adds an entry. A session that changed nothing adds nothing.
+1. **Read it before and after work.** Before touching anything, read the Current
+   state and open items. Check it again before stopping.
+2. **Record the plan before changing code, then update it before you stop.**
+   Write the branch and intended changes in a short log entry first. Finish
+   that entry with what changed, checks run, and what remains.
 3. **Newest entry at the top**, under Log.
 4. **Record what is NOT done** as plainly as what is. A half-finished change
    that nobody knows is half-finished is worse than one not started.
@@ -93,6 +94,31 @@ pipeline existed.
 ---
 
 ## Log
+
+### 2026-10-26 — Codex — local Proxima Nova Extra Condensed preview
+
+Plan: add regular and bold picker options on a separate local branch, verify
+them in the local editor, and keep the demo font files off GitHub and production.
+
+Added regular and bold Proxima Nova Extra Condensed font-picker options on the
+local `feature/nova-proxy-font` branch. Converted the supplied Fontspring demo
+OTF files to WOFF2 so they render in the editor. The demo fonts are for local
+preview only; do not commit, push, or deploy them. Replace them with licensed
+webfont files before distribution.
+
+Verified the bold picker test fails when its registration is removed, then
+passes with the registration restored. The font-picker tests, full frontend
+suite, typecheck, lint and editor build pass. Both faces render in the local
+browser preview.
+
+**Not done:** no commit, GitHub push, or production deployment. The focused
+Prettier check passes for the font code and spec. The repository-wide
+`yarn test:other` still reports the pre-existing `HANDOFF.md` formatting issue.
+The SVG export dialog preview renders the font, but an exported file was not
+confirmed. A later request to push into `dev` was not carried out: Fontspring's
+demo-font guidance prohibits sharing or embedding demo fonts, and this repo
+requires changes to reach `dev` through a pull request. Licensed webfont files
+are needed to continue with a remote change.
 
 ### 2026-10-26 — Claude — pipelines, and what turning CI on exposed
 

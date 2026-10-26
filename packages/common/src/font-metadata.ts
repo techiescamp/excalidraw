@@ -183,6 +183,22 @@ export const FONT_METADATA: Record<number, FontMetadata> = {
       lineHeight: 1.25,
     },
   },
+  [FONT_FAMILY["Proxima Nova Extra Condensed"]]: {
+    metrics: {
+      unitsPerEm: 1000,
+      ascender: 920,
+      descender: -298,
+      lineHeight: 1.25,
+    },
+  },
+  [FONT_FAMILY["Proxima Nova Extra Condensed Bold"]]: {
+    metrics: {
+      unitsPerEm: 1000,
+      ascender: 920,
+      descender: -298,
+      lineHeight: 1.25,
+    },
+  },
   [FONT_FAMILY_FALLBACKS.Xiaolai]: {
     metrics: {
       unitsPerEm: 1000,

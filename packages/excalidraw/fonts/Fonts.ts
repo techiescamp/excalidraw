@@ -39,6 +39,10 @@ import { ManropeFontFaces } from "./Manrope";
 import { NunitoSansFontFaces } from "./NunitoSans";
 import { PlaypenSansFontFaces } from "./PlaypenSans";
 import { PlusJakartaSansFontFaces } from "./PlusJakartaSans";
+import {
+  ProximaNovaExtraCondensedBoldFontFaces,
+  ProximaNovaExtraCondensedFontFaces,
+} from "./ProximaNovaExtraCondensed";
 import { RobotoFontFaces } from "./Roboto";
 import { SourceSans3FontFaces } from "./SourceSans3";
 import { ComicShannsFontFaces } from "./ComicShanns";
@@ -430,6 +434,11 @@ export class Fonts {
     init("Plus Jakarta Sans", ...PlusJakartaSansFontFaces);
     init("Nunito Sans", ...NunitoSansFontFaces);
     init("Playpen Sans", ...PlaypenSansFontFaces);
+    init("Proxima Nova Extra Condensed", ...ProximaNovaExtraCondensedFontFaces);
+    init(
+      "Proxima Nova Extra Condensed Bold",
+      ...ProximaNovaExtraCondensedBoldFontFaces,
+    );
 
     // fallback font faces
     init(CJK_HAND_DRAWN_FALLBACK_FONT, ...XiaolaiFontFaces);

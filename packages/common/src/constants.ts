@@ -151,6 +151,8 @@ export const FONT_FAMILY = {
   "Plus Jakarta Sans": 21,
   "Nunito Sans": 22,
   "Playpen Sans": 23,
+  "Proxima Nova Extra Condensed": 24,
+  "Proxima Nova Extra Condensed Bold": 25,
 };
 
 // Segoe UI Emoji fails to properly fallback for some glyphs: ∞, ∫, ≠
