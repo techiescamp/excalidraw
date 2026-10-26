@@ -1,16 +1,35 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="referrer" content="no-referrer" />
-<title>Excalidraw workspace</title>
-<link rel="icon" href="/favicon.ico" />
-<link rel="stylesheet" href="/dashboard/styles.css" />
-</head>
-<body>
-<div id="shell"><div class="workspace-loader" role="status" aria-label="Loading workspace"><div class="workspace-loader__shapes" aria-hidden="true"><span class="workspace-loader__shape workspace-loader__shape--square"></span><span class="workspace-loader__shape workspace-loader__shape--circle"></span><span class="workspace-loader__shape workspace-loader__shape--diamond"></span></div><span class="workspace-loader__label">Loading workspace…</span></div></div>
-<dialog id="dialog" aria-labelledby="dialog-title"></dialog>
-<script type="module" src="/dashboard/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Excalidraw workspace</title>
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/dashboard/styles.css" />
+  </head>
+  <body>
+    <div id="shell">
+      <div
+        class="workspace-loader"
+        role="status"
+        aria-label="Loading workspace"
+      >
+        <div class="workspace-loader__shapes" aria-hidden="true">
+          <span
+            class="workspace-loader__shape workspace-loader__shape--square"
+          ></span
+          ><span
+            class="workspace-loader__shape workspace-loader__shape--circle"
+          ></span
+          ><span
+            class="workspace-loader__shape workspace-loader__shape--diamond"
+          ></span>
+        </div>
+        <span class="workspace-loader__label">Loading workspace…</span>
+      </div>
+    </div>
+    <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+    <script type="module" src="/dashboard/app.js"></script>
+  </body>
 </html>

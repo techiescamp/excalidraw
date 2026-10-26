@@ -9,3 +9,22 @@ packages/excalidraw/types
 examples/**/public
 dev-dist
 coverage
+
+# Long-form documentation for this fork. Upstream's prettier config collapses
+# each paragraph onto one line, which makes a one-word change rewrite the whole
+# paragraph and turns the diff of a spec into noise. These are hand-wrapped and
+# reviewed as prose; prettier still owns the code and config files.
+AGENTS.md
+CHANGELOG.md
+CLAUDE.md
+DEVELOPMENT.md
+deploy.md
+deploy-spec.md
+dedupe-plan.md
+BUILD_PROGRESS.md
+WORKSPACE_TRANSFER.md
+PRODUCTION_QA_REPORT_*.md
+excalidraw-*.md
+background-removal-specification.md
+docs/specs/
+server/README.md
