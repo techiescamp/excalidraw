@@ -54,6 +54,7 @@ jobs:
         if: ${{ env.DISCORD_WEBHOOK != '' }}
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_SITE: ${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}
         run: |
           .github/scripts/notify-discord.sh starting \
             "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
@@ -94,6 +95,7 @@ jobs:
         if: always() && env.DISCORD_WEBHOOK != ''
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_SITE: ${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}
         run: |
           .github/scripts/notify-discord.sh "${{ job.status }}" \
             "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
