@@ -146,6 +146,7 @@ import {
   saveWorkspaceScene,
   registerWorkspaceSceneApplier,
 } from "./data/workspaceScene";
+import { mergeOnOpen } from "./data/mergeOnOpen";
 import {
   LibraryIndexedDBAdapter,
   LibraryLocalStorageMigrationAdapter,
@@ -273,13 +274,7 @@ const initializeScene = async (opts: {
         return {
           scene: {
             ...scene,
-            // An empty room is not an edit. ?? only steps aside for null, so
-            // a room that answered with no elements used to throw away the
-            // drawing the database had just handed us, and the canvas opened
-            // blank until something refilled it.
-            elements: remote?.elements?.length
-              ? remote.elements
-              : scene.elements,
+            elements: mergeOnOpen(scene.elements ?? [], remote?.elements),
             files: { ...scene.files, ...remote?.files },
             appState: { ...scene.appState, isLoading: false },
           },
@@ -443,27 +438,6 @@ const initializeScene = async (opts: {
       : { scene, isExternalScene: false };
   }
   return { scene: null, isExternalScene: false };
-};
-
-// Snapping is what makes two images line up instead of nearly lining up. The
-// editor ships with it off, behind a menu item nobody opens, so in practice it
-// did not exist. Every way of opening a drawing passes through here — the
-// dashboard's `?scene=`, a shared link, a local scratch canvas — so the default
-// is applied once, in one place, rather than at each of them. Anything that
-// already said what it wants keeps it.
-const withDefaultSnapping = (
-  scene: ExcalidrawInitialDataState | null,
-): ExcalidrawInitialDataState | null => {
-  if (!scene) {
-    return scene;
-  }
-  if (scene.appState?.objectsSnapModeEnabled !== undefined) {
-    return scene;
-  }
-  return {
-    ...scene,
-    appState: { ...scene.appState, objectsSnapModeEnabled: true },
-  };
 };
 
 const ExcalidrawWrapper = () => {
@@ -768,9 +742,7 @@ const ExcalidrawWrapper = () => {
 
     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
       loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(
-        withDefaultSnapping(data.scene),
-      );
+      initialStatePromiseRef.current.promise.resolve(data.scene);
     });
 
     const onHashChange = async (event: HashChangeEvent) => {
