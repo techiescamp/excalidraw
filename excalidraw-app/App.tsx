@@ -136,6 +136,7 @@ import {
 import { loadFilesFromFirebase } from "./data/firebase";
 import {
   getActiveWorkspaceId,
+  subscribeActiveWorkspace,
   getWorkspaceSceneId,
   workspaceEditorLocation,
   getWorkspaceUserLabel,
@@ -506,7 +507,14 @@ const ExcalidrawWrapper = () => {
   const [langCode, setLangCode] = useAppLangCode();
 
   const editorInterface = useEditorInterface();
-  const activeWorkspaceId = getActiveWorkspaceId();
+  // The workspace becomes known only once the drawing has loaded, which is
+  // after the first render. Read once and it stays null for good, taking the
+  // icon library's toolbar button and context-menu entry with it.
+  const activeWorkspaceId = useSyncExternalStore(
+    subscribeActiveWorkspace,
+    getActiveWorkspaceId,
+    getActiveWorkspaceId,
+  );
 
   const customContextMenuItems = useMemo<
     NonNullable<ExcalidrawProps["customContextMenuItems"]>
