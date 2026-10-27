@@ -1413,20 +1413,51 @@ export async function loadWorkspaceScene(
   let payload = await resolveBlobRefs(result.workspace_id, result.scene);
   const draft = await draftStore("get", session.key);
   if (draft && session.editable) {
-    // A conflict is never uploaded implicitly. Keep the server canvas until the user chooses a copy.
-    session.pending = draft.scene;
-    if (
-      draft.version === result.version &&
+    if (draft.version !== result.version) {
+      // The drawing moved on while this draft sat here, from another tab or
+      // another person. The server merges by each element's own version, so the
+      // draft is sent to be merged rather than the author being asked to
+      // reconcile two versions by hand.
+      try {
+        const merged = await request<{ version: number; scene?: Payload }>(
+          `/scenes/${id}/data`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              // The draft's own version, not the server's: the server merges a
+              // save it can see is behind, and overwrites one it thinks is
+              // current, which would discard whatever moved the drawing on.
+              version: draft.version,
+              scene: draft.scene,
+            }),
+          },
+        );
+        if (merged.scene) {
+          payload = await resolveBlobRefs(result.workspace_id, merged.scene);
+          // The session took its version before this ran, and the merge has
+          // moved the drawing on; without this the next save would look stale.
+          result.version = merged.version;
+          session.version = merged.version;
+          await draftStore("delete", session.key);
+        }
+      } catch {
+        // Merging is the improvement, not the guarantee. If it cannot be done
+        // the draft is kept and the author decides, as before.
+        session.pending = draft.scene;
+        session.error =
+          "Drawing changed on the server. Save your draft as a copy or reload.";
+      }
+    } else if (
       node.ownerDocument.defaultView!.confirm(
         "A recoverable unsaved draft exists for this drawing. Restore it?",
       )
     ) {
       payload = draft.scene;
+      session.pending = draft.scene;
     } else {
+      session.pending = draft.scene;
       session.error =
-        draft.version !== result.version
-          ? "Drawing changed on the server. Save your draft as a copy or reload."
-          : "Recovery draft retained. Save it as a copy or reload to discard it.";
+        "Recovery draft retained. Save it as a copy or reload to discard it.";
     }
   }
   session.current = JSON.stringify(

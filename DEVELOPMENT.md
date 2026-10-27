@@ -125,6 +125,24 @@ feature/icons → develop → main → tag → artifact → production
 
 Each arrow is a pull request or a pipeline. No arrow is a person typing rsync.
 
+### 10. Let it settle, then check it by hand
+
+A green health check only proves the server answers. It says nothing about
+whether the editor loads, whether images appear, or whether the thing that was
+fixed is actually fixed — and a release has already passed its health check
+while serving a broken editor.
+
+So after Discord says the release is live:
+
+- **Wait 5 to 10 minutes.** Caches expire, the service finishes restarting, and
+  faults that only show up under real traffic have time to show up.
+- **Then open the site in a browser.** Sign in, open a drawing, confirm images
+  render, and exercise the specific thing this release changed.
+- **Report what was seen**, not what was expected. A screenshot beats a claim.
+
+If it is wrong, roll back first and diagnose afterwards. The site being correct
+matters more than the fix shipping today.
+
 ---
 
 ## 3. What the agent must do, every time

@@ -168,7 +168,6 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 
 import "./index.scss";
 
-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
 import { AddIconDialog } from "./components/AddIconDialog";
 
@@ -437,6 +436,27 @@ const initializeScene = async (opts: {
       : { scene, isExternalScene: false };
   }
   return { scene: null, isExternalScene: false };
+};
+
+// Snapping is what makes two images line up instead of nearly lining up. The
+// editor ships with it off, behind a menu item nobody opens, so in practice it
+// did not exist. Every way of opening a drawing passes through here — the
+// dashboard's `?scene=`, a shared link, a local scratch canvas — so the default
+// is applied once, in one place, rather than at each of them. Anything that
+// already said what it wants keeps it.
+const withDefaultSnapping = (
+  scene: ExcalidrawInitialDataState | null,
+): ExcalidrawInitialDataState | null => {
+  if (!scene) {
+    return scene;
+  }
+  if (scene.appState?.objectsSnapModeEnabled !== undefined) {
+    return scene;
+  }
+  return {
+    ...scene,
+    appState: { ...scene.appState, objectsSnapModeEnabled: true },
+  };
 };
 
 const ExcalidrawWrapper = () => {
@@ -734,7 +754,9 @@ const ExcalidrawWrapper = () => {
 
     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
       loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(data.scene);
+      initialStatePromiseRef.current.promise.resolve(
+        withDefaultSnapping(data.scene),
+      );
     });
 
     const onHashChange = async (event: HashChangeEvent) => {
@@ -1349,14 +1371,8 @@ const ExcalidrawWrapper = () => {
 
           return (
             <div className="excalidraw-ui-top-right">
-              {import.meta.env.VITE_APP_PLUS_LP &&
-                excalidrawAPI?.getEditorInterface().formFactor ===
-                  "desktop" && (
-                  <ExcalidrawPlusPromoBanner
-                    isSignedIn={isExcalidrawPlusSignedUser}
-                  />
-                )}
-
+              {/* This is a self-hosted workspace, so the Excalidraw+ promotion
+                  that normally sits beside Share is not shown. */}
               {collabError.message && <CollabError collabError={collabError} />}
               <LiveCollaborationTrigger
                 isCollaborating={isCollaborating}

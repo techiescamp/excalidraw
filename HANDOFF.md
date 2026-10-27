@@ -97,12 +97,17 @@ pipeline existed.
 
 ### 2026-10-27 — Codex — publish icon work to dev
 
-Plan: commit the pending icon-library and gallery changes on local branch
-`Icons`, fetch and merge the latest `origin/dev`, run the repository's required
-checks on the merged code, then push a fast-forward update to `origin/dev` as
-requested. Do not force-push or deploy to production.
+Committed the icon-library and gallery changes as `c27cf9a3` on `Icons`,
+then merged the latest fetched `origin/dev` (`7199afbf`) locally. Resolved the
+handoff and migration-fixture conflicts while preserving both sides' entries
+and migrations.
 
-**Status:** pending; no commit or push yet.
+Checks passed on the merged source in a disposable copy: `yarn test:typecheck`,
+`yarn test:code`, `yarn test:other`, `yarn test:app --watch=false` (128 files;
+1927 passed, 47 skipped, 1 todo), the PostgreSQL server suite (59 passed), and
+`VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`.
+
+**Status:** merge commit and push to `dev` remain. No production change.
 
 ### 2026-10-27 — Codex — align and center the icon gallery
 
@@ -201,6 +206,43 @@ Verified locally:
 **Not done:** no commit, push, merge, or production deploy. Only a disposable
 `local/spark` icon is in the preview database; admins need to import the icons
 they want in each workspace.
+
+### 2026-10-26 — Claude — workspace UI cleanup, held on `dev`
+
+**Branch:** `feature/workspace-ui-cleanup` → `dev`. CI green (5/5). **Deliberately not on `main`:** more work is coming and it ships in one release, by the owner's decision. Production stays on `v1.3.0`.
+
+Four things, all reported from using the workspace:
+
+- The Excalidraw+ promotion beside Share is gone. This install is self-hosted, so it advertised something nobody here can buy (`excalidraw-app/App.tsx`, `renderTopRightUI`).
+- Collection icons: 16 → 64, grouped by what collections get named after, and the grid scrolls instead of stretching the dialog.
+- Workspace settings and Team members are no longer sidebar rows. Both are tabs of Administration, linked at the foot of the same sidebar, so nothing became unreachable and the collection list gets the height.
+- Quick search (⌘P) only ever asked `/scenes`, so a collection could not be found by name. Collections are matched in memory and listed first with their icon. The in-page "Search scenes" filter is still scenes only, on purpose — it carries a scene count.
+
+_Verified_ on the disposable instance in a browser: sidebar rows gone, picker full and scrolling with a pick that stuck, `gpu` finds "GPU Course — Collection", `draft` still finds the scene, editor top-right at 1440px shows only Share. 1920 frontend tests, 54 server tests, typecheck, lint, prettier.
+
+_Also this session:_ `v1.3.0` deployed and checked live 10 minutes after — dashboard, thumbnails, a drawing with images, no console errors.
+
+---
+
+### 2026-10-26 — Claude — recovered drafts now merge; deploy announcements rewritten
+
+**Branches:** `fix/draft-merge`, `fix/deploy-notifications` → `dev` → `main`. **Tag:** `v1.3.0` (artifacts built). **Not deployed** — waiting on approval.
+
+_Draft merge._ Opening a drawing that the server had moved past while a local draft sat in IndexedDB showed "Drawing changed on the server. Save your draft as a copy or reload." and left the author to reconcile by hand. The server has merged stale saves element by element since v1.2.0, so the editor now sends the draft to be merged and carries on (`excalidraw-app/data/workspaceScene.ts`, `loadWorkspaceScene`).
+
+**The trap, worth knowing:** the draft must be sent at _its own_ version, not the server's. A save at the version the server is already on **replaces** the scene; only a save it can see is behind is merged. The first version of this fix sent the server's version and silently discarded the other person's work. It was caught in the browser, not by a check. `server/test/private-workspaces. test.js` now pins the replace-vs-merge difference.
+
+_Verified:_ 54/54 server tests, typecheck, lint, prettier, editor build, CI green on `dev`. End-to-end in a browser against the disposable instance: a draft taken at v6 plus another person's save at v7 → all five elements kept, draft cleared from IndexedDB, no error banner.
+
+_Deploy announcements._ The Discord messages printed the characters `\n` instead of breaking the line — a backslash escape in double quotes is not expanded by bash, and `jq --arg` passes it through. Rebuilt with `printf`, and the facts are embed fields now (version, health, who, how long, rollback, link), with a closing line picked from a few. `.github/scripts/notify-discord. sh`, timing passed from `deploy.yml`.
+
+_Teardown race._ Server tests went red on CI while passing locally: every test passed, then dropping the test database terminated backends that had not finished closing, which became an uncaughtException and failed the whole file. Teardown now waits for them to clear, and pool errors are ignored only once teardown has started.
+
+_New rule in `DEVELOPMENT.md` §2a.10:_ a green health check is not a verified deploy. Wait 5–10 minutes after the release goes live, then open the site, sign in, open a drawing, and exercise what changed.
+
+**Left open:** `v1.3.0` is not deployed. Nothing deployable changed after the tag (`git diff --name-only v1.3.0 main` is CI, docs and tests only), and the deploy workflow runs from `main`, so the new announcements will be used.
+
+---
 
 ### 2026-10-26 — Claude — a release that built, passed and did nothing
 

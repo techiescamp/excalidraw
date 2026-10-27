@@ -8,6 +8,8 @@ const base = process.env.TEST_DATABASE_URL;
 if (!base || !["localhost", "127.0.0.1"].includes(new URL(base).hostname))
   throw new Error("An isolated localhost TEST_DATABASE_URL is required.");
 const control = new pg.Pool({ connectionString: base });
+// An idle client erroring must not take the fixture down with it.
+control.on("error", () => {});
 const name = "excalidraw_browser_" + process.pid;
 // The schema grants to the role the service runs as. On a developer's machine
 // that role usually already exists, so the tests passed there while failing on
@@ -28,6 +30,7 @@ await control.end();
 const url = new URL(base);
 url.pathname = "/" + name;
 const db = new pg.Pool({ connectionString: url.href });
+db.on("error", () => {});
 await db.query("CREATE EXTENSION citext");
 for (const file of [
   "schema.sql",
@@ -40,10 +43,10 @@ for (const file of [
   "migration-008-collaboration-keys.sql",
   "migration-009-workspace-transfer.sql",
   "migration-010-workspace-trash.sql",
-    "migration-011-mcp-keys.sql",
-    "migration-012-oauth.sql",
-    "migration-013-icons.sql",
-    "migration-014-blobs.sql",
+  "migration-011-mcp-keys.sql",
+  "migration-012-oauth.sql",
+  "migration-013-icons.sql",
+  "migration-014-blobs.sql",
   "migration-015-icon-postgres-data.sql",
   "migration-016-icon-categories.sql",
   "migration-017-icon-image-data.sql",

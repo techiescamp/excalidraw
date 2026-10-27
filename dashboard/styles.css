@@ -623,6 +623,10 @@ textarea:focus {
   background: var(--bg);
   padding: 8px;
   border-radius: 8px;
+  /* There are more icons than fit the dialog, so the grid scrolls rather than
+     pushing the buttons off the bottom. */
+  max-height: 184px;
+  overflow-y: auto;
 }
 #emoji-options[hidden] {
   display: none;

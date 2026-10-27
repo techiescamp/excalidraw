@@ -49,11 +49,13 @@ jobs:
           previous=$(ssh -i ~/.ssh/id_ed25519 "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             'readlink /opt/excalidraw/app/current | xargs basename' 2>/dev/null || echo unknown)
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Tell Discord it is starting
         if: ${{ env.DISCORD_WEBHOOK != '' }}
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_SITE: ${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}
         run: |
           .github/scripts/notify-discord.sh starting \
             "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
@@ -94,7 +96,13 @@ jobs:
         if: always() && env.DISCORD_WEBHOOK != ''
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_SITE: ${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}
         run: |
+          # The start time is missing if the job fell over before it was taken,
+          # and the announcement must still go out, so the timing is optional.
+          started="${{ steps.current.outputs.started }}"
+          took=""
+          [ -n "$started" ] && took=$(( $(date +%s) - started ))
           .github/scripts/notify-discord.sh "${{ job.status }}" \
             "${{ inputs.version }}" "${{ steps.current.outputs.previous }}" \
-            "${{ github.actor }}" "${{ steps.health.outputs.ok }}"
+            "${{ github.actor }}" "${{ steps.health.outputs.ok }}" "$took"

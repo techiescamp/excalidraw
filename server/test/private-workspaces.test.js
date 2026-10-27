@@ -20,6 +20,16 @@ if (!base)
     "Set TEST_DATABASE_URL to an isolated PostgreSQL instance with CREATE DATABASE permission.",
   );
 const control = new pg.Pool({ connectionString: base });
+// Dropping the test database at the end terminates whatever is still connected
+// to it. A pg pool with no error listener turns that into an uncaughtException
+// and fails the whole file, which is how this suite went red on CI while
+// passing locally. Teardown noise is not a test result; a connection dying
+// while the tests are still running is, so only the former is ignored.
+let tearingDown = false;
+const ignoreTeardownNoise = (error) => {
+  if (!tearingDown) throw error;
+};
+control.on("error", ignoreTeardownNoise);
 const database = "excalidraw_test_" + process.pid;
 const origin = "http://127.0.0.1:55440";
 const password = "A private orchard under moonlight 742!";
@@ -129,6 +139,7 @@ before(async () => {
   const url = new URL(base);
   url.pathname = "/" + database;
   db = new pg.Pool({ connectionString: url.href });
+  db.on("error", ignoreTeardownNoise);
   await db.query(
     "DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='excalidraw') THEN CREATE ROLE excalidraw; END IF; END $$;",
   );
@@ -201,11 +212,23 @@ before(async () => {
   viewer = await makeUser("viewer", "viewer");
 });
 after(async () => {
+  tearingDown = true;
   if (server) {
     server.kill();
     await once(server, "exit");
   }
   if (db) await db.end();
+  // Closing a pool closes its sockets, but the backends behind them disappear a
+  // moment later. Dropping the database before they do terminates them, and
+  // that lands as an error on whatever still holds one. Wait for them to go.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const busy = await control.query(
+      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1",
+      [database],
+    );
+    if (busy.rows[0].n === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await control.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
   await control.end();
   if (storage) await rm(storage, { recursive: true, force: true });
@@ -951,7 +974,10 @@ test("private workspace backend", async (t) => {
       // Both land now: whichever arrives second is merged with what the first
       // stored rather than refused. The image survives either way, which is
       // what this is really about — neither save may erase the other's work.
-      assert.deepEqual(results.map((r) => r.status), [200, 200]);
+      assert.deepEqual(
+        results.map((r) => r.status),
+        [200, 200],
+      );
       const loaded = await call(`/scenes/${s.id}/data`, { cookie: admin });
       assert.equal(loaded.body.version, 3);
       // The editor is handed a reference and fetches the image itself; a reader
@@ -1105,7 +1131,9 @@ test("private workspace backend", async (t) => {
       // one. The editor route is no longer among them: it receives references
       // and fetches each image separately, which is what lets the browser cache
       // them and keeps one unreadable image from blocking a drawing.
-      const first = await call(`/scenes/${drawing.id}/export`, { cookie: admin });
+      const first = await call(`/scenes/${drawing.id}/export`, {
+        cookie: admin,
+      });
       assert.equal(first.status, 200);
       assert.equal(first.body.files.large.dataURL, dataURL);
       const cacheFile = path.join(cacheStorage, drawing.id, "2.json");
@@ -1208,13 +1236,17 @@ test("private workspace backend", async (t) => {
       // The editor is handed the reference and resolves the image itself, so a
       // missing one is a blank image in an otherwise working drawing rather
       // than a drawing that refuses to open.
-      const forEditor = await call(`/scenes/${other.id}/data`, { cookie: admin });
+      const forEditor = await call(`/scenes/${other.id}/data`, {
+        cookie: admin,
+      });
       assert.equal(forEditor.status, 200);
       assert.equal(forEditor.body.scene.blobRefs.old.sha256, "0".repeat(64));
       // Anything that must produce a scene standing on its own still refuses,
       // because handing back a whole scene with images quietly dropped invites
       // the caller to save it and lose them.
-      const exported = await call(`/scenes/${other.id}/export`, { cookie: admin });
+      const exported = await call(`/scenes/${other.id}/export`, {
+        cookie: admin,
+      });
       assert.equal(exported.status, 503);
       assert.match(exported.body.error, /do not overwrite/i);
     },
@@ -1262,11 +1294,13 @@ test("private workspace backend", async (t) => {
       const returned = stale.body.scene.elements.map((e) => e.id).sort();
       assert.deepEqual(returned, ["from-first", "from-second"]);
 
-      const stored = await call(`/scenes/${drawing.id}/data`, { cookie: admin });
-      assert.deepEqual(
-        stored.body.scene.elements.map((e) => e.id).sort(),
-        ["from-first", "from-second"],
-      );
+      const stored = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      assert.deepEqual(stored.body.scene.elements.map((e) => e.id).sort(), [
+        "from-first",
+        "from-second",
+      ]);
 
       // A version ahead of the server is still refused: nothing could have
       // produced it, so it means the caller is confused rather than behind.
@@ -1276,6 +1310,31 @@ test("private workspace backend", async (t) => {
         body: { version: 99, scene: base([element("future", 1)]) },
       });
       assert.equal(impossible.status, 409);
+
+      // A save at the version the server is already on replaces the scene; it
+      // is not merged, because a caller that is up to date is saying what the
+      // drawing should now be. Anything recovering an old draft has to send the
+      // version that draft was taken at, or the work it is behind is discarded.
+      const current = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      const replaced = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: current.body.version,
+          scene: base([element("only-this", 1)]),
+        },
+      });
+      assert.equal(replaced.status, 200);
+      assert.equal(replaced.body.merged, undefined);
+      const afterReplace = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      assert.deepEqual(
+        afterReplace.body.scene.elements.map((e) => e.id),
+        ["only-this"],
+      );
     },
   );
   await t.test(
@@ -2856,7 +2915,11 @@ test("private workspace backend", async (t) => {
         `/scenes/${s.id}/versions/${
           history.items.find((v) => v.scene_version === 1).id
         }/restore`,
-        { cookie: admin, method: "POST", body: { version: afterBehind.version } },
+        {
+          cookie: admin,
+          method: "POST",
+          body: { version: afterBehind.version },
+        },
       );
       assert.equal(
         (await call(`/rooms/${room}/scene`, { cookie: editor.cookie })).status,
