@@ -98,16 +98,16 @@ pipeline existed.
 ### 2026-10-27 — Codex — publish icon work to dev
 
 Committed the icon-library and gallery changes as `c27cf9a3` on `Icons`,
-then merged the latest fetched `origin/dev` (`7199afbf`) locally. Resolved the
-handoff and migration-fixture conflicts while preserving both sides' entries
-and migrations.
+then merged fetched `origin/dev` through `c2f75454`, preserving the newer smart-
+guides history and all icon migrations.
 
 Checks passed on the merged source in a disposable copy: `yarn test:typecheck`,
 `yarn test:code`, `yarn test:other`, `yarn test:app --watch=false` (128 files;
 1927 passed, 47 skipped, 1 todo), the PostgreSQL server suite (59 passed), and
 `VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`.
 
-**Status:** merge commit and push to `dev` remain. No production change.
+Pushed to GitHub `dev` at `178b0c2e`; `git ls-remote` confirmed that exact head.
+No production change.
 
 ### 2026-10-27 — Claude — smart guides, and a default that was set in the wrong place
 
