@@ -120,6 +120,13 @@
   }
 
   .app-icon-library-item {
+    // It can be dragged onto the canvas, so it should look like it can.
+    cursor: grab;
+
+    &:active {
+      cursor: grabbing;
+    }
+
     display: flex;
     min-width: 0;
     min-height: 7rem;

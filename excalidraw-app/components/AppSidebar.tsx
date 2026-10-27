@@ -17,6 +17,7 @@ import {
   getActiveWorkspaceId,
   subscribeActiveWorkspace,
 } from "../data/workspaceScene";
+import { fitIconSize } from "../data/iconSize";
 
 import "./AppSidebar.scss";
 
@@ -131,6 +132,46 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
     };
   }, [contextMenu]);
 
+  // Dragging an icon onto the canvas is the first thing anyone tries, so the
+  // drop is handled here rather than leaving the button as the only way in.
+  const dragging = useRef<WorkspaceIcon | null>(null);
+
+  useEffect(() => {
+    const ownerDocument = panelRef.current?.ownerDocument;
+    if (!ownerDocument) {
+      return;
+    }
+    const allowDrop = (event: DragEvent) => {
+      if (!dragging.current) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+    };
+    const onDrop = (event: DragEvent) => {
+      const icon = dragging.current;
+      const target = event.target as HTMLElement | null;
+      // Only a drop on the canvas counts; one back onto the panel is a miss.
+      if (!icon || !target?.closest?.(".excalidraw")) {
+        return;
+      }
+      // Taken in the capture phase, before the editor's own file drop handler
+      // sees an event it has no file for.
+      event.preventDefault();
+      event.stopPropagation();
+      dragging.current = null;
+      void insertIcon(icon, { clientX: event.clientX, clientY: event.clientY });
+    };
+    ownerDocument.addEventListener("dragover", allowDrop, true);
+    ownerDocument.addEventListener("drop", onDrop, true);
+    return () => {
+      ownerDocument.removeEventListener("dragover", allowDrop, true);
+      ownerDocument.removeEventListener("drop", onDrop, true);
+    };
+  });
+
   const removeIcon = async (icon: WorkspaceIcon) => {
     const ownerWindow = panelRef.current?.ownerDocument.defaultView;
     if (!ownerWindow) {
@@ -165,7 +206,10 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
     }
   };
 
-  const insertIcon = async (icon: WorkspaceIcon) => {
+  const insertIcon = async (
+    icon: WorkspaceIcon,
+    at?: { clientX: number; clientY: number },
+  ) => {
     const panel = panelRef.current;
     const ownerWindow = panel?.ownerDocument.defaultView;
     if (
@@ -199,10 +243,25 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
       const fileId = Array.from(random, (byte) =>
         byte.toString(16).padStart(2, "0"),
       ).join("") as FileId;
-      const imageSize = 128;
+      const natural = await new Promise<{ width: number; height: number }>(
+        (resolve) => {
+          const probe = new ownerWindow.Image();
+          probe.onload = () =>
+            resolve({
+              width: probe.naturalWidth || probe.width,
+              height: probe.naturalHeight || probe.height,
+            });
+          // An SVG without an intrinsic size reports nothing useful, and
+          // fitIconSize falls back to a square for it.
+          probe.onerror = () => resolve({ width: 0, height: 0 });
+          probe.src = dataURL;
+        },
+      );
+      const { width, height } = fitIconSize(natural);
       const appState = excalidrawAPI.getAppState();
+      // Dropped where the pointer let go; clicked, in the middle of the view.
       const center = viewportCoordsToSceneCoords(
-        {
+        at ?? {
           clientX: appState.offsetLeft + appState.width / 2,
           clientY: appState.offsetTop + appState.height / 2,
         },
@@ -221,10 +280,10 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
           ...excalidrawAPI.getSceneElementsIncludingDeleted(),
           newImageElement({
             type: "image",
-            x: center.x - imageSize / 2,
-            y: center.y - imageSize / 2,
-            width: imageSize,
-            height: imageSize,
+            x: center.x - width / 2,
+            y: center.y - height / 2,
+            width,
+            height,
             fileId,
             status: "saved",
           }),
@@ -329,6 +388,17 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
                   inserting !== "" ||
                   !!excalidrawAPI?.getAppState().viewModeEnabled
                 }
+                draggable={!excalidrawAPI?.getAppState().viewModeEnabled}
+                onDragStart={(event) => {
+                  dragging.current = icon;
+                  setSelected(reference);
+                  // Some browsers cancel a drag that carries nothing.
+                  event.dataTransfer.setData("text/plain", reference);
+                  event.dataTransfer.effectAllowed = "copy";
+                }}
+                onDragEnd={() => {
+                  dragging.current = null;
+                }}
                 onClick={() => setSelected(reference)}
                 onContextMenu={(event) => {
                   event.preventDefault();
