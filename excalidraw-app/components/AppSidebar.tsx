@@ -242,7 +242,30 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
       const fileId = Array.from(random, (byte) =>
         byte.toString(16).padStart(2, "0"),
       ).join("") as FileId;
-      const imageSize = 128;
+      // Fit the icon inside a 128px box while keeping its proportions. Forcing
+      // every icon into a square squashed anything that is not one — a wide
+      // logo came out visibly stretched.
+      const BOX = 128;
+      const natural = await new Promise<{ width: number; height: number }>(
+        (resolve) => {
+          const probe = new ownerWindow.Image();
+          probe.onload = () =>
+            resolve({
+              width: probe.naturalWidth || probe.width,
+              height: probe.naturalHeight || probe.height,
+            });
+          // An SVG without an intrinsic size reports nothing useful; a square
+          // is as good a guess as any, and no worse than before.
+          probe.onerror = () => resolve({ width: 0, height: 0 });
+          probe.src = dataURL;
+        },
+      );
+      const scale =
+        natural.width > 0 && natural.height > 0
+          ? BOX / Math.max(natural.width, natural.height)
+          : 0;
+      const width = scale ? natural.width * scale : BOX;
+      const height = scale ? natural.height * scale : BOX;
       const appState = excalidrawAPI.getAppState();
       // Dropped where the pointer let go; clicked, in the middle of the view.
       const center = viewportCoordsToSceneCoords(
@@ -265,10 +288,10 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
           ...excalidrawAPI.getSceneElementsIncludingDeleted(),
           newImageElement({
             type: "image",
-            x: center.x - imageSize / 2,
-            y: center.y - imageSize / 2,
-            width: imageSize,
-            height: imageSize,
+            x: center.x - width / 2,
+            y: center.y - height / 2,
+            width,
+            height,
             fileId,
             status: "saved",
           }),
