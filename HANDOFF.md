@@ -106,8 +106,8 @@ Checks passed on the merged source in a disposable copy: `yarn test:typecheck`,
 1927 passed, 47 skipped, 1 todo), the PostgreSQL server suite (59 passed), and
 `VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`.
 
-Pushed to GitHub `dev` at `178b0c2e`; `git ls-remote` confirmed that exact head.
-No production change.
+Pushed the icon feature merge to GitHub `dev` (`178b0c2e`), then pushed the
+final handoff-only status update. No production change.
 
 ### 2026-10-27 — Claude — smart guides, and a default that was set in the wrong place
 
