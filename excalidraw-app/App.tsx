@@ -1308,60 +1308,100 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
-        renderToolbarActions={() => {
+        renderToolbarActions={(toolbarAppState) => {
           const canProcessImage =
             selectedImage &&
             excalidrawAPI &&
             !excalidrawAPI.getAppState().viewModeEnabled &&
             (!workspacePermissions || workspacePermissions["drawing.edit"]);
 
+          const iconsOpen =
+            toolbarAppState.openSidebar?.name === "default" &&
+            toolbarAppState.openSidebar?.tab === "icons";
+
           return (
-            <IconButton
-              type="button"
-              aria-label="Remove background"
-              title="Remove background"
-              data-testid="toolbar-remove-background"
-              disabled={!canProcessImage}
-              icon={
-                <svg
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 12h9V3M12 12h9M12 12v9" />
-                  <path
-                    d="m7 17 2 2 3-4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              }
-              onClick={() => {
-                if (!selectedImage || !excalidrawAPI) {
-                  return;
+            <>
+              {activeWorkspaceId && (
+                // The icon library was reachable only by opening the sidebar
+                // and finding the right tab, which nobody did. It sits in the
+                // toolbar now, beside the tools it belongs with.
+                <IconButton
+                  type="button"
+                  aria-label="Icon library"
+                  title="Icon library"
+                  data-testid="toolbar-icon-library"
+                  className={iconsOpen ? "active" : undefined}
+                  icon={
+                    <svg
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      aria-hidden="true"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                      <rect x="14" y="3" width="7" height="7" rx="3.5" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                      <path d="M17.5 14v7M14 17.5h7" strokeLinecap="round" />
+                    </svg>
+                  }
+                  onClick={() => {
+                    excalidrawAPI?.toggleSidebar({
+                      name: "default",
+                      tab: "icons",
+                    });
+                  }}
+                />
+              )}
+              <IconButton
+                type="button"
+                aria-label="Remove background"
+                title="Remove background"
+                data-testid="toolbar-remove-background"
+                disabled={!canProcessImage}
+                icon={
+                  <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    aria-hidden="true"
+                  >
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 12h9V3M12 12h9M12 12v9" />
+                    <path
+                      d="m7 17 2 2 3-4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 }
-                const source =
-                  excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
-                if (source) {
-                  setImageJob({
-                    operation: "flat-background",
-                    targetId: selectedImage.id,
-                    fileId: selectedImage.fileId,
-                    version: selectedImage.version,
-                    sceneId: getWorkspaceSceneId(),
-                    location:
-                      wrapperRef.current?.ownerDocument.defaultView?.location
-                        .href || "",
-                    source,
-                  });
-                }
-              }}
-            />
+                onClick={() => {
+                  if (!selectedImage || !excalidrawAPI) {
+                    return;
+                  }
+                  const source =
+                    excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
+                  if (source) {
+                    setImageJob({
+                      operation: "flat-background",
+                      targetId: selectedImage.id,
+                      fileId: selectedImage.fileId,
+                      version: selectedImage.version,
+                      sceneId: getWorkspaceSceneId(),
+                      location:
+                        wrapperRef.current?.ownerDocument.defaultView?.location
+                          .href || "",
+                      source,
+                    });
+                  }
+                }}
+              />
+            </>
           );
         }}
         renderTopRightUI={(isMobile) => {

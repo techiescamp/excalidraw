@@ -7,6 +7,14 @@ import { fail, uuid, audit } from "./core.js";
 const SOURCE = "https://api.iconify.design";
 const MAX_BYTES = 256 * 1024;
 const MAX_WORKSPACE_ICON_BYTES = 5 * 1024 * 1024;
+// Icon bytes live in PostgreSQL, which is the expensive storage and the one
+// every backup carries. Without a ceiling a workspace could quietly put gigabytes
+// there one 5 MB icon at a time, which is the problem the drawings themselves
+// were just moved out of the database to avoid.
+const MAX_WORKSPACE_LIBRARY_BYTES =
+  Number(process.env.ICON_LIBRARY_MAX_BYTES) > 0
+    ? Number(process.env.ICON_LIBRARY_MAX_BYTES)
+    : 256 * 1024 * 1024;
 const MAX_IMPORT = 40;
 const MAX_CATEGORY_LENGTH = 40;
 const MAX_DISPLAY_NAME_LENGTH = 80;
@@ -38,11 +46,17 @@ const categoryValue = (value) => {
 const displayNameValue = (value) => {
   const displayName = String(value || "").trim();
   if (displayName.length > MAX_DISPLAY_NAME_LENGTH)
-    fail(400, `Icon name must be ${MAX_DISPLAY_NAME_LENGTH} characters or less.`);
+    fail(
+      400,
+      `Icon name must be ${MAX_DISPLAY_NAME_LENGTH} characters or less.`,
+    );
   return displayName || null;
 };
 const parseCanvasImage = (value) => {
-  if (typeof value !== "string" || value.length > MAX_WORKSPACE_ICON_BYTES * 1.4) {
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_WORKSPACE_ICON_BYTES * 1.4
+  ) {
     fail(413, "Icons must be 5 MiB or smaller.");
   }
   const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/i.exec(
@@ -63,7 +77,8 @@ const parseCanvasImage = (value) => {
   }
 
   const startsWith = (...bytes) =>
-    body.length >= bytes.length && bytes.every((byte, index) => body[index] === byte);
+    body.length >= bytes.length &&
+    bytes.every((byte, index) => body[index] === byte);
   const signatureMatches =
     mime === "image/svg+xml"
       ? (() => {
@@ -80,7 +95,10 @@ const parseCanvasImage = (value) => {
       : mime === "image/jpeg" || mime === "image/jfif"
       ? startsWith(0xff, 0xd8, 0xff)
       : mime === "image/gif"
-      ? body.subarray(0, 6).toString("ascii").match(/^GIF8[79]a$/)
+      ? body
+          .subarray(0, 6)
+          .toString("ascii")
+          .match(/^GIF8[79]a$/)
       : mime === "image/webp"
       ? body.subarray(0, 4).toString("ascii") === "RIFF" &&
         body.subarray(8, 12).toString("ascii") === "WEBP"
@@ -134,6 +152,28 @@ export function installIcons(
     return body;
   };
 
+  // A limit stated in bytes helps nobody, and rounding a small one to whole
+  // megabytes reports "0 MB", which reads as a bug.
+  const readableSize = (bytes) =>
+    bytes >= 1024 * 1024
+      ? `${Math.round(bytes / (1024 * 1024))} MB`
+      : bytes >= 1024
+      ? `${Math.round(bytes / 1024)} KB`
+      : `${bytes} bytes`;
+
+  // What the workspace is already holding, not counting the row this write
+  // replaces: re-saving an icon under the same name must not be refused for
+  // space it is about to give back.
+  const libraryBytes = async (workspace, set, name) => {
+    const { rows } = await db.query(
+      `SELECT COALESCE(SUM(octet_length(COALESCE(icon_data,svg_data))),0)::bigint AS used
+         FROM icons
+        WHERE workspace_id=$1 AND NOT (set_name=$2 AND name=$3)`,
+      [workspace, set, name],
+    );
+    return Number(rows[0].used);
+  };
+
   const store = async (
     workspace,
     set,
@@ -145,6 +185,14 @@ export function installIcons(
     category = "General",
     displayName = null,
   ) => {
+    const used = await libraryBytes(workspace, set, name);
+    if (used + body.length > MAX_WORKSPACE_LIBRARY_BYTES)
+      fail(
+        413,
+        `This workspace's icon library is full (${readableSize(
+          MAX_WORKSPACE_LIBRARY_BYTES,
+        )}). Delete some icons before adding more.`,
+      );
     const { rows } = await db.query(
       `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,icon_data,source,license,created_by,category,display_name)
        VALUES($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8,$9,$10)
@@ -210,7 +258,9 @@ export function installIcons(
     const query = String(req.query.q || "")
       .trim()
       .slice(0, 80);
-    const category = String(req.query.category || "").trim().slice(0, 40);
+    const category = String(req.query.category || "")
+      .trim()
+      .slice(0, 40);
     const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
     const [{ rows }, categories] = await Promise.all([
       db.query(
@@ -287,7 +337,9 @@ export function installIcons(
 
   // Search the icon source by words, so an admin never has to guess exact names.
   app.get("/api/admin/icons/search", auth, admin, async (req, res) => {
-    const query = String(req.query.q || "").trim().slice(0, 60);
+    const query = String(req.query.q || "")
+      .trim()
+      .slice(0, 60);
     if (!query) return res.json({ results: [] });
     const response = await fetch(
       `${SOURCE}/search?query=${encodeURIComponent(query)}&limit=48`,
@@ -295,7 +347,9 @@ export function installIcons(
     );
     if (!response.ok) fail(502, "The icon source is unavailable right now.");
     const body = await response.json();
-    res.json({ results: Array.isArray(body.icons) ? body.icons.slice(0, 48) : [] });
+    res.json({
+      results: Array.isArray(body.icons) ? body.icons.slice(0, 48) : [],
+    });
   });
 
   // Previews are proxied so the page can show them without reaching outside.
@@ -307,7 +361,8 @@ export function installIcons(
     res.set({
       "Content-Type": "image/svg+xml",
       "Cache-Control": "private, max-age=86400",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'",
     });
     res.send(body);
   });
