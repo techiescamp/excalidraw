@@ -738,6 +738,27 @@ test("private workspace backend", async (t) => {
       );
     },
   );
+  await t.test(
+    "an asset key that points at a directory 404s instead of killing the server",
+    async () => {
+      // PUT stores an asset under files/<scope>/<id>/<fileId>/<uuid>, so the
+      // fileId itself is a directory. When the scene_files row is missing the
+      // GET falls back to that directory path, and streaming a directory used
+      // to raise an unhandled EISDIR that took the whole API process down.
+      const scene = await createDrawing();
+      const fileId = crypto.randomUUID();
+      await mkdir(path.join(storage, "files", "scenes", scene.id, fileId), {
+        recursive: true,
+      });
+      assert.equal(
+        (await call(`/files/scenes/${scene.id}/${fileId}`, { cookie: admin }))
+          .status,
+        404,
+      );
+      // The process has to still be serving afterwards.
+      assert.equal((await call("/me", { cookie: admin })).status, 200);
+    },
+  );
   await t.test("generic credentials, CSRF, and revocable logout", async () => {
     for (const username of ["missing", "viewer"]) {
       const result = await call("/auth/login", {
