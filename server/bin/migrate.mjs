@@ -27,6 +27,7 @@ try {
     "migration-015-icon-postgres-data.sql",
     "migration-016-icon-categories.sql",
     "migration-017-icon-image-data.sql",
+    "migration-018-shared-icons.sql",
   ];
   const checks = [
     "users",

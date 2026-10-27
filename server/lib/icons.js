@@ -223,8 +223,14 @@ export function installIcons(
     const ref = normal(reference);
     if (!REF.test(ref)) return null;
     const [set, name] = ref.split("/");
+    // The library is shared, so an icon saved in another workspace counts.
+    // Two workspaces may hold the same set/name, so the caller's own copy wins
+    // and the oldest otherwise, which keeps the answer stable.
     const { rows } = await db.query(
-      "SELECT * FROM icons WHERE workspace_id=$1 AND set_name=$2 AND name=$3",
+      `SELECT * FROM icons
+        WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+        ORDER BY (workspace_id=$1) DESC, created_at ASC
+        LIMIT 1`,
       [workspace, set.toLowerCase(), name.toLowerCase()],
     );
     let icon = rows[0];
@@ -264,15 +270,17 @@ export function installIcons(
     const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
     const [{ rows }, categories] = await Promise.all([
       db.query(
-        `SELECT set_name,name,mime,source,license,created_at,category,display_name
-       FROM icons WHERE workspace_id=$1
+        `SELECT DISTINCT ON (set_name,name)
+         set_name,name,mime,source,license,created_at,category,display_name
+       FROM icons WHERE (workspace_id=$1 OR shared)
        AND ($2::text='' OR set_name ILIKE '%'||$2||'%' OR name ILIKE '%'||$2||'%' OR display_name ILIKE '%'||$2||'%')
        AND ($3::text='' OR category=$3)
-       ORDER BY category,COALESCE(display_name,name),set_name,name LIMIT $4`,
+       ORDER BY set_name,name,(workspace_id=$1) DESC,created_at ASC
+       LIMIT $4`,
         [req.params.workspace, query, category, limit],
       ),
       db.query(
-        "SELECT DISTINCT category FROM icons WHERE workspace_id=$1 ORDER BY category",
+        "SELECT DISTINCT category FROM icons WHERE (workspace_id=$1 OR shared) ORDER BY category",
         [req.params.workspace],
       ),
     ]);
@@ -314,7 +322,9 @@ export function installIcons(
       const [set, name] = reference.split("/");
       const { rows } = await db.query(
         `SELECT mime,s3_key,svg_data,icon_data FROM icons
-         WHERE workspace_id=$1 AND set_name=$2 AND name=$3`,
+         WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+         ORDER BY (workspace_id=$1) DESC, created_at ASC
+         LIMIT 1`,
         [req.params.workspace, set, name],
       );
       const icon = rows[0];

@@ -162,6 +162,7 @@ before(async () => {
     "migration-015-icon-postgres-data.sql",
     "migration-016-icon-categories.sql",
     "migration-017-icon-image-data.sql",
+    "migration-018-shared-icons.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -2272,6 +2273,46 @@ test("private workspace backend", async (t) => {
         },
       });
       assert.equal(denied.status, 403);
+
+      // The point of a shared library: one person saves an icon and everyone
+      // else can find and use it, including from a different workspace.
+      const seenByAdmin = await call(
+        `/workspaces/${workspace}/icons?category=Programming`,
+        { cookie: admin },
+      );
+      assert.deepEqual(
+        seenByAdmin.body.icons.map((icon) => icon.display_name),
+        ["Python"],
+        "another member of the same workspace should see it",
+      );
+
+      const seenByViewer = await call(
+        `/workspaces/${workspace}/icons?category=Programming`,
+        { cookie: viewer.cookie },
+      );
+      assert.deepEqual(
+        seenByViewer.body.icons.map((icon) => icon.display_name),
+        ["Python"],
+        "someone who may read but not edit should still see it",
+      );
+
+      const fromOtherWorkspace = await call(
+        `/workspaces/${otherWorkspace}/icons?category=Programming`,
+        { cookie: admin },
+      );
+      assert.deepEqual(
+        fromOtherWorkspace.body.icons.map((icon) => icon.display_name),
+        ["Python"],
+        "a different workspace should see the shared icon",
+      );
+
+      // And can fetch the bytes, not merely see it listed.
+      const borrowed = await fetch(
+        `${origin}/api/workspaces/${otherWorkspace}/icons/${saved.body.icon.set_name}/${saved.body.icon.name}`,
+        { headers: { Cookie: admin } },
+      );
+      assert.equal(borrowed.status, 200);
+      assert.deepEqual(Buffer.from(await borrowed.arrayBuffer()), bytes);
     },
   );
   await t.test(

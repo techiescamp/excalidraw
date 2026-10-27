@@ -50,6 +50,7 @@ for (const file of [
   "migration-015-icon-postgres-data.sql",
   "migration-016-icon-categories.sql",
   "migration-017-icon-image-data.sql",
+    "migration-018-shared-icons.sql",
 ])
   await db.query(
     await readFile(new URL("../" + file, import.meta.url), "utf8"),
