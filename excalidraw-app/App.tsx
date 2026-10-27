@@ -135,6 +135,8 @@ import {
 
 import { loadFilesFromFirebase } from "./data/firebase";
 import {
+  getActiveWorkspaceId,
+  subscribeActiveWorkspace,
   getWorkspaceSceneId,
   workspaceEditorLocation,
   getWorkspaceUserLabel,
@@ -167,10 +169,23 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 
 import "./index.scss";
 
-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { AddIconDialog } from "./components/AddIconDialog";
 
 import type { CollabAPI } from "./collab/Collab";
+
+const API = import.meta.env.VITE_APP_API_URL || "/api";
+const ICON_IMAGE_MIME_TYPES = new Set([
+  "image/svg+xml",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/x-icon",
+  "image/avif",
+  "image/jfif",
+]);
 
 polyfill();
 
@@ -424,6 +439,27 @@ const initializeScene = async (opts: {
   return { scene: null, isExternalScene: false };
 };
 
+// Snapping is what makes two images line up instead of nearly lining up. The
+// editor ships with it off, behind a menu item nobody opens, so in practice it
+// did not exist. Every way of opening a drawing passes through here — the
+// dashboard's `?scene=`, a shared link, a local scratch canvas — so the default
+// is applied once, in one place, rather than at each of them. Anything that
+// already said what it wants keeps it.
+const withDefaultSnapping = (
+  scene: ExcalidrawInitialDataState | null,
+): ExcalidrawInitialDataState | null => {
+  if (!scene) {
+    return scene;
+  }
+  if (scene.appState?.objectsSnapModeEnabled !== undefined) {
+    return scene;
+  }
+  return {
+    ...scene,
+    appState: { ...scene.appState, objectsSnapModeEnabled: true },
+  };
+};
+
 const ExcalidrawWrapper = () => {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const excalidrawAPI = useExcalidrawAPI();
@@ -451,6 +487,15 @@ const ExcalidrawWrapper = () => {
     location: string;
     source: string;
   } | null>(null);
+  const [iconImageJob, setIconImageJob] = useState<{
+    targetId: string;
+    fileId: FileId;
+    version: number;
+    sceneId: string | null;
+    location: string;
+    source: string;
+    workspace: string;
+  } | null>(null);
   const workspacePermissions = useSyncExternalStore(
     subscribeWorkspacePermissions,
     getWorkspacePermissions,
@@ -462,6 +507,77 @@ const ExcalidrawWrapper = () => {
   const [langCode, setLangCode] = useAppLangCode();
 
   const editorInterface = useEditorInterface();
+  // The workspace becomes known only once the drawing has loaded, which is
+  // after the first render. Read once and it stays null for good, taking the
+  // icon library's toolbar button and context-menu entry with it.
+  const activeWorkspaceId = useSyncExternalStore(
+    subscribeActiveWorkspace,
+    getActiveWorkspaceId,
+    getActiveWorkspaceId,
+  );
+
+  const customContextMenuItems = useMemo<
+    NonNullable<ExcalidrawProps["customContextMenuItems"]>
+  >(() => {
+    if (!activeWorkspaceId || !workspacePermissions?.["drawing.edit"]) {
+      return [];
+    }
+    return [
+      {
+        name: "addImageToIconLibrary",
+        label: "labels.addIconToLibrary",
+        trackEvent: false,
+        predicate: (elements, appState) => {
+          if (appState.viewModeEnabled) {
+            return false;
+          }
+          const selected = elements.filter(
+            (element) => appState.selectedElementIds[element.id],
+          );
+          if (
+            selected.length !== 1 ||
+            !isInitializedImageElement(selected[0])
+          ) {
+            return false;
+          }
+          const file = excalidrawAPI?.getFiles()[selected[0].fileId];
+          return Boolean(
+            !selected[0].isDeleted &&
+              !selected[0].locked &&
+              file &&
+              ICON_IMAGE_MIME_TYPES.has(file.mimeType),
+          );
+        },
+        perform: (elements, appState) => {
+          const image = elements.find(
+            (element) => appState.selectedElementIds[element.id],
+          );
+          if (!image || !isInitializedImageElement(image)) {
+            return false;
+          }
+          const file = excalidrawAPI?.getFiles()[image.fileId];
+          const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
+          if (
+            !file ||
+            !ownerWindow ||
+            !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+          ) {
+            return false;
+          }
+          setIconImageJob({
+            targetId: image.id,
+            fileId: image.fileId,
+            version: image.version,
+            sceneId: getWorkspaceSceneId(),
+            location: ownerWindow.location.href,
+            source: file.dataURL,
+            workspace: activeWorkspaceId,
+          });
+          return { captureUpdate: CaptureUpdateAction.NEVER };
+        },
+      },
+    ];
+  }, [activeWorkspaceId, excalidrawAPI, workspacePermissions]);
 
   // initial state
   // ---------------------------------------------------------------------------
@@ -646,7 +762,9 @@ const ExcalidrawWrapper = () => {
 
     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
       loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(data.scene);
+      initialStatePromiseRef.current.promise.resolve(
+        withDefaultSnapping(data.scene),
+      );
     });
 
     const onHashChange = async (event: HashChangeEvent) => {
@@ -1002,6 +1120,67 @@ const ExcalidrawWrapper = () => {
     [],
   );
 
+  const saveCanvasImageAsIcon = useCallback(
+    async (name: string, category: string) => {
+      if (!iconImageJob || !excalidrawAPI) {
+        throw new Error("Select an image on the canvas and try again.");
+      }
+      const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
+      if (
+        !ownerWindow ||
+        getActiveWorkspaceId() !== iconImageJob.workspace ||
+        getWorkspaceSceneId() !== iconImageJob.sceneId ||
+        ownerWindow.location.href !== iconImageJob.location ||
+        !workspacePermissions?.["drawing.edit"] ||
+        excalidrawAPI.getAppState().viewModeEnabled
+      ) {
+        throw new Error("The drawing changed or editing is unavailable.");
+      }
+      const current = excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .find((element) => element.id === iconImageJob.targetId);
+      const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
+      if (
+        !current ||
+        !isInitializedImageElement(current) ||
+        current.isDeleted ||
+        current.locked ||
+        current.version !== iconImageJob.version ||
+        current.fileId !== iconImageJob.fileId ||
+        !file ||
+        file.dataURL !== iconImageJob.source ||
+        !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+      ) {
+        throw new Error("The selected image changed. Select it and retry.");
+      }
+      const response = await ownerWindow.fetch(
+        `${API}/workspaces/${encodeURIComponent(iconImageJob.workspace)}/icons`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Excalidraw-Request": "1",
+          },
+          body: JSON.stringify({
+            data_url: iconImageJob.source,
+            display_name: name,
+            category,
+          }),
+        },
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "Could not save this icon.");
+      }
+      ownerWindow.dispatchEvent(
+        new ownerWindow.Event("workspace-icons-updated"),
+      );
+      excalidrawAPI.setToast({ message: `${name} added to the icon library.` });
+    },
+    [excalidrawAPI, iconImageJob, workspacePermissions],
+  );
+
   // const onExport = () => {
   //   return new Promise((r) => setTimeout(r, 2500));
   //   // console.log("onExport");
@@ -1074,6 +1253,7 @@ const ExcalidrawWrapper = () => {
       })}
     >
       <Excalidraw
+        customContextMenuItems={customContextMenuItems}
         libraryReturnUrl={libraryReturnUrl}
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
@@ -1136,60 +1316,100 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
-        renderToolbarActions={() => {
+        renderToolbarActions={(toolbarAppState) => {
           const canProcessImage =
             selectedImage &&
             excalidrawAPI &&
             !excalidrawAPI.getAppState().viewModeEnabled &&
             (!workspacePermissions || workspacePermissions["drawing.edit"]);
 
+          const iconsOpen =
+            toolbarAppState.openSidebar?.name === "default" &&
+            toolbarAppState.openSidebar?.tab === "icons";
+
           return (
-            <IconButton
-              type="button"
-              aria-label="Remove background"
-              title="Remove background"
-              data-testid="toolbar-remove-background"
-              disabled={!canProcessImage}
-              icon={
-                <svg
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 12h9V3M12 12h9M12 12v9" />
-                  <path
-                    d="m7 17 2 2 3-4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              }
-              onClick={() => {
-                if (!selectedImage || !excalidrawAPI) {
-                  return;
+            <>
+              {activeWorkspaceId && (
+                // The icon library was reachable only by opening the sidebar
+                // and finding the right tab, which nobody did. It sits in the
+                // toolbar now, beside the tools it belongs with.
+                <IconButton
+                  type="button"
+                  aria-label="Icon library"
+                  title="Icon library"
+                  data-testid="toolbar-icon-library"
+                  className={iconsOpen ? "active" : undefined}
+                  icon={
+                    <svg
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      aria-hidden="true"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                      <rect x="14" y="3" width="7" height="7" rx="3.5" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                      <path d="M17.5 14v7M14 17.5h7" strokeLinecap="round" />
+                    </svg>
+                  }
+                  onClick={() => {
+                    excalidrawAPI?.toggleSidebar({
+                      name: "default",
+                      tab: "icons",
+                    });
+                  }}
+                />
+              )}
+              <IconButton
+                type="button"
+                aria-label="Remove background"
+                title="Remove background"
+                data-testid="toolbar-remove-background"
+                disabled={!canProcessImage}
+                icon={
+                  <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    aria-hidden="true"
+                  >
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 12h9V3M12 12h9M12 12v9" />
+                    <path
+                      d="m7 17 2 2 3-4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 }
-                const source =
-                  excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
-                if (source) {
-                  setImageJob({
-                    operation: "flat-background",
-                    targetId: selectedImage.id,
-                    fileId: selectedImage.fileId,
-                    version: selectedImage.version,
-                    sceneId: getWorkspaceSceneId(),
-                    location:
-                      wrapperRef.current?.ownerDocument.defaultView?.location
-                        .href || "",
-                    source,
-                  });
-                }
-              }}
-            />
+                onClick={() => {
+                  if (!selectedImage || !excalidrawAPI) {
+                    return;
+                  }
+                  const source =
+                    excalidrawAPI.getFiles()[selectedImage.fileId]?.dataURL;
+                  if (source) {
+                    setImageJob({
+                      operation: "flat-background",
+                      targetId: selectedImage.id,
+                      fileId: selectedImage.fileId,
+                      version: selectedImage.version,
+                      sceneId: getWorkspaceSceneId(),
+                      location:
+                        wrapperRef.current?.ownerDocument.defaultView?.location
+                          .href || "",
+                      source,
+                    });
+                  }
+                }}
+              />
+            </>
           );
         }}
         renderTopRightUI={(isMobile) => {
@@ -1199,14 +1419,8 @@ const ExcalidrawWrapper = () => {
 
           return (
             <div className="excalidraw-ui-top-right">
-              {import.meta.env.VITE_APP_PLUS_LP &&
-                excalidrawAPI?.getEditorInterface().formFactor ===
-                  "desktop" && (
-                  <ExcalidrawPlusPromoBanner
-                    isSignedIn={isExcalidrawPlusSignedUser}
-                  />
-                )}
-
+              {/* This is a self-hosted workspace, so the Excalidraw+ promotion
+                  that normally sits beside Share is not shown. */}
               {collabError.message && <CollabError collabError={collabError} />}
               <LiveCollaborationTrigger
                 isCollaborating={isCollaborating}
@@ -1303,6 +1517,15 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
+
+        {iconImageJob && (
+          <AddIconDialog
+            workspace={iconImageJob.workspace}
+            source={iconImageJob.source}
+            onClose={() => setIconImageJob(null)}
+            onSave={saveCanvasImageAsIcon}
+          />
+        )}
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>

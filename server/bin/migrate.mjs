@@ -24,6 +24,11 @@ try {
     "migration-012-oauth.sql",
     "migration-013-icons.sql",
     "migration-014-blobs.sql",
+    "migration-015-icon-postgres-data.sql",
+    "migration-016-icon-categories.sql",
+    "migration-017-icon-image-data.sql",
+    "migration-018-shared-icons.sql",
+    "migration-019-icon-dedupe.sql",
   ];
   const checks = [
     "users",
@@ -40,6 +45,9 @@ try {
     "oauth_clients",
     "icons",
     "workspace_blobs",
+    null,
+    null,
+    null,
   ];
   for (const [index, file] of files.entries()) {
     if (

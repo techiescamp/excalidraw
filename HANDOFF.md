@@ -95,6 +95,174 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-27 — Codex — publish icon work to dev
+
+Committed the icon-library and gallery changes as `c27cf9a3` on `Icons`,
+then merged fetched `origin/dev` through `c2f75454`, preserving the newer smart-
+guides history and all icon migrations.
+
+Checks passed on the merged source in a disposable copy: `yarn test:typecheck`,
+`yarn test:code`, `yarn test:other`, `yarn test:app --watch=false` (128 files;
+1927 passed, 47 skipped, 1 todo), the PostgreSQL server suite (59 passed), and
+`VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`.
+
+Pushed the icon feature merge to GitHub `dev` (`178b0c2e`), then pushed the
+final handoff-only status update. No production change.
+
+### 2026-10-27 — Claude — smart guides, and a default that was set in the wrong place
+
+**Branch:** `feature/smart-guides` → `dev`. CI green (5/5). Not on `main`: the owner is batching this release. Production stays on `v1.3.0`.
+
+Aligning two images was guesswork. Research first: `packages/excalidraw/ snapping.ts` already has edge/centre snapping **and** equal-gap detection, and `renderer/renderSnaps.ts` already draws the guides. Nothing needed rebuilding. What was missing was that it ships **off**, behind a menu item nobody opens, and that the guides never said what the distance was — no `fillText` anywhere in that file.
+
+So: snapping defaults on, and the gap guides carry the number.
+
+**The mistake worth remembering.** The default was first set while building the scene from local storage. A drawing opened from the dashboard never reaches that code — `initializeScene` returns as soon as the workspace scene loads — so it worked only on a blank scratch canvas, which nobody uses. Typecheck passed. 1,926 tests passed. It did nothing. It is now applied at the single point every load path goes through.
+
+**Two things that cost time, written down so they do not again:**
+
+- A shape with no fill can only be grabbed by its **outline** in Excalidraw. Dragging from the middle of a hollow rectangle does nothing, which looked for a while like snapping being broken.
+- Synthetic `PointerEvent`s do not reach the canvas; neither Excalidraw nor Canva accepts them. Driving the editor needs real input events.
+
+_Verified in the running editor, not only in tests:_ dropped a shape ~4px short of even spacing → it snapped to `gapAB 120, gapBC 120` exactly, and the canvas painted `"120"` twice at 14.52px under 76% zoom (11px on screen). Captured by recording every `fillText` during the drag. Before the fix the same drag left the shape 0.72px out with no snap. Plus 6 new unit tests in `renderer/renderSnaps.test.ts`.
+
+**Waiting on `dev` for the next release:** smart guides (2), Excalidraw+ button removed, 64 collection icons, sidebar cleanup, ⌘P finds collections.
+
+### 2026-10-27 — Codex — align and center the icon gallery
+
+On local branch `Icons`, improved the icon sidebar's edge spacing and visual
+balance. Added consistent panel padding, centered the responsive gallery, made
+the cards larger, wrapped long names, and styled categories as compact labels.
+Search, category filtering, selection, and canvas insertion remain in place.
+
+Verified in the browser at `http://127.0.0.1:55445`: the full gallery shows a
+centered two-column layout; filtering to Programming shows two centered cards
+with full names; selecting the saved Python demo icon enables **Add to canvas**.
+The scene remained **Saved**. The browser uses a disposable copy under
+`/private/tmp/excalidraw-icons-style-preview` and the local test database.
+
+The editor build passed from that disposable copy. `prettier --check
+excalidraw-app/components/AppSidebar.scss` and `git diff --check` passed. No
+tests were added or run for this CSS-only refinement. Existing non-fatal build
+warnings remain. No commit, push, merge, or production change.
+
+### 2026-10-27 — Codex — local icon workflow walkthrough
+
+No source changes in this turn. Reopened the disposable local editor at
+`http://127.0.0.1:55445` and showed the flow in the browser: right-click a
+canvas image, choose **Add image to icon library**, enter a name/category, then
+open the **Icons** tab, filter to **Programming**, select the saved Python icon,
+and choose **Add to canvas**. The canvas showed the added icon and **Saved**;
+the browser is left on the selected gallery item. The example is in the local
+test workspace/scene listed below. No commit, push, merge, or production change.
+
+### 2026-10-26 — Codex — add canvas images to workspace icons
+
+Plan and implementation on local branch `Icons`: remove icon management from
+Dashboard Administration. Add an **Add image to icon library** action to an
+image's editor context menu, collect a name and category, and save it in the
+workspace PostgreSQL icon library. Improve the editor gallery, category filter,
+and canvas insertion. Keep all work local; do not commit, push, merge, or deploy.
+
+Implemented the updated flow, image validation/storage and migration `017`,
+legacy `svg_data`/object-storage reads, workspace permission checks, and an
+audit event. Added/kept migrations `015` and `016` for prior PostgreSQL icon
+storage and category metadata. Removed the Icons admin tab and its management
+UI. Added tests for admin removal, image import/permissions, and context-menu
+integration. Updated `docs/specs/icons.md` to match the requested UX.
+
+Verified in the disposable local browser app at `http://127.0.0.1:55445`:
+right-clicked the canvas Python image, saved it as “Python demo icon” with the
+“Programming” category, filtered the gallery to Programming, selected it, and
+inserted it on the canvas. The browser showed the new icon in the gallery and
+on the canvas with the scene in **Saved** state. The local-only disposable
+workspace/scene are `572e1911-3516-4ef5-a763-04bdd754d766` and
+`aca8ac10-25b4-41cd-bd72-b7604a52d852`.
+
+Checks passed: `yarn test:typecheck`, `yarn test:code`, `yarn test:other`,
+`yarn test:app --watch=false` (127 files; 1921 passed, 47 skipped, 1 todo),
+full PostgreSQL server suite (59 passed, 0 failed), editor production build,
+focused icon-category/admin tests, and `git diff --check`. The app test runner
+reported 5 obsolete snapshots; the generated snapshot diff was reverted.
+Existing non-fatal parser/build warnings remain.
+
+**Not done:** no commit, push, merge, or production change. The preview and
+demo icon/drawing are local only.
+
+### 2026-10-26 — Codex — workspace icon gallery
+
+Plan on local branch `Icons`: add a searchable editor sidebar gallery for
+icons already available in a workspace, insert a selected SVG onto the open
+canvas, and store newly imported SVG bytes in PostgreSQL. Preserve reads of
+legacy object-storage icons. Write the feature spec before code, test workspace
+access and insertion, verify the local editor, and do not push or deploy.
+
+Added `docs/specs/icons.md` before implementation. The editor now has an
+**Icons** sidebar tab for searching the active workspace library; selecting an
+icon inserts its SVG onto the canvas, and the library is available to workspace
+members with drawing access. Admin-imported SVG bytes are stored in PostgreSQL
+through migration `015`; reads of legacy object-storage icons remain supported.
+The gallery shows icons curated into that workspace through Dashboard → Icons,
+not the full Iconify catalog.
+
+Verified locally:
+
+- Red-before-green integration test: the new endpoint test failed before its
+  route existed; after implementation the full PostgreSQL server suite passed
+  (**55 passed, 0 failed**) against a disposable local PostgreSQL instance.
+- `yarn test:typecheck`, `yarn test:code`, `yarn test:other`, and
+  `yarn test:app --watch=false` passed (**127 files; 1920 passed, 47 skipped,
+  1 todo**).
+- `VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`
+  passed.
+- `git diff --check` passed.
+- Local browser preview on `http://127.0.0.1:55443/index.html?scene=07c89f6e-a4d2-456d-ba8c-2d6758e4a0fe&returnTo=%2Fdashboard`:
+  searched and inserted the test `spark` icon, saw it saved after reload, and
+  confirmed Undo removed the latest insertion. The dev instance serves the
+  editor through `/index.html`; its `/editor` path returned 404 in this local
+  setup.
+
+**Not done:** no commit, push, merge, or production deploy. Only a disposable
+`local/spark` icon is in the preview database; admins need to import the icons
+they want in each workspace.
+
+### 2026-10-26 — Claude — workspace UI cleanup, held on `dev`
+
+**Branch:** `feature/workspace-ui-cleanup` → `dev`. CI green (5/5). **Deliberately not on `main`:** more work is coming and it ships in one release, by the owner's decision. Production stays on `v1.3.0`.
+
+Four things, all reported from using the workspace:
+
+- The Excalidraw+ promotion beside Share is gone. This install is self-hosted, so it advertised something nobody here can buy (`excalidraw-app/App.tsx`, `renderTopRightUI`).
+- Collection icons: 16 → 64, grouped by what collections get named after, and the grid scrolls instead of stretching the dialog.
+- Workspace settings and Team members are no longer sidebar rows. Both are tabs of Administration, linked at the foot of the same sidebar, so nothing became unreachable and the collection list gets the height.
+- Quick search (⌘P) only ever asked `/scenes`, so a collection could not be found by name. Collections are matched in memory and listed first with their icon. The in-page "Search scenes" filter is still scenes only, on purpose — it carries a scene count.
+
+_Verified_ on the disposable instance in a browser: sidebar rows gone, picker full and scrolling with a pick that stuck, `gpu` finds "GPU Course — Collection", `draft` still finds the scene, editor top-right at 1440px shows only Share. 1920 frontend tests, 54 server tests, typecheck, lint, prettier.
+
+_Also this session:_ `v1.3.0` deployed and checked live 10 minutes after — dashboard, thumbnails, a drawing with images, no console errors.
+
+---
+
+### 2026-10-26 — Claude — recovered drafts now merge; deploy announcements rewritten
+
+**Branches:** `fix/draft-merge`, `fix/deploy-notifications` → `dev` → `main`. **Tag:** `v1.3.0` (artifacts built). **Not deployed** — waiting on approval.
+
+_Draft merge._ Opening a drawing that the server had moved past while a local draft sat in IndexedDB showed "Drawing changed on the server. Save your draft as a copy or reload." and left the author to reconcile by hand. The server has merged stale saves element by element since v1.2.0, so the editor now sends the draft to be merged and carries on (`excalidraw-app/data/workspaceScene.ts`, `loadWorkspaceScene`).
+
+**The trap, worth knowing:** the draft must be sent at _its own_ version, not the server's. A save at the version the server is already on **replaces** the scene; only a save it can see is behind is merged. The first version of this fix sent the server's version and silently discarded the other person's work. It was caught in the browser, not by a check. `server/test/private-workspaces. test.js` now pins the replace-vs-merge difference.
+
+_Verified:_ 54/54 server tests, typecheck, lint, prettier, editor build, CI green on `dev`. End-to-end in a browser against the disposable instance: a draft taken at v6 plus another person's save at v7 → all five elements kept, draft cleared from IndexedDB, no error banner.
+
+_Deploy announcements._ The Discord messages printed the characters `\n` instead of breaking the line — a backslash escape in double quotes is not expanded by bash, and `jq --arg` passes it through. Rebuilt with `printf`, and the facts are embed fields now (version, health, who, how long, rollback, link), with a closing line picked from a few. `.github/scripts/notify-discord. sh`, timing passed from `deploy.yml`.
+
+_Teardown race._ Server tests went red on CI while passing locally: every test passed, then dropping the test database terminated backends that had not finished closing, which became an uncaughtException and failed the whole file. Teardown now waits for them to clear, and pool errors are ignored only once teardown has started.
+
+_New rule in `DEVELOPMENT.md` §2a.10:_ a green health check is not a verified deploy. Wait 5–10 minutes after the release goes live, then open the site, sign in, open a drawing, and exercise what changed.
+
+**Left open:** `v1.3.0` is not deployed. Nothing deployable changed after the tag (`git diff --name-only v1.3.0 main` is CI, docs and tests only), and the deploy workflow runs from `main`, so the new announcements will be used.
+
+---
+
 ### 2026-10-26 — Claude — a release that built, passed and did nothing
 
 The first two releases cut through the pipeline, v1.0.0 and v1.1.0, were built

@@ -27,7 +27,7 @@ import {
 } from "./test-utils";
 
 import type { ShortcutName } from "../actions/shortcuts";
-import type { ActionName } from "../actions/types";
+import type { Action, ActionName } from "../actions/types";
 
 const checkpoint = (name: string) => {
   expect(renderStaticScene.mock.calls.length).toMatchSnapshot(
@@ -43,6 +43,7 @@ const checkpoint = (name: string) => {
 };
 
 const mouse = new Pointer("mouse");
+let skipCheckpoint = false;
 
 unmountComponent();
 
@@ -51,6 +52,7 @@ beforeEach(() => {
   localStorage.clear();
   renderStaticScene.mockClear();
   reseed(7);
+  skipCheckpoint = false;
 });
 
 const { h } = window;
@@ -74,7 +76,9 @@ describe("contextMenu element", () => {
   });
 
   afterEach(() => {
-    checkpoint("end of test");
+    if (!skipCheckpoint) {
+      checkpoint("end of test");
+    }
 
     mouse.reset();
     mouse.down(0, 0);
@@ -146,6 +150,33 @@ describe("contextMenu element", () => {
         contextMenu?.querySelector(`li[data-testid="${item}"]`),
       ).not.toBeNull();
     });
+  });
+
+  it("adds host-provided context menu actions to element menus", async () => {
+    skipCheckpoint = true;
+    const customAction: Action = {
+      name: "addImageToIconLibrary",
+      label: "labels.addToLibrary",
+      perform: () => false,
+      trackEvent: false as const,
+    };
+    unmountComponent();
+    await render(<Excalidraw customContextMenuItems={[customAction]} />);
+    UI.clickTool("rectangle");
+    mouse.down(0, 0);
+    mouse.up(10, 10);
+
+    fireEvent.contextMenu(GlobalTestState.interactiveCanvas, {
+      button: 2,
+      clientX: 3,
+      clientY: 3,
+    });
+
+    expect(
+      UI.queryContextMenu()?.querySelector(
+        'li[data-testid="addImageToIconLibrary"]',
+      ),
+    ).not.toBeNull();
   });
 
   it("shows context menu for element", () => {

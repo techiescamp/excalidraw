@@ -124,6 +124,12 @@ let userId = "";
 let userLabel = "Account";
 let permissions: Record<string, boolean> | null = null;
 const listeners = new Set<() => void>();
+const activeWorkspaceListeners = new Set<() => void>();
+export const subscribeActiveWorkspace = (listener: () => void) => {
+  activeWorkspaceListeners.add(listener);
+  return () => activeWorkspaceListeners.delete(listener);
+};
+export const getActiveWorkspaceId = () => active?.workspace ?? null;
 export const subscribeWorkspacePermissions = (listener: () => void) => {
   listeners.add(listener);
   return () => {
@@ -1399,6 +1405,7 @@ export async function loadWorkspaceScene(
     acknowledged: 0,
   };
   active = session;
+  activeWorkspaceListeners.forEach((listener) => listener());
   sessions.set(id, session);
   // The server hands the editor references rather than the image bytes; fetch
   // them before anything reads the scene, so the rest of this file sees the

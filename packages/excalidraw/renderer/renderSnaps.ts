@@ -2,6 +2,8 @@ import { pointFrom, type GlobalPoint, type LocalPoint } from "@excalidraw/math";
 
 import { THEME } from "@excalidraw/common";
 
+import { roundRect } from "./roundRect";
+
 import type { PointSnapLine, PointerSnapLine } from "../snapping";
 import type { InteractiveCanvasAppState } from "../types";
 
@@ -12,6 +14,14 @@ const SNAP_COLOR_DARK = "#ff9090";
 const SNAP_COLOR_DARK_ZEN = "#da5b5b";
 const SNAP_WIDTH = 1;
 const SNAP_CROSS_SIZE = 2;
+// The label reads the same at every zoom, so its sizes are divided by the zoom
+// just as the line widths are.
+const SNAP_LABEL_FONT_SIZE = 11;
+const SNAP_LABEL_PADDING_X = 4;
+const SNAP_LABEL_PADDING_Y = 2;
+const SNAP_LABEL_OFFSET = 10;
+const FONT_FAMILY_LABEL =
+  "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
 export const renderSnaps = (
   context: CanvasRenderingContext2D,
@@ -53,6 +63,17 @@ export const renderSnaps = (
         snapLine.direction,
         appState,
         context,
+      );
+
+      // The guides show that two gaps match; the number says what they are, so
+      // an icon can be placed at a known distance rather than a plausible one.
+      drawGapLabel(
+        snapLine.points[0],
+        snapLine.points[1],
+        snapLine.direction,
+        appState,
+        context,
+        snapColor,
       );
     } else if (snapLine.type === "points") {
       context.lineWidth = snapWidth;
@@ -210,4 +231,55 @@ const drawGapLine = <Point extends LocalPoint | GlobalPoint>(
       drawLine(from, to, context);
     }
   }
+};
+
+const drawGapLabel = <Point extends LocalPoint | GlobalPoint>(
+  from: Point,
+  to: Point,
+  direction: "horizontal" | "vertical",
+  appState: InteractiveCanvasAppState,
+  context: CanvasRenderingContext2D,
+  snapColor: string,
+) => {
+  // Zen mode hides the lines themselves, so it does not want a number either.
+  if (appState.zenModeEnabled) {
+    return;
+  }
+
+  const horizontal = direction === "horizontal";
+  const gap = Math.round(
+    Math.abs(horizontal ? to[0] - from[0] : to[1] - from[1]),
+  );
+  // Touching edges are not worth a label, and a sub-pixel one would only be
+  // rounding noise.
+  if (gap < 1) {
+    return;
+  }
+
+  const zoom = appState.zoom.value;
+  const fontSize = SNAP_LABEL_FONT_SIZE / zoom;
+  const paddingX = SNAP_LABEL_PADDING_X / zoom;
+  const paddingY = SNAP_LABEL_PADDING_Y / zoom;
+  const offset = SNAP_LABEL_OFFSET / zoom;
+
+  context.save();
+  context.font = `${fontSize}px ${FONT_FAMILY_LABEL}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  const text = String(gap);
+  const width = context.measureText(text).width + paddingX * 2;
+  const height = fontSize + paddingY * 2;
+  // Beside the line rather than on it, so the number never sits on top of the
+  // guide it is describing.
+  const x = horizontal ? (from[0] + to[0]) / 2 : from[0] + offset + width / 2;
+  const y = horizontal ? from[1] - offset - height / 2 : (from[1] + to[1]) / 2;
+
+  context.fillStyle = snapColor;
+  roundRect(context, x - width / 2, y - height / 2, width, height, 2 / zoom);
+  context.fill();
+
+  context.fillStyle = "#ffffff";
+  context.fillText(text, x, y);
+  context.restore();
 };

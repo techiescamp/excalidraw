@@ -6,7 +6,29 @@ import { fail, uuid, audit } from "./core.js";
 // the same icon is never downloaded twice.
 const SOURCE = "https://api.iconify.design";
 const MAX_BYTES = 256 * 1024;
+const MAX_WORKSPACE_ICON_BYTES = 5 * 1024 * 1024;
+// Icon bytes live in PostgreSQL, which is the expensive storage and the one
+// every backup carries. Without a ceiling a workspace could quietly put gigabytes
+// there one 5 MB icon at a time, which is the problem the drawings themselves
+// were just moved out of the database to avoid.
+const MAX_WORKSPACE_LIBRARY_BYTES =
+  Number(process.env.ICON_LIBRARY_MAX_BYTES) > 0
+    ? Number(process.env.ICON_LIBRARY_MAX_BYTES)
+    : 256 * 1024 * 1024;
 const MAX_IMPORT = 40;
+const MAX_CATEGORY_LENGTH = 40;
+const MAX_DISPLAY_NAME_LENGTH = 80;
+const WORKSPACE_ICON_MIMES = new Set([
+  "image/svg+xml",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/x-icon",
+  "image/avif",
+  "image/jfif",
+]);
 const REF = /^[a-z0-9][a-z0-9_-]{0,59}\/[a-z0-9][a-z0-9._-]{0,79}$/i;
 const TIMEOUT_MS = 8000;
 // The icon source names things "set:name"; this library uses "set/name".
@@ -15,8 +37,99 @@ const normal = (value) =>
     .trim()
     .toLowerCase()
     .replace(":", "/");
+const categoryValue = (value) => {
+  const category = String(value || "General").trim();
+  if (!category || category.length > MAX_CATEGORY_LENGTH)
+    fail(400, `Category must be 1–${MAX_CATEGORY_LENGTH} characters.`);
+  return category;
+};
+const displayNameValue = (value) => {
+  const displayName = String(value || "").trim();
+  if (displayName.length > MAX_DISPLAY_NAME_LENGTH)
+    fail(
+      400,
+      `Icon name must be ${MAX_DISPLAY_NAME_LENGTH} characters or less.`,
+    );
+  return displayName || null;
+};
+const parseCanvasImage = (value) => {
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_WORKSPACE_ICON_BYTES * 1.4
+  ) {
+    fail(413, "Icons must be 5 MiB or smaller.");
+  }
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/i.exec(
+    value,
+  );
+  if (!match) fail(400, "Choose a supported image from the canvas.");
+  const mime = match[1].toLowerCase();
+  if (!WORKSPACE_ICON_MIMES.has(mime)) {
+    fail(415, "That image format is not supported for icons.");
+  }
+  const body = Buffer.from(match[2], "base64");
+  if (
+    !body.length ||
+    body.length > MAX_WORKSPACE_ICON_BYTES ||
+    body.toString("base64").replace(/=+$/, "") !== match[2].replace(/=+$/, "")
+  ) {
+    fail(400, "The image data is invalid.");
+  }
 
-export function installIcons(app, db, storage, { auth, admin, recent }) {
+  const startsWith = (...bytes) =>
+    body.length >= bytes.length &&
+    bytes.every((byte, index) => body[index] === byte);
+  const signatureMatches =
+    mime === "image/svg+xml"
+      ? (() => {
+          const svg = body.toString("utf8");
+          return (
+            /<svg\b/i.test(svg) &&
+            !/<\s*(?:script|foreignObject|!doctype|!entity)\b|\bon[a-z]+\s*=|javascript:|(?:href|xlink:href)\s*=\s*["'](?!#)|url\s*\(\s*["']?(?!#)/i.test(
+              svg,
+            )
+          );
+        })()
+      : mime === "image/png"
+      ? startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+      : mime === "image/jpeg" || mime === "image/jfif"
+      ? startsWith(0xff, 0xd8, 0xff)
+      : mime === "image/gif"
+      ? body
+          .subarray(0, 6)
+          .toString("ascii")
+          .match(/^GIF8[79]a$/)
+      : mime === "image/webp"
+      ? body.subarray(0, 4).toString("ascii") === "RIFF" &&
+        body.subarray(8, 12).toString("ascii") === "WEBP"
+      : mime === "image/bmp"
+      ? body.subarray(0, 2).toString("ascii") === "BM"
+      : mime === "image/x-icon"
+      ? startsWith(0x00, 0x00, 0x01, 0x00) || startsWith(0x00, 0x00, 0x02, 0x00)
+      : mime === "image/avif"
+      ? body.subarray(4, 8).toString("ascii") === "ftyp" &&
+        /^(?:avif|avis)$/.test(body.subarray(8, 12).toString("ascii"))
+      : false;
+  if (!signatureMatches) fail(400, "The image data does not match its format.");
+  return { body, mime };
+};
+const safeIconName = (value) => {
+  const slug = String(value || "icon")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")
+    .slice(0, 60);
+  return `${slug || "icon"}-${crypto.randomUUID().slice(0, 8)}`;
+};
+
+export function installIcons(
+  app,
+  db,
+  storage,
+  { auth, admin, recent, permit },
+) {
   const settings = async () =>
     (await db.query("SELECT value FROM app_settings WHERE key='icons'")).rows[0]
       ?.value || { fetch_enabled: false };
@@ -39,15 +152,98 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     return body;
   };
 
-  const store = async (workspace, set, name, body, mime, meta, actor) => {
-    const key = `icons/${workspace}/${set}/${crypto.randomUUID()}.svg`;
-    await storage.put(key, body, mime);
+  // A limit stated in bytes helps nobody, and rounding a small one to whole
+  // megabytes reports "0 MB", which reads as a bug.
+  const readableSize = (bytes) =>
+    bytes >= 1024 * 1024
+      ? `${Math.round(bytes / (1024 * 1024))} MB`
+      : bytes >= 1024
+      ? `${Math.round(bytes / 1024)} KB`
+      : `${bytes} bytes`;
+
+  // What the workspace is already holding, not counting the row this write
+  // replaces: re-saving an icon under the same name must not be refused for
+  // space it is about to give back.
+  // Bytes come from the shared store; the per-row columns are what rows saved
+  // before this release still carry, and the object key is older still.
+  const bytesFor = async (icon) => {
+    if (icon.digest) {
+      const { rows } = await db.query(
+        "SELECT bytes FROM icon_blobs WHERE digest=$1",
+        [icon.digest],
+      );
+      if (rows[0]) return rows[0].bytes;
+    }
+    return (
+      icon.icon_data ||
+      icon.svg_data ||
+      (icon.s3_key ? await storage.read(icon.s3_key) : null)
+    );
+  };
+
+  const libraryBytes = async (workspace, set, name) => {
+    // Each distinct image is counted once however many names point at it, so
+    // the ceiling measures what is actually stored rather than how often it
+    // was referenced.
     const { rows } = await db.query(
-      `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,source,license,created_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (workspace_id,set_name,name) DO UPDATE SET s3_key=EXCLUDED.s3_key,mime=EXCLUDED.mime
-       RETURNING id,set_name,name`,
-      [workspace, set, name, mime, key, meta.source, meta.license, actor],
+      `SELECT COALESCE(SUM(octet_length(blob.bytes)),0)::bigint AS used
+         FROM (SELECT DISTINCT digest FROM icons
+                WHERE workspace_id=$1 AND NOT (set_name=$2 AND name=$3)
+                  AND digest IS NOT NULL) AS used_digests
+         JOIN icon_blobs blob ON blob.digest = used_digests.digest`,
+      [workspace, set, name],
+    );
+    return Number(rows[0].used);
+  };
+
+  const store = async (
+    workspace,
+    set,
+    name,
+    body,
+    mime,
+    meta,
+    actor,
+    category = "General",
+    displayName = null,
+  ) => {
+    const used = await libraryBytes(workspace, set, name);
+    if (used + body.length > MAX_WORKSPACE_LIBRARY_BYTES)
+      fail(
+        413,
+        `This workspace's icon library is full (${readableSize(
+          MAX_WORKSPACE_LIBRARY_BYTES,
+        )}). Delete some icons before adding more.`,
+      );
+    // The image is named by what it contains, so the same logo added again —
+    // under any name, by anyone — lands on the row that is already there.
+    const digest = crypto.createHash("sha256").update(body).digest("hex");
+    await db.query(
+      `INSERT INTO icon_blobs(digest,bytes,mime) VALUES($1,$2,$3)
+       ON CONFLICT (digest) DO NOTHING`,
+      [digest, body, mime],
+    );
+    const { rows } = await db.query(
+      `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,icon_data,digest,source,license,created_by,category,display_name)
+       VALUES($1,$2,$3,$4,NULL,NULL,NULL,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (workspace_id,set_name,name) DO UPDATE
+       SET svg_data=NULL,icon_data=NULL,digest=EXCLUDED.digest,mime=EXCLUDED.mime,
+           source=EXCLUDED.source,license=EXCLUDED.license,
+           category=EXCLUDED.category,
+           display_name=COALESCE(EXCLUDED.display_name,icons.display_name)
+       RETURNING id,set_name,name,mime,s3_key,digest,category,display_name`,
+      [
+        workspace,
+        set,
+        name,
+        mime,
+        digest,
+        meta.source,
+        meta.license,
+        actor,
+        category,
+        displayName,
+      ],
     );
     return rows[0];
   };
@@ -57,8 +253,14 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     const ref = normal(reference);
     if (!REF.test(ref)) return null;
     const [set, name] = ref.split("/");
+    // The library is shared, so an icon saved in another workspace counts.
+    // Two workspaces may hold the same set/name, so the caller's own copy wins
+    // and the oldest otherwise, which keeps the answer stable.
     const { rows } = await db.query(
-      "SELECT * FROM icons WHERE workspace_id=$1 AND set_name=$2 AND name=$3",
+      `SELECT * FROM icons
+        WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+        ORDER BY (workspace_id=$1) DESC, created_at ASC
+        LIMIT 1`,
       [workspace, set.toLowerCase(), name.toLowerCase()],
     );
     let icon = rows[0];
@@ -74,12 +276,8 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
         { source: `${SOURCE}/${set}/${name}.svg`, license: "see source" },
         null,
       );
-      icon.s3_key = (
-        await db.query("SELECT s3_key,mime FROM icons WHERE id=$1", [icon.id])
-      ).rows[0].s3_key;
-      icon.mime = "image/svg+xml";
     }
-    const body = await storage.read(icon.s3_key);
+    const body = await bytesFor(icon);
     if (!body) return null;
     return {
       ref: `${icon.set_name}/${icon.name}`,
@@ -88,9 +286,129 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     };
   };
 
+  app.get("/api/workspaces/:workspace/icons", auth, async (req, res) => {
+    await permit(req.user, req.params.workspace, "drawing.read");
+    const query = String(req.query.q || "")
+      .trim()
+      .slice(0, 80);
+    const category = String(req.query.category || "")
+      .trim()
+      .slice(0, 40);
+    const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
+    const [{ rows }, categories] = await Promise.all([
+      db.query(
+        `SELECT DISTINCT ON (set_name,name)
+         set_name,name,mime,source,license,created_at,category,display_name
+       FROM icons WHERE (workspace_id=$1 OR shared)
+       AND ($2::text='' OR set_name ILIKE '%'||$2||'%' OR name ILIKE '%'||$2||'%' OR display_name ILIKE '%'||$2||'%')
+       AND ($3::text='' OR category=$3)
+       ORDER BY set_name,name,(workspace_id=$1) DESC,created_at ASC
+       LIMIT $4`,
+        [req.params.workspace, query, category, limit],
+      ),
+      db.query(
+        "SELECT DISTINCT category FROM icons WHERE (workspace_id=$1 OR shared) ORDER BY category",
+        [req.params.workspace],
+      ),
+    ]);
+    res.json({
+      icons: rows,
+      categories: categories.rows.map((row) => row.category),
+    });
+  });
+
+  app.post("/api/workspaces/:workspace/icons", auth, async (req, res) => {
+    const workspace = req.params.workspace;
+    await permit(req.user, workspace, "drawing.edit");
+    const { body, mime } = parseCanvasImage(req.body?.data_url);
+    const displayName = displayNameValue(req.body?.display_name);
+    if (!displayName) fail(400, "Icon name is required.");
+    const category = categoryValue(req.body?.category);
+    const icon = await store(
+      workspace,
+      "uploads",
+      safeIconName(displayName),
+      body,
+      mime,
+      { source: "canvas", license: null },
+      req.user.id,
+      category,
+      displayName,
+    );
+    await audit(db, req.user.id, "icons.add_from_canvas", workspace);
+    res.status(201).json({ icon });
+  });
+
+  app.delete(
+    "/api/workspaces/:workspace/icons/:set/:name",
+    auth,
+    async (req, res) => {
+      // The library is shared, so removing an icon removes it for everyone —
+      // which is what deleting a shared thing has to mean. Editing rights in
+      // the workspace that holds it are what allow that.
+      const reference = normal(`${req.params.set}/${req.params.name}`);
+      if (!REF.test(reference)) fail(404, "Icon not found.");
+      const [set, name] = reference.split("/");
+      const { rows } = await db.query(
+        `SELECT id,workspace_id,digest FROM icons
+          WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+          ORDER BY (workspace_id=$1) DESC, created_at ASC
+          LIMIT 1`,
+        [req.params.workspace, set, name],
+      );
+      const icon = rows[0];
+      if (!icon) fail(404, "Icon not found.");
+      await permit(req.user, icon.workspace_id, "drawing.edit");
+      await db.query("DELETE FROM icons WHERE id=$1", [icon.id]);
+      // The image itself goes only when the last name pointing at it has gone,
+      // or deleting one of two names for the same logo would break the other.
+      if (icon.digest)
+        await db.query(
+          `DELETE FROM icon_blobs
+            WHERE digest=$1
+              AND NOT EXISTS (SELECT 1 FROM icons WHERE digest=$1)`,
+          [icon.digest],
+        );
+      await audit(db, req.user.id, "icons.delete", icon.workspace_id);
+      res.json({ ok: true });
+    },
+  );
+
+  app.get(
+    "/api/workspaces/:workspace/icons/:set/:name",
+    auth,
+    async (req, res) => {
+      await permit(req.user, req.params.workspace, "drawing.read");
+      const reference = normal(`${req.params.set}/${req.params.name}`);
+      if (!REF.test(reference)) fail(404, "Icon not found.");
+      const [set, name] = reference.split("/");
+      const { rows } = await db.query(
+        `SELECT mime,s3_key,svg_data,icon_data,digest FROM icons
+         WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+         ORDER BY (workspace_id=$1) DESC, created_at ASC
+         LIMIT 1`,
+        [req.params.workspace, set, name],
+      );
+      const icon = rows[0];
+      if (!icon) fail(404, "Icon not found.");
+      const body = await bytesFor(icon);
+      if (!body) fail(404, "Icon data not found.");
+      res.set({
+        "Content-Type": icon.mime,
+        "Cache-Control": "private, max-age=3600",
+        "Content-Security-Policy":
+          "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.send(body);
+    },
+  );
+
   // Search the icon source by words, so an admin never has to guess exact names.
   app.get("/api/admin/icons/search", auth, admin, async (req, res) => {
-    const query = String(req.query.q || "").trim().slice(0, 60);
+    const query = String(req.query.q || "")
+      .trim()
+      .slice(0, 60);
     if (!query) return res.json({ results: [] });
     const response = await fetch(
       `${SOURCE}/search?query=${encodeURIComponent(query)}&limit=48`,
@@ -98,7 +416,9 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     );
     if (!response.ok) fail(502, "The icon source is unavailable right now.");
     const body = await response.json();
-    res.json({ results: Array.isArray(body.icons) ? body.icons.slice(0, 48) : [] });
+    res.json({
+      results: Array.isArray(body.icons) ? body.icons.slice(0, 48) : [],
+    });
   });
 
   // Previews are proxied so the page can show them without reaching outside.
@@ -110,7 +430,8 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     res.set({
       "Content-Type": "image/svg+xml",
       "Cache-Control": "private, max-age=86400",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'",
     });
     res.send(body);
   });
@@ -119,10 +440,18 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
     const workspace = req.query.workspace;
     if (!uuid(workspace)) fail(400, "Choose a workspace.");
     const { rows } = await db.query(
-      "SELECT set_name,name,source,license,created_at FROM icons WHERE workspace_id=$1 ORDER BY set_name,name",
+      "SELECT set_name,name,display_name,category,source,license,created_at FROM icons WHERE workspace_id=$1 ORDER BY category,COALESCE(display_name,name),set_name,name",
       [workspace],
     );
-    res.json({ icons: rows, ...(await settings()) });
+    const categories = await db.query(
+      "SELECT DISTINCT category FROM icons WHERE workspace_id=$1 ORDER BY category",
+      [workspace],
+    );
+    res.json({
+      icons: rows,
+      categories: categories.rows.map((row) => row.category),
+      ...(await settings()),
+    });
   });
 
   app.put(
@@ -151,9 +480,12 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
   app.post("/api/admin/icons/import", auth, admin, recent, async (req, res) => {
     const workspace = req.body?.workspace_id;
     if (!uuid(workspace)) fail(400, "Choose a workspace.");
+    const category = categoryValue(req.body?.category);
     const refs = Array.isArray(req.body?.icons) ? req.body.icons : [];
     if (!refs.length || refs.length > MAX_IMPORT)
       fail(400, `Import between 1 and ${MAX_IMPORT} icons at a time.`);
+    const displayName =
+      refs.length === 1 ? displayNameValue(req.body?.display_name) : null;
     const imported = [];
     const failed = [];
     for (const ref of refs) {
@@ -176,6 +508,8 @@ export function installIcons(app, db, storage, { auth, admin, recent }) {
             "image/svg+xml",
             { source: `${SOURCE}/${set}/${name}.svg`, license: "CC0/see set" },
             req.user.id,
+            category,
+            displayName,
           ),
         );
       } catch (error) {

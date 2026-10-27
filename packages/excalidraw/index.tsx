@@ -83,6 +83,7 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     renderTopLeftUI,
     renderTopRightUI,
     renderToolbarActions,
+    customContextMenuItems,
     langCode = defaultLang.code,
     viewModeEnabled,
     interaction,
@@ -226,6 +227,7 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
           renderTopLeftUI={renderTopLeftUI}
           renderTopRightUI={renderTopRightUI}
           renderToolbarActions={renderToolbarActions}
+          customContextMenuItems={customContextMenuItems}
           langCode={langCode}
           viewModeEnabled={viewModeEnabled}
           interaction={interaction}
