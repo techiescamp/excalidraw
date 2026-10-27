@@ -78,6 +78,27 @@ background-removal  merged 8 October, to be deleted
 
 ## Log
 
+### 2026-10-27 — Claude — smart guides, and a default that was set in the wrong place
+
+**Branch:** `feature/smart-guides` → `dev`. CI green (5/5). Not on `main`: the owner is batching this release. Production stays on `v1.3.0`.
+
+Aligning two images was guesswork. Research first: `packages/excalidraw/ snapping.ts` already has edge/centre snapping **and** equal-gap detection, and `renderer/renderSnaps.ts` already draws the guides. Nothing needed rebuilding. What was missing was that it ships **off**, behind a menu item nobody opens, and that the guides never said what the distance was — no `fillText` anywhere in that file.
+
+So: snapping defaults on, and the gap guides carry the number.
+
+**The mistake worth remembering.** The default was first set while building the scene from local storage. A drawing opened from the dashboard never reaches that code — `initializeScene` returns as soon as the workspace scene loads — so it worked only on a blank scratch canvas, which nobody uses. Typecheck passed. 1,926 tests passed. It did nothing. It is now applied at the single point every load path goes through.
+
+**Two things that cost time, written down so they do not again:**
+
+- A shape with no fill can only be grabbed by its **outline** in Excalidraw. Dragging from the middle of a hollow rectangle does nothing, which looked for a while like snapping being broken.
+- Synthetic `PointerEvent`s do not reach the canvas; neither Excalidraw nor Canva accepts them. Driving the editor needs real input events.
+
+_Verified in the running editor, not only in tests:_ dropped a shape ~4px short of even spacing → it snapped to `gapAB 120, gapBC 120` exactly, and the canvas painted `"120"` twice at 14.52px under 76% zoom (11px on screen). Captured by recording every `fillText` during the drag. Before the fix the same drag left the shape 0.72px out with no snap. Plus 6 new unit tests in `renderer/renderSnaps.test.ts`.
+
+**Waiting on `dev` for the next release:** smart guides (2), Excalidraw+ button removed, 64 collection icons, sidebar cleanup, ⌘P finds collections.
+
+---
+
 ### 2026-10-26 — Claude — workspace UI cleanup, held on `dev`
 
 **Branch:** `feature/workspace-ui-cleanup` → `dev`. CI green (5/5). **Deliberately not on `main`:** more work is coming and it ships in one release, by the owner's decision. Production stays on `v1.3.0`.
