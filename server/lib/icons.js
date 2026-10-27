@@ -164,11 +164,33 @@ export function installIcons(
   // What the workspace is already holding, not counting the row this write
   // replaces: re-saving an icon under the same name must not be refused for
   // space it is about to give back.
+  // Bytes come from the shared store; the per-row columns are what rows saved
+  // before this release still carry, and the object key is older still.
+  const bytesFor = async (icon) => {
+    if (icon.digest) {
+      const { rows } = await db.query(
+        "SELECT bytes FROM icon_blobs WHERE digest=$1",
+        [icon.digest],
+      );
+      if (rows[0]) return rows[0].bytes;
+    }
+    return (
+      icon.icon_data ||
+      icon.svg_data ||
+      (icon.s3_key ? await storage.read(icon.s3_key) : null)
+    );
+  };
+
   const libraryBytes = async (workspace, set, name) => {
+    // Each distinct image is counted once however many names point at it, so
+    // the ceiling measures what is actually stored rather than how often it
+    // was referenced.
     const { rows } = await db.query(
-      `SELECT COALESCE(SUM(octet_length(COALESCE(icon_data,svg_data))),0)::bigint AS used
-         FROM icons
-        WHERE workspace_id=$1 AND NOT (set_name=$2 AND name=$3)`,
+      `SELECT COALESCE(SUM(octet_length(blob.bytes)),0)::bigint AS used
+         FROM (SELECT DISTINCT digest FROM icons
+                WHERE workspace_id=$1 AND NOT (set_name=$2 AND name=$3)
+                  AND digest IS NOT NULL) AS used_digests
+         JOIN icon_blobs blob ON blob.digest = used_digests.digest`,
       [workspace, set, name],
     );
     return Number(rows[0].used);
@@ -193,21 +215,29 @@ export function installIcons(
           MAX_WORKSPACE_LIBRARY_BYTES,
         )}). Delete some icons before adding more.`,
       );
+    // The image is named by what it contains, so the same logo added again —
+    // under any name, by anyone — lands on the row that is already there.
+    const digest = crypto.createHash("sha256").update(body).digest("hex");
+    await db.query(
+      `INSERT INTO icon_blobs(digest,bytes,mime) VALUES($1,$2,$3)
+       ON CONFLICT (digest) DO NOTHING`,
+      [digest, body, mime],
+    );
     const { rows } = await db.query(
-      `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,icon_data,source,license,created_by,category,display_name)
-       VALUES($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,icon_data,digest,source,license,created_by,category,display_name)
+       VALUES($1,$2,$3,$4,NULL,NULL,NULL,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (workspace_id,set_name,name) DO UPDATE
-       SET svg_data=NULL,icon_data=EXCLUDED.icon_data,mime=EXCLUDED.mime,
+       SET svg_data=NULL,icon_data=NULL,digest=EXCLUDED.digest,mime=EXCLUDED.mime,
            source=EXCLUDED.source,license=EXCLUDED.license,
            category=EXCLUDED.category,
            display_name=COALESCE(EXCLUDED.display_name,icons.display_name)
-       RETURNING id,set_name,name,mime,s3_key,svg_data,icon_data,category,display_name`,
+       RETURNING id,set_name,name,mime,s3_key,digest,category,display_name`,
       [
         workspace,
         set,
         name,
         mime,
-        body,
+        digest,
         meta.source,
         meta.license,
         actor,
@@ -247,10 +277,7 @@ export function installIcons(
         null,
       );
     }
-    const body =
-      icon.icon_data ||
-      icon.svg_data ||
-      (icon.s3_key ? await storage.read(icon.s3_key) : null);
+    const body = await bytesFor(icon);
     if (!body) return null;
     return {
       ref: `${icon.set_name}/${icon.name}`,
@@ -312,6 +339,41 @@ export function installIcons(
     res.status(201).json({ icon });
   });
 
+  app.delete(
+    "/api/workspaces/:workspace/icons/:set/:name",
+    auth,
+    async (req, res) => {
+      // The library is shared, so removing an icon removes it for everyone —
+      // which is what deleting a shared thing has to mean. Editing rights in
+      // the workspace that holds it are what allow that.
+      const reference = normal(`${req.params.set}/${req.params.name}`);
+      if (!REF.test(reference)) fail(404, "Icon not found.");
+      const [set, name] = reference.split("/");
+      const { rows } = await db.query(
+        `SELECT id,workspace_id,digest FROM icons
+          WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
+          ORDER BY (workspace_id=$1) DESC, created_at ASC
+          LIMIT 1`,
+        [req.params.workspace, set, name],
+      );
+      const icon = rows[0];
+      if (!icon) fail(404, "Icon not found.");
+      await permit(req.user, icon.workspace_id, "drawing.edit");
+      await db.query("DELETE FROM icons WHERE id=$1", [icon.id]);
+      // The image itself goes only when the last name pointing at it has gone,
+      // or deleting one of two names for the same logo would break the other.
+      if (icon.digest)
+        await db.query(
+          `DELETE FROM icon_blobs
+            WHERE digest=$1
+              AND NOT EXISTS (SELECT 1 FROM icons WHERE digest=$1)`,
+          [icon.digest],
+        );
+      await audit(db, req.user.id, "icons.delete", icon.workspace_id);
+      res.json({ ok: true });
+    },
+  );
+
   app.get(
     "/api/workspaces/:workspace/icons/:set/:name",
     auth,
@@ -321,7 +383,7 @@ export function installIcons(
       if (!REF.test(reference)) fail(404, "Icon not found.");
       const [set, name] = reference.split("/");
       const { rows } = await db.query(
-        `SELECT mime,s3_key,svg_data,icon_data FROM icons
+        `SELECT mime,s3_key,svg_data,icon_data,digest FROM icons
          WHERE (workspace_id=$1 OR shared) AND set_name=$2 AND name=$3
          ORDER BY (workspace_id=$1) DESC, created_at ASC
          LIMIT 1`,
@@ -329,10 +391,7 @@ export function installIcons(
       );
       const icon = rows[0];
       if (!icon) fail(404, "Icon not found.");
-      const body =
-        icon.icon_data ||
-        icon.svg_data ||
-        (icon.s3_key ? await storage.read(icon.s3_key) : null);
+      const body = await bytesFor(icon);
       if (!body) fail(404, "Icon data not found.");
       res.set({
         "Content-Type": icon.mime,

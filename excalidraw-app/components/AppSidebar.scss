@@ -181,6 +181,12 @@
     }
   }
 
+  .app-icon-library-delete {
+    // Deleting takes the icon from everyone, so it should not look like the
+    // harmless entry above it.
+    color: var(--color-danger, #c92a2a);
+  }
+
   .app-icon-library-context-menu {
     position: absolute;
     z-index: 2;

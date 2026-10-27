@@ -163,6 +163,7 @@ before(async () => {
     "migration-016-icon-categories.sql",
     "migration-017-icon-image-data.sql",
     "migration-018-shared-icons.sql",
+    "migration-019-icon-dedupe.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -2313,6 +2314,80 @@ test("private workspace backend", async (t) => {
       );
       assert.equal(borrowed.status, 200);
       assert.deepEqual(Buffer.from(await borrowed.arrayBuffer()), bytes);
+    },
+  );
+  await t.test(
+    "the same image added twice is stored once, and deleting a name leaves the other working",
+    async () => {
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      const dataURL = `data:image/png;base64,${bytes.toString("base64")}`;
+      const add = (displayName, cookie = editor.cookie, ws = workspace) =>
+        call(`/workspaces/${ws}/icons`, {
+          cookie,
+          method: "POST",
+          body: { data_url: dataURL, display_name: displayName, category: "Dedupe" },
+        });
+
+      // The same logo, saved by two people under the names each prefers.
+      const first = await add("Kubernetes");
+      assert.equal(first.status, 201, JSON.stringify(first.body));
+      const second = await add("k8s", admin, otherWorkspace);
+      assert.equal(second.status, 201, JSON.stringify(second.body));
+      assert.notEqual(first.body.icon.name, second.body.icon.name);
+
+      // Two entries in the library, one copy of the image behind them.
+      const stored = await db.query(
+        `SELECT count(*)::int AS blobs FROM icon_blobs
+          WHERE digest IN (SELECT digest FROM icons WHERE category='Dedupe')`,
+      );
+      assert.equal(stored.rows[0].blobs, 1, "the image should be stored once");
+      const named = await db.query(
+        "SELECT count(*)::int AS rows FROM icons WHERE category='Dedupe'",
+      );
+      assert.equal(named.rows[0].rows, 2, "both names should be kept");
+
+      // Deleting one name must not take the other's image with it.
+      const removed = await call(
+        `/workspaces/${workspace}/icons/${first.body.icon.set_name}/${first.body.icon.name}`,
+        { cookie: editor.cookie, method: "DELETE" },
+      );
+      assert.equal(removed.status, 200, JSON.stringify(removed.body));
+
+      const survivor = await fetch(
+        `${origin}/api/workspaces/${workspace}/icons/${second.body.icon.set_name}/${second.body.icon.name}`,
+        { headers: { Cookie: editor.cookie } },
+      );
+      assert.equal(survivor.status, 200, "the other name still resolves");
+      assert.deepEqual(Buffer.from(await survivor.arrayBuffer()), bytes);
+
+      // A deleted icon is gone from every workspace, not just the one it was
+      // deleted from, because the library is shared.
+      for (const ws of [workspace, otherWorkspace]) {
+        const listed = await call(`/workspaces/${ws}/icons?category=Dedupe`, {
+          cookie: admin,
+        });
+        assert.deepEqual(
+          listed.body.icons.map((icon) => icon.display_name),
+          ["k8s"],
+          `the deleted icon should be gone from ${ws}`,
+        );
+      }
+
+      // With the last name gone the image goes too, rather than lingering.
+      const removedLast = await call(
+        `/workspaces/${otherWorkspace}/icons/${second.body.icon.set_name}/${second.body.icon.name}`,
+        { cookie: admin, method: "DELETE" },
+      );
+      assert.equal(removedLast.status, 200);
+      const left = await db.query(
+        `SELECT count(*)::int AS blobs FROM icon_blobs
+          WHERE digest=$1`,
+        [first.body.icon.digest ?? second.body.icon.digest],
+      );
+      assert.equal(left.rows[0].blobs, 0, "the image should be cleaned up");
     },
   );
   await t.test(

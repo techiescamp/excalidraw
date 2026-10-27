@@ -10,6 +10,7 @@ test("workspace icon list filters by category and returns category labels", asyn
     },
     post() {},
     put() {},
+    delete() {},
   };
   const rows = [
     {

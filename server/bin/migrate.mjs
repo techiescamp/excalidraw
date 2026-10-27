@@ -28,6 +28,7 @@ try {
     "migration-016-icon-categories.sql",
     "migration-017-icon-image-data.sql",
     "migration-018-shared-icons.sql",
+    "migration-019-icon-dedupe.sql",
   ];
   const checks = [
     "users",

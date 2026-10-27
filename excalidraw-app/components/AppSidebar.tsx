@@ -131,6 +131,40 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
     };
   }, [contextMenu]);
 
+  const removeIcon = async (icon: WorkspaceIcon) => {
+    const ownerWindow = panelRef.current?.ownerDocument.defaultView;
+    if (!ownerWindow) {
+      return;
+    }
+    // The library is shared, so this takes the icon away from everyone. Worth
+    // asking before, not explaining after.
+    if (
+      !ownerWindow.confirm(
+        `Delete "${
+          icon.display_name || icon.name
+        }" from the icon library? Everyone loses it.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const response = await ownerWindow.fetch(
+        `${API}/workspaces/${workspace}/icons/${encodeURIComponent(
+          icon.set_name,
+        )}/${encodeURIComponent(icon.name)}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Could not delete this icon.");
+      }
+      setSelected("");
+      setRefreshCount((current) => current + 1);
+    } catch (reason) {
+      setError((reason as Error).message);
+    }
+  };
+
   const insertIcon = async (icon: WorkspaceIcon) => {
     const panel = panelRef.current;
     const ownerWindow = panel?.ownerDocument.defaultView;
@@ -361,6 +395,23 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
             }}
           >
             Add to canvas
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="app-icon-library-delete"
+            onClick={() => {
+              const icon = icons.find(
+                (item) =>
+                  `${item.set_name}/${item.name}` === contextMenu.reference,
+              );
+              setContextMenu(null);
+              if (icon) {
+                void removeIcon(icon);
+              }
+            }}
+          >
+            Delete from library
           </button>
         </div>
       )}
