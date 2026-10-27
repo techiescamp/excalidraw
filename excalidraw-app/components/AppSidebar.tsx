@@ -17,6 +17,7 @@ import {
   getActiveWorkspaceId,
   subscribeActiveWorkspace,
 } from "../data/workspaceScene";
+import { fitIconSize } from "../data/iconSize";
 
 import "./AppSidebar.scss";
 
@@ -242,10 +243,6 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
       const fileId = Array.from(random, (byte) =>
         byte.toString(16).padStart(2, "0"),
       ).join("") as FileId;
-      // Fit the icon inside a 128px box while keeping its proportions. Forcing
-      // every icon into a square squashed anything that is not one — a wide
-      // logo came out visibly stretched.
-      const BOX = 128;
       const natural = await new Promise<{ width: number; height: number }>(
         (resolve) => {
           const probe = new ownerWindow.Image();
@@ -254,18 +251,13 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
               width: probe.naturalWidth || probe.width,
               height: probe.naturalHeight || probe.height,
             });
-          // An SVG without an intrinsic size reports nothing useful; a square
-          // is as good a guess as any, and no worse than before.
+          // An SVG without an intrinsic size reports nothing useful, and
+          // fitIconSize falls back to a square for it.
           probe.onerror = () => resolve({ width: 0, height: 0 });
           probe.src = dataURL;
         },
       );
-      const scale =
-        natural.width > 0 && natural.height > 0
-          ? BOX / Math.max(natural.width, natural.height)
-          : 0;
-      const width = scale ? natural.width * scale : BOX;
-      const height = scale ? natural.height * scale : BOX;
+      const { width, height } = fitIconSize(natural);
       const appState = excalidrawAPI.getAppState();
       // Dropped where the pointer let go; clicked, in the middle of the view.
       const center = viewportCoordsToSceneCoords(
