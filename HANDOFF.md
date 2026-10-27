@@ -95,6 +95,113 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-27 — Codex — publish icon work to dev
+
+Plan: commit the pending icon-library and gallery changes on local branch
+`Icons`, fetch and merge the latest `origin/dev`, run the repository's required
+checks on the merged code, then push a fast-forward update to `origin/dev` as
+requested. Do not force-push or deploy to production.
+
+**Status:** pending; no commit or push yet.
+
+### 2026-10-27 — Codex — align and center the icon gallery
+
+On local branch `Icons`, improved the icon sidebar's edge spacing and visual
+balance. Added consistent panel padding, centered the responsive gallery, made
+the cards larger, wrapped long names, and styled categories as compact labels.
+Search, category filtering, selection, and canvas insertion remain in place.
+
+Verified in the browser at `http://127.0.0.1:55445`: the full gallery shows a
+centered two-column layout; filtering to Programming shows two centered cards
+with full names; selecting the saved Python demo icon enables **Add to canvas**.
+The scene remained **Saved**. The browser uses a disposable copy under
+`/private/tmp/excalidraw-icons-style-preview` and the local test database.
+
+The editor build passed from that disposable copy. `prettier --check
+excalidraw-app/components/AppSidebar.scss` and `git diff --check` passed. No
+tests were added or run for this CSS-only refinement. Existing non-fatal build
+warnings remain. No commit, push, merge, or production change.
+
+### 2026-10-27 — Codex — local icon workflow walkthrough
+
+No source changes in this turn. Reopened the disposable local editor at
+`http://127.0.0.1:55445` and showed the flow in the browser: right-click a
+canvas image, choose **Add image to icon library**, enter a name/category, then
+open the **Icons** tab, filter to **Programming**, select the saved Python icon,
+and choose **Add to canvas**. The canvas showed the added icon and **Saved**;
+the browser is left on the selected gallery item. The example is in the local
+test workspace/scene listed below. No commit, push, merge, or production change.
+
+### 2026-10-26 — Codex — add canvas images to workspace icons
+
+Plan and implementation on local branch `Icons`: remove icon management from
+Dashboard Administration. Add an **Add image to icon library** action to an
+image's editor context menu, collect a name and category, and save it in the
+workspace PostgreSQL icon library. Improve the editor gallery, category filter,
+and canvas insertion. Keep all work local; do not commit, push, merge, or deploy.
+
+Implemented the updated flow, image validation/storage and migration `017`,
+legacy `svg_data`/object-storage reads, workspace permission checks, and an
+audit event. Added/kept migrations `015` and `016` for prior PostgreSQL icon
+storage and category metadata. Removed the Icons admin tab and its management
+UI. Added tests for admin removal, image import/permissions, and context-menu
+integration. Updated `docs/specs/icons.md` to match the requested UX.
+
+Verified in the disposable local browser app at `http://127.0.0.1:55445`:
+right-clicked the canvas Python image, saved it as “Python demo icon” with the
+“Programming” category, filtered the gallery to Programming, selected it, and
+inserted it on the canvas. The browser showed the new icon in the gallery and
+on the canvas with the scene in **Saved** state. The local-only disposable
+workspace/scene are `572e1911-3516-4ef5-a763-04bdd754d766` and
+`aca8ac10-25b4-41cd-bd72-b7604a52d852`.
+
+Checks passed: `yarn test:typecheck`, `yarn test:code`, `yarn test:other`,
+`yarn test:app --watch=false` (127 files; 1921 passed, 47 skipped, 1 todo),
+full PostgreSQL server suite (59 passed, 0 failed), editor production build,
+focused icon-category/admin tests, and `git diff --check`. The app test runner
+reported 5 obsolete snapshots; the generated snapshot diff was reverted.
+Existing non-fatal parser/build warnings remain.
+
+**Not done:** no commit, push, merge, or production change. The preview and
+demo icon/drawing are local only.
+
+### 2026-10-26 — Codex — workspace icon gallery
+
+Plan on local branch `Icons`: add a searchable editor sidebar gallery for
+icons already available in a workspace, insert a selected SVG onto the open
+canvas, and store newly imported SVG bytes in PostgreSQL. Preserve reads of
+legacy object-storage icons. Write the feature spec before code, test workspace
+access and insertion, verify the local editor, and do not push or deploy.
+
+Added `docs/specs/icons.md` before implementation. The editor now has an
+**Icons** sidebar tab for searching the active workspace library; selecting an
+icon inserts its SVG onto the canvas, and the library is available to workspace
+members with drawing access. Admin-imported SVG bytes are stored in PostgreSQL
+through migration `015`; reads of legacy object-storage icons remain supported.
+The gallery shows icons curated into that workspace through Dashboard → Icons,
+not the full Iconify catalog.
+
+Verified locally:
+
+- Red-before-green integration test: the new endpoint test failed before its
+  route existed; after implementation the full PostgreSQL server suite passed
+  (**55 passed, 0 failed**) against a disposable local PostgreSQL instance.
+- `yarn test:typecheck`, `yarn test:code`, `yarn test:other`, and
+  `yarn test:app --watch=false` passed (**127 files; 1920 passed, 47 skipped,
+  1 todo**).
+- `VITE_APP_API_URL=/api NODE_OPTIONS=--max-old-space-size=4096 yarn build:app`
+  passed.
+- `git diff --check` passed.
+- Local browser preview on `http://127.0.0.1:55443/index.html?scene=07c89f6e-a4d2-456d-ba8c-2d6758e4a0fe&returnTo=%2Fdashboard`:
+  searched and inserted the test `spark` icon, saw it saved after reload, and
+  confirmed Undo removed the latest insertion. The dev instance serves the
+  editor through `/index.html`; its `/editor` path returned 404 in this local
+  setup.
+
+**Not done:** no commit, push, merge, or production deploy. Only a disposable
+`local/spark` icon is in the preview database; admins need to import the icons
+they want in each workspace.
+
 ### 2026-10-26 — Claude — a release that built, passed and did nothing
 
 The first two releases cut through the pipeline, v1.0.0 and v1.1.0, were built

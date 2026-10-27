@@ -104,6 +104,7 @@ export type ActionName =
   | "ungroup"
   | "goToCollaborator"
   | "addToLibrary"
+  | "addImageToIconLibrary"
   | "changeRoundness"
   | "alignTop"
   | "alignBottom"

@@ -857,6 +857,10 @@ export interface ExcalidrawProps {
     appState: UIAppState,
   ) => JSX.Element | null;
   renderToolbarActions?: (appState: UIAppState) => JSX.Element | null;
+  /**
+   * Extra actions to show in the context menu for selected elements.
+   */
+  customContextMenuItems?: ContextMenuItems;
   langCode?: Language["code"];
   viewModeEnabled?: boolean;
   /**

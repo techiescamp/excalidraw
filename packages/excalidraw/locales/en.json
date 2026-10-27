@@ -114,6 +114,7 @@
     "you": "You",
     "toggleGrid": "Toggle grid",
     "addToLibrary": "Add to library",
+    "addIconToLibrary": "Add image to icon library",
     "removeFromLibrary": "Remove from library",
     "libraryLoadingMessage": "Loading library…",
     "libraries": "Browse libraries",

@@ -148,6 +148,9 @@ before(async () => {
     "migration-012-oauth.sql",
     "migration-013-icons.sql",
     "migration-014-blobs.sql",
+    "migration-015-icon-postgres-data.sql",
+    "migration-016-icon-categories.sql",
+    "migration-017-icon-image-data.sql",
   ])
     await db.query(
       await readFile(new URL("../" + file, import.meta.url), "utf8"),
@@ -2149,6 +2152,167 @@ test("private workspace backend", async (t) => {
           })
         ).body.scene.elements.filter((e) => e.type === "image").length,
         0,
+      );
+    },
+  );
+  await t.test(
+    "workspace editors can save a canvas image to the icon library",
+    async () => {
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1F4AAAAASUVORK5CYII=",
+        "base64",
+      );
+      const saved = await call(`/workspaces/${workspace}/icons`, {
+        cookie: editor.cookie,
+        method: "POST",
+        body: {
+          data_url: `data:image/png;base64,${bytes.toString("base64")}`,
+          display_name: "Python",
+          category: "Programming",
+        },
+      });
+      assert.equal(saved.status, 201, JSON.stringify(saved.body));
+      assert.equal(saved.body.icon.display_name, "Python");
+      assert.equal(saved.body.icon.category, "Programming");
+      assert.equal(saved.body.icon.mime, "image/png");
+
+      const listed = await call(
+        `/workspaces/${workspace}/icons?category=Programming`,
+        { cookie: editor.cookie },
+      );
+      assert.deepEqual(
+        listed.body.icons.map((icon) => icon.display_name),
+        ["Python"],
+      );
+      const content = await fetch(
+        `${origin}/api/workspaces/${workspace}/icons/${saved.body.icon.set_name}/${saved.body.icon.name}`,
+        { headers: { Cookie: editor.cookie } },
+      );
+      assert.equal(content.status, 200);
+      assert.match(content.headers.get("content-type"), /image\/png/);
+      assert.deepEqual(Buffer.from(await content.arrayBuffer()), bytes);
+
+      const invalidImage = await call(`/workspaces/${workspace}/icons`, {
+        cookie: editor.cookie,
+        method: "POST",
+        body: {
+          data_url: `data:image/png;base64,${Buffer.from("<svg/>").toString("base64")}`,
+          display_name: "Invalid image",
+          category: "Programming",
+        },
+      });
+      assert.equal(invalidImage.status, 400);
+
+      const denied = await call(`/workspaces/${workspace}/icons`, {
+        cookie: viewer.cookie,
+        method: "POST",
+        body: {
+          data_url: `data:image/png;base64,${bytes.toString("base64")}`,
+          display_name: "Forbidden",
+          category: "Programming",
+        },
+      });
+      assert.equal(denied.status, 403);
+    },
+  );
+  await t.test(
+    "workspace icon gallery only exposes authorized saved icons and serves PostgreSQL SVG data",
+    async () => {
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>';
+      await db.query(
+        `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,source,license)
+         VALUES($1,'testpack','database','image/svg+xml',NULL,$2,'test','CC0')`,
+        [workspace, Buffer.from(svg)],
+      );
+
+      const listed = await call(`/workspaces/${workspace}/icons?q=database`, {
+        cookie: editor.cookie,
+      });
+      assert.equal(listed.status, 200, JSON.stringify(listed.body));
+      assert.deepEqual(
+        listed.body.icons.map(({ set_name, name }) => `${set_name}/${name}`),
+        ["testpack/database"],
+      );
+
+      const content = await fetch(
+        `${origin}/api/workspaces/${workspace}/icons/testpack/database`,
+        { headers: { Cookie: editor.cookie } },
+      );
+      assert.equal(content.status, 200);
+      assert.match(content.headers.get("content-type"), /image\/svg\+xml/);
+      assert.equal(await content.text(), svg);
+
+      assert.equal(
+        (
+          await call(`/workspaces/${otherWorkspace}/icons`, {
+            cookie: editor.cookie,
+          })
+        ).status,
+        404,
+        "a workspace member cannot read another workspace's icon library",
+      );
+      assert.equal(
+        (
+          await fetch(
+            `${origin}/api/workspaces/${otherWorkspace}/icons/testpack/database`,
+            { headers: { Cookie: editor.cookie } },
+          )
+        ).status,
+        404,
+      );
+    },
+  );
+  await t.test(
+    "workspace icon gallery filters by category and imports stay administrator-only",
+    async () => {
+      await db.query(
+        `INSERT INTO icons(workspace_id,set_name,name,mime,s3_key,svg_data,source,license,category,display_name)
+         VALUES($1,'logos','kubernetes','image/svg+xml',NULL,$2,'test','CC0','Kubernetes','Kubernetes Logo'),
+               ($1,'logos','helm','image/svg+xml',NULL,$2,'test','CC0','Kubernetes','Helm'),
+               ($1,'logos','postgresql','image/svg+xml',NULL,$2,'test','CC0','Databases','PostgreSQL')`,
+        [
+          workspace,
+          Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>',
+          ),
+        ],
+      );
+
+      const filtered = await call(
+        `/workspaces/${workspace}/icons?category=${encodeURIComponent(
+          "Kubernetes",
+        )}`,
+        { cookie: editor.cookie },
+      );
+      assert.equal(filtered.status, 200, JSON.stringify(filtered.body));
+      assert.deepEqual(
+        filtered.body.icons.map(({ name }) => name),
+        ["helm", "kubernetes"],
+      );
+      assert.deepEqual(
+        filtered.body.categories,
+        ["Databases", "General", "Kubernetes", "Programming"],
+      );
+      assert.ok(
+        filtered.body.icons.every((icon) => icon.category === "Kubernetes"),
+      );
+      assert.equal(filtered.body.icons[1].display_name, "Kubernetes Logo");
+
+      assert.equal(
+        (
+          await call("/admin/icons/import", {
+            cookie: viewer.cookie,
+            method: "POST",
+            body: {
+              workspace_id: workspace,
+              icons: ["logos/kubernetes"],
+              category: "Kubernetes",
+            },
+          })
+        ).status,
+        403,
+        "viewers cannot import icons into a workspace library",
       );
     },
   );

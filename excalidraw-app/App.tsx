@@ -135,6 +135,7 @@ import {
 
 import { loadFilesFromFirebase } from "./data/firebase";
 import {
+  getActiveWorkspaceId,
   getWorkspaceSceneId,
   workspaceEditorLocation,
   getWorkspaceUserLabel,
@@ -169,8 +170,22 @@ import "./index.scss";
 
 import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { AddIconDialog } from "./components/AddIconDialog";
 
 import type { CollabAPI } from "./collab/Collab";
+
+const API = import.meta.env.VITE_APP_API_URL || "/api";
+const ICON_IMAGE_MIME_TYPES = new Set([
+  "image/svg+xml",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/x-icon",
+  "image/avif",
+  "image/jfif",
+]);
 
 polyfill();
 
@@ -451,6 +466,15 @@ const ExcalidrawWrapper = () => {
     location: string;
     source: string;
   } | null>(null);
+  const [iconImageJob, setIconImageJob] = useState<{
+    targetId: string;
+    fileId: FileId;
+    version: number;
+    sceneId: string | null;
+    location: string;
+    source: string;
+    workspace: string;
+  } | null>(null);
   const workspacePermissions = useSyncExternalStore(
     subscribeWorkspacePermissions,
     getWorkspacePermissions,
@@ -462,6 +486,70 @@ const ExcalidrawWrapper = () => {
   const [langCode, setLangCode] = useAppLangCode();
 
   const editorInterface = useEditorInterface();
+  const activeWorkspaceId = getActiveWorkspaceId();
+
+  const customContextMenuItems = useMemo<
+    NonNullable<ExcalidrawProps["customContextMenuItems"]>
+  >(() => {
+    if (!activeWorkspaceId || !workspacePermissions?.["drawing.edit"]) {
+      return [];
+    }
+    return [
+      {
+        name: "addImageToIconLibrary",
+        label: "labels.addIconToLibrary",
+        trackEvent: false,
+        predicate: (elements, appState) => {
+          if (appState.viewModeEnabled) {
+            return false;
+          }
+          const selected = elements.filter(
+            (element) => appState.selectedElementIds[element.id],
+          );
+          if (
+            selected.length !== 1 ||
+            !isInitializedImageElement(selected[0])
+          ) {
+            return false;
+          }
+          const file = excalidrawAPI?.getFiles()[selected[0].fileId];
+          return Boolean(
+            !selected[0].isDeleted &&
+              !selected[0].locked &&
+              file &&
+              ICON_IMAGE_MIME_TYPES.has(file.mimeType),
+          );
+        },
+        perform: (elements, appState) => {
+          const image = elements.find(
+            (element) => appState.selectedElementIds[element.id],
+          );
+          if (!image || !isInitializedImageElement(image)) {
+            return false;
+          }
+          const file = excalidrawAPI?.getFiles()[image.fileId];
+          const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
+          if (
+            !file ||
+            !ownerWindow ||
+            !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+          ) {
+            return false;
+          }
+          setIconImageJob({
+            targetId: image.id,
+            fileId: image.fileId,
+            version: image.version,
+            sceneId: getWorkspaceSceneId(),
+            location: ownerWindow.location.href,
+            source: file.dataURL,
+            workspace: activeWorkspaceId,
+          });
+          return { captureUpdate: CaptureUpdateAction.NEVER };
+        },
+      },
+    ];
+  }, [activeWorkspaceId, excalidrawAPI, workspacePermissions]);
 
   // initial state
   // ---------------------------------------------------------------------------
@@ -1002,6 +1090,67 @@ const ExcalidrawWrapper = () => {
     [],
   );
 
+  const saveCanvasImageAsIcon = useCallback(
+    async (name: string, category: string) => {
+      if (!iconImageJob || !excalidrawAPI) {
+        throw new Error("Select an image on the canvas and try again.");
+      }
+      const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
+      if (
+        !ownerWindow ||
+        getActiveWorkspaceId() !== iconImageJob.workspace ||
+        getWorkspaceSceneId() !== iconImageJob.sceneId ||
+        ownerWindow.location.href !== iconImageJob.location ||
+        !workspacePermissions?.["drawing.edit"] ||
+        excalidrawAPI.getAppState().viewModeEnabled
+      ) {
+        throw new Error("The drawing changed or editing is unavailable.");
+      }
+      const current = excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .find((element) => element.id === iconImageJob.targetId);
+      const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
+      if (
+        !current ||
+        !isInitializedImageElement(current) ||
+        current.isDeleted ||
+        current.locked ||
+        current.version !== iconImageJob.version ||
+        current.fileId !== iconImageJob.fileId ||
+        !file ||
+        file.dataURL !== iconImageJob.source ||
+        !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+      ) {
+        throw new Error("The selected image changed. Select it and retry.");
+      }
+      const response = await ownerWindow.fetch(
+        `${API}/workspaces/${encodeURIComponent(iconImageJob.workspace)}/icons`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Excalidraw-Request": "1",
+          },
+          body: JSON.stringify({
+            data_url: iconImageJob.source,
+            display_name: name,
+            category,
+          }),
+        },
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "Could not save this icon.");
+      }
+      ownerWindow.dispatchEvent(
+        new ownerWindow.Event("workspace-icons-updated"),
+      );
+      excalidrawAPI.setToast({ message: `${name} added to the icon library.` });
+    },
+    [excalidrawAPI, iconImageJob, workspacePermissions],
+  );
+
   // const onExport = () => {
   //   return new Promise((r) => setTimeout(r, 2500));
   //   // console.log("onExport");
@@ -1074,6 +1223,7 @@ const ExcalidrawWrapper = () => {
       })}
     >
       <Excalidraw
+        customContextMenuItems={customContextMenuItems}
         libraryReturnUrl={libraryReturnUrl}
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
@@ -1303,6 +1453,15 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
+
+        {iconImageJob && (
+          <AddIconDialog
+            workspace={iconImageJob.workspace}
+            source={iconImageJob.source}
+            onClose={() => setIconImageJob(null)}
+            onSave={saveCanvasImageAsIcon}
+          />
+        )}
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>

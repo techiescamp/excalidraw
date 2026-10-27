@@ -1558,7 +1558,6 @@ function adminNav() {
     ["audit-log", "Audit log"],
     ["storage", "Storage"],
     ["mcp-keys", "MCP keys"],
-    ["icons", "Icons"],
     ["workspace-export", "Workspace export"],
     ["workspace-import", "Workspace import"],
   ]
@@ -1975,6 +1974,9 @@ async function adminPage(generation) {
   const p = params();
   const page = Math.max(0, Number(p.get("page")) || 0);
   const name = route().split("/").pop();
+  if (name === "icons") {
+    return goto("/admin/workspaces", true);
+  }
   $(
     "#page",
   ).innerHTML = `<h1>Administration</h1>${adminNav()}<div id="admin-content"></div>`;
@@ -2201,152 +2203,6 @@ async function adminPage(generation) {
           await render();
         }),
     );
-  } else if (name === "icons") {
-    const library = await api(`/admin/icons?workspace=${state.workspace.id}`);
-    if (generation !== state.generation) {
-      return;
-    }
-    const sets = library.icons.reduce((groups, icon) => {
-      (groups[icon.set_name] ||= []).push(icon.name);
-      return groups;
-    }, {});
-    $(
-      "#admin-content",
-    ).innerHTML = `<div class="section-title"><div><h2>Icons</h2><p class="muted">Icons an assistant can place in drawings. Name them <code>set/name</code>, for example <code>logos/kubernetes</code>.</p></div>${button(
-      "Add icons",
-      'class="primary" id="import-icons"',
-    )}</div><label class="check"><input type="checkbox" id="icon-fetch" ${
-      library.fetch_enabled ? "checked" : ""
-    }>Fetch missing icons from the internet (iconify.design) and keep a copy here</label><p class="muted">With this off, only icons already in this library can be drawn.</p>${
-      library.icons.length
-        ? Object.entries(sets)
-            .map(
-              ([set, names]) =>
-                `<div class="settings-row"><div><strong>${escape(
-                  set,
-                )}</strong><small>${names.length} icons · ${escape(
-                  names.slice(0, 8).join(", "),
-                )}${names.length > 8 ? "…" : ""}</small></div></div>`,
-            )
-            .join("")
-        : '<p class="muted">No icons yet. Add some, or turn on fetching above.</p>'
-    }`;
-    $("#admin-content").insertAdjacentHTML(
-      "afterbegin",
-      `<div class="icon-search"><label>Search icons<input type="search" id="icon-query" placeholder="kubernetes, database, cloud…" autocomplete="off"></label><div id="icon-results" class="icon-results"></div></div>`,
-    );
-    let searching;
-    $("#icon-query").oninput = (event) => {
-      const query = event.target.value.trim();
-      win.clearTimeout(searching);
-      if (query.length < 2) {
-        $("#icon-results").innerHTML = "";
-        return;
-      }
-      searching = win.setTimeout(
-        () =>
-          run(async () => {
-            const found = await api(
-              `/admin/icons/search?q=${encodeURIComponent(query)}`,
-            );
-            if (!found.results.length) {
-              $("#icon-results").innerHTML =
-                '<p class="muted">Nothing found. Try another word.</p>';
-              return;
-            }
-            $("#icon-results").innerHTML = found.results
-              .map(
-                (ref) =>
-                  `<button class="icon-result" data-add-icon="${escape(
-                    ref.replace(":", "/"),
-                  )}" title="${escape(
-                    ref,
-                  )}"><img src="/api/admin/icons/preview?ref=${encodeURIComponent(
-                    ref.replace(":", "/"),
-                  )}" alt="" loading="lazy"><small>${escape(
-                    ref,
-                  )}</small></button>`,
-              )
-              .join("");
-            doc.querySelectorAll("[data-add-icon]").forEach(
-              (b) =>
-                (b.onclick = () =>
-                  run(async () => {
-                    if (!(await reauthenticate())) {
-                      return;
-                    }
-                    const result = await api("/admin/icons/import", {
-                      method: "POST",
-                      body: {
-                        workspace_id: state.workspace.id,
-                        icons: [b.dataset.addIcon],
-                      },
-                    });
-                    notify(
-                      result.imported
-                        ? `${b.dataset.addIcon} added.`
-                        : result.failed[0]?.error || "Could not add that icon.",
-                      !result.imported,
-                    );
-                    if (result.imported) {
-                      await render();
-                    }
-                  })),
-            );
-          }),
-        350,
-      );
-    };
-    $("#icon-fetch").onchange = (event) =>
-      run(async () => {
-        if (!(await reauthenticate())) {
-          return render();
-        }
-        await api("/admin/icons/settings", {
-          method: "PUT",
-          body: { fetch_enabled: event.target.checked },
-        });
-        notify(
-          event.target.checked
-            ? "Missing icons will be fetched and saved here."
-            : "Only icons in this library will be used.",
-        );
-      });
-    $("#import-icons").onclick = () =>
-      run(async () => {
-        if (!(await reauthenticate())) {
-          return;
-        }
-        const d = modal(
-          "Add icons",
-          `${input(
-            "Icon names",
-            "icons",
-            "logos/kubernetes, logos/aws, logos/docker-icon",
-            "required autofocus",
-          )}<p class="muted">Comma separated, in the form set/name. They are downloaded once from iconify.design and stored in this workspace. Browse names at icon-sets.iconify.design.</p>`,
-          "Add icons",
-          async (values) => {
-            const result = await api("/admin/icons/import", {
-              method: "POST",
-              body: {
-                workspace_id: state.workspace.id,
-                icons: values.icons
-                  .split(",")
-                  .map((name) => name.trim())
-                  .filter(Boolean),
-              },
-            });
-            d.close();
-            await render();
-            notify(
-              `${result.imported} added${
-                result.failed.length ? `, ${result.failed.length} failed` : ""
-              }.`,
-            );
-          },
-        );
-      });
   } else if (name === "mcp-keys") {
     const keys = await api("/admin/mcp-keys");
     if (generation !== state.generation) {
