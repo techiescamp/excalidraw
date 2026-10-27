@@ -273,7 +273,13 @@ const initializeScene = async (opts: {
         return {
           scene: {
             ...scene,
-            elements: remote?.elements ?? scene.elements,
+            // An empty room is not an edit. ?? only steps aside for null, so
+            // a room that answered with no elements used to throw away the
+            // drawing the database had just handed us, and the canvas opened
+            // blank until something refilled it.
+            elements: remote?.elements?.length
+              ? remote.elements
+              : scene.elements,
             files: { ...scene.files, ...remote?.files },
             appState: { ...scene.appState, isLoading: false },
           },

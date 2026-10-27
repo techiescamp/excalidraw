@@ -569,15 +569,23 @@ export function installDrawings(
       // window for it is wide. Merge instead, by the same element rules
       // collaboration uses, and hand the result back so the caller adopts it.
       const stale = scene.scene_version !== expectedVersion;
-      if (collaborative || stale)
-        payload = validateScene(
-          mergeSceneSnapshots(await readScene(scene), payload),
-        );
+      // An editor that deletes everything still sends every element, as a
+      // tombstone — that is what onChange hands it. So a payload with no
+      // elements at all is never somebody clearing a drawing on purpose; it is
+      // an editor that was reset or had not loaded yet, and letting it through
+      // replaced real work with nothing. Merging an empty payload keeps what
+      // is stored, which is the honest reading of "I have nothing to add".
+      const blanking = payload.elements.length === 0;
+      const current = collaborative || stale || blanking
+        ? await readScene(scene)
+        : null;
+      const merge = collaborative || stale || (blanking && current.elements.length > 0);
+      if (merge) payload = validateScene(mergeSceneSnapshots(current, payload));
       const nextVersion = scene.scene_version + 1;
       // A collaborative save merged more elements in after the upload, so any
       // image that arrived with them is stored now; for an ordinary save this
       // finds everything already uploaded and does nothing.
-      const { payload: stored, refs } = collaborative || stale
+      const { payload: stored, refs } = merge
         ? // merging can bring in elements saved by someone else, but their
           // images are already stored, so this records references only
           await blobs.split(scene.workspace_id, payload, { mayUpload: false })
@@ -651,7 +659,7 @@ export function installDrawings(
         // Whenever the save was merged, the caller's copy is no longer what is
         // stored; return the merged scene so it can adopt it rather than keep
         // drawing on top of a version that no longer exists.
-        ...(collaborative || stale ? { scene: payload, merged: stale } : {}),
+        ...(merge ? { scene: payload, merged: stale } : {}),
       };
     });
     if (cacheCandidate) {

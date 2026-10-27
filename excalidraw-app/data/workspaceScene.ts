@@ -1365,19 +1365,17 @@ export async function loadWorkspaceScene(
   const requestedRoom = ownerWindow.location.hash.match(
     /^#room=([a-zA-Z0-9_-]+),/,
   )?.[1];
-  if (requestedRoom && requestedRoom !== result.room_id) {
-    ownerWindow.history.replaceState(
-      {},
-      "",
-      ownerWindow.location.pathname + ownerWindow.location.search,
-    );
-  }
-  if (result.collaboration) {
-    ownerWindow.history.replaceState(
-      {},
-      "",
-      `${ownerWindow.location.pathname}${ownerWindow.location.search}#room=${result.collaboration.roomId},${result.collaboration.roomKey}`,
-    );
+  // One rewrite, never two. Stripping a wrong room and then putting the right
+  // one back left a window with no room in the URL at all, and a save landing
+  // in that window told the server it was not collaborative.
+  const here = `${ownerWindow.location.pathname}${ownerWindow.location.search}`;
+  const target = result.collaboration
+    ? `${here}#room=${result.collaboration.roomId},${result.collaboration.roomKey}`
+    : requestedRoom && requestedRoom !== result.room_id
+    ? here
+    : null;
+  if (target !== null) {
+    ownerWindow.history.replaceState({}, "", target);
   }
   permissions = result.permissions;
   listeners.forEach((listener) => listener());
