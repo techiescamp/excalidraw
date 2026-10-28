@@ -148,6 +148,7 @@ import {
   registerWorkspaceSceneApplier,
 } from "./data/workspaceScene";
 import { mergeOnOpen } from "./data/mergeOnOpen";
+import { renderSelectionAsIcon, selectedForIcon } from "./data/selectionIcon";
 import { readSnapPreference, writeSnapPreference } from "./data/snapPreference";
 import {
   LibraryIndexedDBAdapter,
@@ -479,9 +480,12 @@ const ExcalidrawWrapper = () => {
     source: string;
   } | null>(null);
   const [iconImageJob, setIconImageJob] = useState<{
-    targetId: string;
-    fileId: FileId;
-    version: number;
+    // What was selected when the dialog opened, so the save can tell whether
+    // the canvas moved on underneath it.
+    selection: readonly { id: string; version: number }[];
+    // Set only when the icon is one stored picture being passed through
+    // untouched; a drawn selection is rendered and has no file behind it.
+    fileId: FileId | null;
     sceneId: string | null;
     location: string;
     source: string;
@@ -522,48 +526,59 @@ const ExcalidrawWrapper = () => {
           if (appState.viewModeEnabled) {
             return false;
           }
-          const selected = elements.filter(
-            (element) => appState.selectedElementIds[element.id],
-          );
-          if (
-            selected.length !== 1 ||
-            !isInitializedImageElement(selected[0])
-          ) {
-            return false;
-          }
-          const file = excalidrawAPI?.getFiles()[selected[0].fileId];
-          return Boolean(
-            !selected[0].isDeleted &&
-              !selected[0].locked &&
-              file &&
-              ICON_IMAGE_MIME_TYPES.has(file.mimeType),
+          return (
+            selectedForIcon(elements, appState).length > 0 &&
+            Boolean(wrapperRef.current?.ownerDocument.defaultView)
           );
         },
         perform: (elements, appState) => {
-          const image = elements.find(
-            (element) => appState.selectedElementIds[element.id],
-          );
-          if (!image || !isInitializedImageElement(image)) {
-            return false;
-          }
-          const file = excalidrawAPI?.getFiles()[image.fileId];
+          const selected = selectedForIcon(elements, appState);
           const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
-          if (
-            !file ||
-            !ownerWindow ||
-            !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
-          ) {
+          if (!selected.length || !ownerWindow || !excalidrawAPI) {
             return false;
           }
-          setIconImageJob({
-            targetId: image.id,
-            fileId: image.fileId,
-            version: image.version,
+          const where = {
+            selection: selected.map((element) => ({
+              id: element.id,
+              version: element.version,
+            })),
             sceneId: getWorkspaceSceneId(),
             location: ownerWindow.location.href,
-            source: file.dataURL,
             workspace: activeWorkspaceId,
-          });
+          };
+          // One stored picture goes in as it is, at its own full quality.
+          // Anything drawn has no file behind it and has to be rendered.
+          const only = selected.length === 1 ? selected[0] : null;
+          const file =
+            only && isInitializedImageElement(only)
+              ? excalidrawAPI.getFiles()[only.fileId]
+              : undefined;
+          if (
+            only &&
+            isInitializedImageElement(only) &&
+            file &&
+            ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+          ) {
+            setIconImageJob({
+              ...where,
+              fileId: only.fileId,
+              source: file.dataURL,
+            });
+            return { captureUpdate: CaptureUpdateAction.NEVER };
+          }
+          void renderSelectionAsIcon(
+            selected,
+            appState,
+            excalidrawAPI.getFiles(),
+          ).then(
+            (source) => setIconImageJob({ ...where, fileId: null, source }),
+            (error: Error) =>
+              excalidrawAPI.setToast({
+                message:
+                  error.message ||
+                  "Could not turn that selection into an icon.",
+              }),
+          );
           return { captureUpdate: CaptureUpdateAction.NEVER };
         },
       },
@@ -1129,7 +1144,7 @@ const ExcalidrawWrapper = () => {
   const saveCanvasImageAsIcon = useCallback(
     async (name: string, category: string) => {
       if (!iconImageJob || !excalidrawAPI) {
-        throw new Error("Select an image on the canvas and try again.");
+        throw new Error("Select something on the canvas and try again.");
       }
       const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
       if (
@@ -1142,22 +1157,35 @@ const ExcalidrawWrapper = () => {
       ) {
         throw new Error("The drawing changed or editing is unavailable.");
       }
-      const current = excalidrawAPI
-        .getSceneElementsIncludingDeleted()
-        .find((element) => element.id === iconImageJob.targetId);
-      const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
-      if (
-        !current ||
-        !isInitializedImageElement(current) ||
-        current.isDeleted ||
-        current.locked ||
-        current.version !== iconImageJob.version ||
-        current.fileId !== iconImageJob.fileId ||
-        !file ||
-        file.dataURL !== iconImageJob.source ||
-        !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
-      ) {
-        throw new Error("The selected image changed. Select it and retry.");
+      // The picture in the dialog was taken when it opened. If anything in it
+      // has been edited or deleted since, the icon would not be what is shown.
+      const present = new Map(
+        excalidrawAPI
+          .getSceneElementsIncludingDeleted()
+          .map((element) => [element.id, element]),
+      );
+      const unchanged = iconImageJob.selection.every(({ id, version }) => {
+        const current = present.get(id);
+        return Boolean(
+          current && !current.isDeleted && current.version === version,
+        );
+      });
+      if (!unchanged) {
+        throw new Error("The selection changed. Select it again and retry.");
+      }
+      if (iconImageJob.fileId) {
+        const current = present.get(iconImageJob.selection[0].id);
+        const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
+        if (
+          !current ||
+          !isInitializedImageElement(current) ||
+          current.fileId !== iconImageJob.fileId ||
+          !file ||
+          file.dataURL !== iconImageJob.source ||
+          !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+        ) {
+          throw new Error("The selected image changed. Select it and retry.");
+        }
       }
       const response = await ownerWindow.fetch(
         `${API}/workspaces/${encodeURIComponent(iconImageJob.workspace)}/icons`,

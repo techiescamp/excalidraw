@@ -76,12 +76,12 @@ export const AddIconDialog = ({
   return (
     <Dialog
       size="small"
-      title="Add image to icon library"
+      title="Add to icon library"
       onCloseRequest={onClose}
     >
       <div className="add-icon-dialog" ref={rootRef}>
         <p className="add-icon-dialog-hint">
-          Save this canvas image for reuse in this workspace.
+          Save this selection for reuse anywhere in this workspace.
         </p>
         <div className="add-icon-dialog-preview-wrap">
           <img
