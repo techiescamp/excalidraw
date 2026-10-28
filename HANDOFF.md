@@ -95,6 +95,55 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-28 — Claude — the drawing that was "here, then there" was the view, not the data
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed. Production
+stays on `v1.3.0`.
+
+The owner reported it again after the earlier re-check passed: draw something,
+move back and forth, and it is here, then there; sometimes gone until you
+scroll. The earlier check was looking for lost elements and there were none —
+the elements were always saved and always on the canvas. What moved was where
+the canvas was looking.
+
+**Two faults, both about the width the editor divides by.**
+
+1. The workspace sidebar narrows the editor by shrinking `#root`. The window
+   never changes size, and the editor only re-measures on a window resize, so
+   it kept believing it was as wide as the window — 1024 where the canvas was
+   752. Everything it computed from that was 272px out. `notifyEditorResized`
+   in `workspaceScene.ts` now tells it, **synchronously**: the first attempt
+   used `requestAnimationFrame`, and animation frames and ResizeObservers are
+   both suspended in a background tab, so the correction arrived sometimes and
+   not others. That inconsistency is exactly what "here, then there" was.
+2. `scrollToContent` — what opened a workspace drawing — stops centring the
+   drawing the moment the work is wider than the viewport and centres the
+   single nearest element instead. Removed. `excalidraw-app/data/
+   fitSavedDrawing.ts` fits the whole drawing instead, once the editor's own
+   measurement agrees with the box it is drawn in **and** has held still;
+   either test alone is not enough, as a stale width sits perfectly still and
+   a matching one can be mid-change.
+
+**How it was found, since guessing cost most of the time here:** a temporary
+probe pushed `getAppState().width` against `container.clientWidth` every 50ms
+into `window.__fitProbe`. It showed the editor stuck at 1024 for 2.2s while
+the DOM read 752 throughout. Nothing short of that settled it — four theories
+before it were all wrong. The probe was removed before committing.
+
+_Verified in the editor_, on a drawing whose work sits at x2400,y1800: it used
+to open blank, or with one shape half off the right edge, differently each
+time. It now opens at 55% with all five shapes inside the canvas, landing on
+the same pixels on every open (ink box 65,158→686,668 twice over).
+
+Checks: typecheck clean, `yarn fix` clean, frontend 1,953 passed (132 files),
+server 60/62 — the same
+`two administrators deleting each other always leave one administrator` flake
+as this morning, which passes alone and is unrelated to this change.
+
+**Worth knowing:** opening a drawing now always frames the whole drawing. It
+does not remember where you were last looking. That is a deliberate trade and
+nobody has asked for the alternative yet.
+
 ### 2026-10-28 — Claude — anything can be an icon, and the vanishing drawing re-checked
 
 **Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
