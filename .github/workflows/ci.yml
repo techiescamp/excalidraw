@@ -96,3 +96,17 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: yarn build:app
+
+  # No suite above covers the shell scripts that deploy and prepare hosts, and
+  # a syntax error in one of them is only discovered while it is running on a
+  # server. Proving they parse costs seconds. What they rewrite is covered by
+  # scripts/dev-env/configure.test.mjs, which the frontend job runs.
+  scripts:
+    name: Deployment scripts parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          for file in scripts/dev-env/*.sh .github/scripts/*.sh server/deploy/excalidraw-deploy; do
+            bash -n "$file" && echo "ok $file"
+          done
