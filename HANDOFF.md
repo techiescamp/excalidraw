@@ -95,6 +95,47 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-28 — Claude — anything can be an icon, and the vanishing drawing re-checked
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
+Production stays on `v1.3.0`.
+
+**Icons from any selection.** The library only ever accepted one stored
+picture, so a shape somebody drew could not become an icon — the obvious thing
+to want from a drawing tool. Any selection now offers it: a shape, a group, a
+label, a whole board. A single stored picture still passes through untouched
+at its own quality; anything else is rendered to PNG at up to 512px on its
+longest side, which stays sharp inside the 256px box an icon is placed in.
+
+PNG and not SVG, deliberately. Excalidraw's SVG carries its fonts and any
+placed picture inline as `url(data:…)`, and `server/lib/icons.js` refuses an
+SVG that reaches outside itself — that rule is what stops a hostile icon
+reading the page it lands in. Do not "improve" this to SVG without changing
+that rule first, and think hard before changing that rule.
+
+New: `excalidraw-app/data/selectionIcon.ts` (+5 unit tests). The save still
+refuses if the canvas moved under the dialog, now checking every element that
+was selected rather than one image's file.
+
+**The vanishing drawing, re-checked end to end.** The owner is nervous about
+this release, so it was driven through the real editor rather than the API:
+
+| What was done | Result |
+|---|---|
+| 6 × draw a shape → dashboard → back | 6 shapes, never fewer; ink on canvas 1,081 → 6,187px, only ever rising |
+| a second person (bibin) writes while it is open, then reopen | his red shape is on screen (468 red pixels) and stored — the bug from yesterday |
+| 6 rapid trips out and back, drawing nothing | ink 6,187 and 468 red pixels, identical to the pixel; 7 elements stored |
+
+Evidence left in the local test bed: drawing "Back and forth probe", icon
+"Hand drawn oval".
+
+Also run: the 26-check production-shaped pass (26/26), frontend 1,953 passed
+(132 files), server 62/62, typecheck and `yarn fix` clean.
+
+**Noticed, not fixed:** opening a drawing writes a new version even when
+nothing is edited — the probe went from version 16 to 24 over eight opens.
+Harmless today, but it inflates version history.
+
 ### 2026-10-28 — Claude — snapping is now a per-person, per-drawing choice
 
 **Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
