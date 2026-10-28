@@ -138,6 +138,7 @@ import {
   getActiveWorkspaceId,
   subscribeActiveWorkspace,
   getWorkspaceSceneId,
+  getWorkspaceSceneKey,
   workspaceEditorLocation,
   getWorkspaceUserLabel,
   getWorkspacePermissions,
@@ -147,6 +148,7 @@ import {
   registerWorkspaceSceneApplier,
 } from "./data/workspaceScene";
 import { mergeOnOpen } from "./data/mergeOnOpen";
+import { readSnapPreference, writeSnapPreference } from "./data/snapPreference";
 import {
   LibraryIndexedDBAdapter,
   LibraryLocalStorageMigrationAdapter,
@@ -266,6 +268,12 @@ const initializeScene = async (opts: {
     try {
       const scene = await loadWorkspaceScene(workspaceSceneId);
       opts.collabAPI?.setUsername(getWorkspaceUserLabel());
+      // Snapping is this person's way of working on this one drawing, so it is
+      // laid over the scene on open rather than stored inside it, where it
+      // would follow the drawing onto everybody else's canvas.
+      const remembered = readSnapPreference(getWorkspaceSceneKey());
+      const snapping =
+        remembered === null ? {} : { objectsSnapModeEnabled: remembered };
       const roomLink = getCollaborationLinkData(
         workspaceEditorLocation()?.href || "",
       );
@@ -276,12 +284,15 @@ const initializeScene = async (opts: {
             ...scene,
             elements: mergeOnOpen(scene.elements ?? [], remote?.elements),
             files: { ...scene.files, ...remote?.files },
-            appState: { ...scene.appState, isLoading: false },
+            appState: { ...scene.appState, ...snapping, isLoading: false },
           },
           isExternalScene: false,
         };
       }
-      return { scene, isExternalScene: false };
+      return {
+        scene: { ...scene, appState: { ...scene.appState, ...snapping } },
+        isExternalScene: false,
+      };
     } catch (error: any) {
       window.alert(error.message || "Could not open this drawing");
       return {
@@ -571,6 +582,10 @@ const ExcalidrawWrapper = () => {
   }
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // What snapping was last seen as. null until the first change arrives, so
+  // opening a drawing never announces a setting nobody touched.
+  const snapPreferenceRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -932,6 +947,19 @@ const ExcalidrawWrapper = () => {
 
     const workspaceSceneId = getWorkspaceSceneId();
     if (workspaceSceneId) {
+      // Toggling snapping shows nothing on the canvas until something is
+      // dragged, so say it happened and remember the answer for next time.
+      const snapping = appState.objectsSnapModeEnabled;
+      if (snapPreferenceRef.current === null) {
+        snapPreferenceRef.current = snapping;
+      } else if (snapPreferenceRef.current !== snapping) {
+        snapPreferenceRef.current = snapping;
+        writeSnapPreference(getWorkspaceSceneKey(), snapping);
+        excalidrawAPI?.setToast({
+          message: snapping ? "Snap to objects on" : "Snap to objects off",
+          duration: 2000,
+        });
+      }
       // A save that was behind comes back merged with whatever else was stored;
       // put that on the canvas so the author is drawing on what exists.
       registerWorkspaceSceneApplier((scene) =>

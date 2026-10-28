@@ -1688,4 +1688,11 @@ export async function bindWorkspaceRoom(roomId: string, roomKey: string) {
 
 export const getWorkspaceUserLabel = () => userLabel;
 
+/**
+ * Identifies the open drawing for the person who opened it — the same
+ * `user:workspace:scene` key the draft store uses. Preferences keyed by it
+ * belong to one person on one drawing, and never leak to anybody else.
+ */
+export const getWorkspaceSceneKey = () => active?.key ?? null;
+
 export const workspaceEditorWindow = () => node?.ownerDocument.defaultView;

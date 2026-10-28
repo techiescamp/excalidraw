@@ -95,6 +95,43 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-28 — Claude — snapping is now a per-person, per-drawing choice
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
+Production stays on `v1.3.0`.
+
+The report was "Alt+S does nothing, right-click works". Alt+S was never broken.
+Proved it in the running editor: press Alt+S, open the context menu, the
+"Snap to objects" row comes back ticked. What was missing was any sign that it
+had happened — the canvas looks identical until something is dragged, and the
+only place the state shows is a menu you have to open to see.
+
+Two changes:
+
+- Toggling snapping now says so, as a toast ("Snap to objects on" / "off").
+- The answer is remembered against `user:workspace:scene` — the same key the
+  draft store already uses — so it belongs to one person on one drawing. It is
+  **not** saved into the scene, which would have carried one person's working
+  preference onto everybody else's canvas and onto their other drawings.
+
+New: `excalidraw-app/data/snapPreference.ts`, `getWorkspaceSceneKey()` in
+`workspaceScene.ts`, applied in `initializeScene` and persisted in `onChange`.
+Every storage access is guarded — a private window or a full store falls back
+to the editor's default rather than throwing mid-drag.
+
+_Verified in the running editor_ on the local test bed: toggled with Alt+S,
+reloaded the drawing and the tick was still there; opened a different drawing
+in the same window and it was unticked. Plus 7 unit tests covering both
+separations and both storage-failure paths.
+
+Checks: typecheck clean, `yarn fix` clean, frontend 1,948 passed (131 files),
+server 62/62.
+
+**Worth knowing:** the server suite failed once on
+`two administrators deleting each other always leave one administrator`, then
+passed on a rerun and passed alone. That test is flaky under the shared
+database. Nobody has looked at why.
+
 ### 2026-10-27 — Codex — publish icon work to dev
 
 Committed the icon-library and gallery changes as `c27cf9a3` on `Icons`,
