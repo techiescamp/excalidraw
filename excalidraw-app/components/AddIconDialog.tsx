@@ -74,11 +74,7 @@ export const AddIconDialog = ({
   };
 
   return (
-    <Dialog
-      size="small"
-      title="Add to icon library"
-      onCloseRequest={onClose}
-    >
+    <Dialog size="small" title="Add to icon library" onCloseRequest={onClose}>
       <div className="add-icon-dialog" ref={rootRef}>
         <p className="add-icon-dialog-hint">
           Save this selection for reuse anywhere in this workspace.
