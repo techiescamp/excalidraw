@@ -378,7 +378,9 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
               <button
                 type="button"
                 key={reference}
-                title={reference}
+                // The tile shows the picture alone, so the name lives here
+                // and in the label rather than under every icon.
+                title={icon.display_name || reference}
                 aria-label={`Select ${icon.display_name || reference}`}
                 aria-pressed={selected === reference}
                 className={`app-icon-library-item${
@@ -428,8 +430,6 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
                   alt=""
                   loading="lazy"
                 />
-                <span>{icon.display_name || icon.name}</span>
-                <small>{icon.category}</small>
               </button>
             );
           })}

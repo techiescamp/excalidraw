@@ -487,6 +487,10 @@ function shell() {
    "dashboard",
    !admin && !col && view === "home",
  )}${
+    state.me.is_superadmin
+      ? navLink("/admin/users", "Administration", "shield", admin)
+      : ""
+  }${
     can("trash.read")
       ? navLink(
           viewPath({
@@ -539,15 +543,12 @@ function shell() {
        }</div>`,
    )
    .join("")}</nav>
- <nav class="sidebar-foot">${
-   state.me.is_superadmin
-     ? navLink("/admin/users", "Administration", "shield", admin)
-     : ""
- }<button id="account-menu">${avatar(
-    state.me.display_name || state.me.username,
-  )}<strong>${escape(
-    state.me.display_name || state.me.username,
-  )}</strong>${icon("more", 18)}</button></nav></aside>
+ <nav class="sidebar-foot"><button id="account-menu">${avatar(
+   state.me.display_name || state.me.username,
+ )}<strong>${escape(state.me.display_name || state.me.username)}</strong>${icon(
+    "more",
+    18,
+  )}</button></nav></aside>
  <main class="main"><div class="mobile-top"><button id="mobile-nav" aria-label="Toggle navigation">${icon(
    "menu",
  )}</button><span>${escape(
