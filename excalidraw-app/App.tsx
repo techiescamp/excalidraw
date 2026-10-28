@@ -149,6 +149,7 @@ import {
 } from "./data/workspaceScene";
 import { mergeOnOpen } from "./data/mergeOnOpen";
 import { renderSelectionAsIcon, selectedForIcon } from "./data/selectionIcon";
+import { fitSavedDrawing } from "./data/fitSavedDrawing";
 import { readSnapPreference, writeSnapPreference } from "./data/snapPreference";
 import {
   LibraryIndexedDBAdapter,
@@ -598,9 +599,27 @@ const ExcalidrawWrapper = () => {
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Set once the opened drawing has been handed to the editor, which is when
+  // there is something worth pointing the viewport at.
+  const [sceneOnCanvas, setSceneOnCanvas] = useState(false);
+
   // What snapping was last seen as. null until the first change arrives, so
   // opening a drawing never announces a setting nobody touched.
   const snapPreferenceRef = useRef<boolean | null>(null);
+
+  // Opening a saved drawing must show the drawing. See `fitSavedDrawing` for
+  // why the editor cannot be left to work this out at mount.
+  useEffect(() => {
+    const container = wrapperRef.current;
+    if (!sceneOnCanvas || !excalidrawAPI || !container) {
+      return;
+    }
+    if (!getWorkspaceSceneId()) {
+      // Shared links and imported files keep the editor's own behaviour.
+      return;
+    }
+    return fitSavedDrawing(excalidrawAPI, container);
+  }, [sceneOnCanvas, excalidrawAPI]);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -773,6 +792,7 @@ const ExcalidrawWrapper = () => {
     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
       loadImages(data, /* isInitialLoad */ true);
       initialStatePromiseRef.current.promise.resolve(data.scene);
+      setSceneOnCanvas(true);
     });
 
     const onHashChange = async (event: HashChangeEvent) => {

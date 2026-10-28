@@ -1093,12 +1093,39 @@ function sceneRow(
   return row;
 }
 
+/**
+ * Tells the editor its canvas changed size.
+ *
+ * This sidebar narrows the editor by shrinking `#root`, which the window
+ * never hears about — and the editor only re-measures on a window resize.
+ * So it went on believing it was as wide as the window: every piece of
+ * viewport arithmetic it did, centring a drawing included, divided by a width
+ * 272px larger than the canvas it was drawing into. Work landed off to one
+ * side or off the screen entirely, and toggling the sidebar moved it again,
+ * which is what "it was here, now it is there" was.
+ *
+ * Sent straight away rather than on the next frame. The editor's own
+ * ResizeObserver would notice eventually, but observers and animation frames
+ * both stop running while a tab is in the background, so a drawing opened in
+ * a tab that is not on top came back measured wrong. Reading the new size
+ * forces the browser to lay it out first, so this is never a frame early.
+ */
+function notifyEditorResized() {
+  const win = node?.ownerDocument.defaultView;
+  if (!win) {
+    return;
+  }
+  node.ownerDocument.documentElement.getBoundingClientRect();
+  win.dispatchEvent(new win.Event("resize"));
+}
+
 async function showCollectionScenes(session: EditorSession) {
   const doc = node.ownerDocument;
   const old = doc.querySelector(".workspace-scenes-panel");
   if (old) {
     old.remove();
     doc.documentElement.classList.remove("workspace-sidebar-open");
+    notifyEditorResized();
     return;
   }
   const panel = doc.createElement("aside");
@@ -1114,10 +1141,12 @@ async function showCollectionScenes(session: EditorSession) {
   close.onclick = () => {
     panel.remove();
     doc.documentElement.classList.remove("workspace-sidebar-open");
+    notifyEditorResized();
   };
   panel.append(close, heading, list);
   doc.body.append(panel);
   doc.documentElement.classList.add("workspace-sidebar-open");
+  notifyEditorResized();
   const context = new URL(session.returnTo, doc.defaultView!.location.origin)
     .searchParams;
   const query = new URLSearchParams({
@@ -1480,7 +1509,12 @@ export async function loadWorkspaceScene(
     void showCollectionScenes(session);
   }
   return {
-    scrollToContent: true,
+    // Deliberately no `scrollToContent`. It centres on a single element as
+    // soon as the drawing is wider than the window, and it measures the window
+    // before this sidebar has narrowed it — between the two, a saved drawing
+    // opened on empty canvas with the work just off the edge. The editor fits
+    // the whole drawing itself once it knows its real size; see
+    // `useFitSavedDrawing` in excalidraw-app/App.tsx.
     elements: payload.elements,
     appState: {
       ...payload.appState,
