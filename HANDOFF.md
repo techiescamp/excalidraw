@@ -48,6 +48,7 @@ pipeline existed.
 | `.github/workflows/release.yml` | written, never run |
 | `.github/workflows/deploy.yml` | written, never run |
 | `.github/scripts/notify-discord.sh` | written, tested against an unreachable webhook |
+| `.github/workflows/deploy-dev.yml` | written on `feature/dev-environment`, never run; needs the `DEV_*` secrets |
 | `server/deploy/excalidraw-deploy` | written, **not installed on the server** |
 | `server/deploy/ci-deploy.sudoers` | written, **not applied** |
 
@@ -94,6 +95,65 @@ pipeline existed.
 ---
 
 ## Log
+
+### 2026-10-28 — Claude — a development environment, from a production snapshot
+
+Branch `feature/dev-environment`, off `dev`. Nothing deployed, nothing pushed.
+
+The repository had one environment, and DEVELOPMENT.md said so: production was
+the next environment after a laptop. This adds the missing one — a droplet
+restored from a production snapshot, reachable by IP — and puts it in the
+pipeline between `dev` and a release.
+
+Added:
+
+| File | What it is |
+|---|---|
+| `docs/specs/dev-environment.md` | the spec, written first |
+| `scripts/dev-env/dev-env.sh` | `up` / `prepare` / `status` / `ssh` / `sync-bucket` / `down` |
+| `scripts/dev-env/unproduction.sh` | runs on the droplet; makes a clone a dev box |
+| `scripts/dev-env/configure.mjs` | the two file rewrites, extracted so they can be tested |
+| `scripts/dev-env/configure.test.mjs` | 15 tests over those rewrites |
+| `.github/workflows/deploy-dev.yml` | builds a ref and installs it on the droplet |
+
+`DEVELOPMENT.md` gained section 4b, a step 5 in the production gate, and
+`deploy-dev.yml` in section 7. `ci.yml` gained a `scripts` job that proves
+every deployment shell script parses.
+
+**The thing that was easy to miss.** The editor bundle has its API address
+compiled in by `release.yml`. A production bundle served from a cloned droplet
+loads from the clone and then writes to `https://draw.devopsproject.dev` — so a
+"test" box would have been editing live drawings. Two defences: `prepare`
+replaces the inherited bundle with a placeholder, and `deploy-dev.yml` fails if
+the bundle it built still mentions the production domain. Giving
+`VITE_APP_BACKEND_V2_*` and `VITE_APP_WS_SERVER_URL` the same same-origin
+default `VITE_APP_API_URL` already has would remove the problem and let one
+artifact run on any host. Not done; written down in section 4b.
+
+A fresh snapshot is production with a different address, so `prepare` also
+rotates `JWT_SECRET` (which makes the Spaces credentials stored in
+`app_settings` unreadable here), nulls every `password_hash` and enables one
+account with a random password written to `/root/dev-admin-password` on the
+box, clears the token and OAuth and MCP tables, disables the backup timer so
+the clone cannot overwrite production's backups in Spaces, and empties the S3
+settings so the default storage driver is local disk. It refuses to run on a
+host the production domain resolves to, and refuses if the domain does not
+resolve at all unless `DEV_FORCE=yes`. `up` puts a firewall in front of the
+droplet admitting only the operator's own address, and reads the attachment
+back rather than trusting the tag.
+
+Checks: `yarn test:app --watch=false` in a worktree (the new file included),
+`bash -n` on every script, prettier clean, the workflow YAML parses, and both
+rewrites exercised end to end through the CLI the droplet will use.
+
+**Not verified:** nothing has run on a droplet. No snapshot was created, no
+droplet exists, `doctl` on this machine is not authenticated, and the generated
+nginx site has never been through a real `nginx -t` — nginx is not installed
+here. The script runs `nginx -t` on the box and puts the production site back
+if it fails. The first `prepare` is where all of that gets confirmed.
+
+**Needs a person:** the `DEV_HOST`, `DEV_USER` and `DEV_SSH_KEY` secrets, and a
+`doctl auth init`. An agent cannot add repository secrets.
 
 ### 2026-10-27 — Codex — publish icon work to dev
 
