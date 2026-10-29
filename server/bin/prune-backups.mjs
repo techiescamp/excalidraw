@@ -158,6 +158,19 @@ const main = async () => {
     },
   });
 
+  // Names, not secrets: which bucket, which endpoint, which region, and
+  // whether a key is present at all. Enough to see a mismatch without
+  // printing anything that must not be printed.
+  console.log(
+    `using endpoint=${process.env.S3_ENDPOINT || "(default aws)"} ` +
+      `region=${process.env.AWS_REGION || "(unset)"} ` +
+      `bucket=${BUCKET} ` +
+      `key=${process.env.AWS_ACCESS_KEY_ID ? "set, " + process.env.AWS_ACCESS_KEY_ID.length + " chars" : "UNSET"} ` +
+      `secret=${process.env.AWS_SECRET_ACCESS_KEY ? "set" : "UNSET"} ` +
+      `backup_bucket=${process.env.BACKUP_BUCKET || "(unset)"} ` +
+      `s3_bucket=${process.env.S3_BUCKET || "(unset)"}`,
+  );
+
   const objects = [];
   let token;
   do {
@@ -189,6 +202,37 @@ const main = async () => {
       other,
     )}  (left alone)`,
   );
+  if (foreign.length) {
+    // Grouped so whoever reads this can see what else is in the bucket and
+    // decide what to do about it. This script will not delete any of it.
+    const byPrefix = new Map();
+    for (const object of foreign) {
+      const top = object.Key.split("/").slice(0, 2).join("/") || "(root)";
+      const cur = byPrefix.get(top) || {
+        bytes: 0,
+        n: 0,
+        first: "9999",
+        last: "",
+      };
+      cur.bytes += object.Size || 0;
+      cur.n++;
+      const when = (object.LastModified || new Date())
+        .toISOString()
+        .slice(0, 10);
+      if (when < cur.first) cur.first = when;
+      if (when > cur.last) cur.last = when;
+      byPrefix.set(top, cur);
+    }
+    console.log("  what else is in this bucket:");
+    for (const [top, v] of [...byPrefix]
+      .sort((a, b) => b[1].bytes - a[1].bytes)
+      .slice(0, 15))
+      console.log(
+        `    ${gb(v.bytes).padStart(10)} ${String(v.n).padStart(6)} obj  ${
+          v.first
+        }..${v.last}  ${top}`,
+      );
+  }
   for (const group of remove.slice(0, 10))
     console.log(`    - ${group.group}  ${gb(group.bytes)}  ${group.why}`);
   if (remove.length > 10) console.log(`    … and ${remove.length - 10} more`);
@@ -217,7 +261,16 @@ if (
   import.meta.url.endsWith(process.argv[1].split("/").pop())
 ) {
   main().catch((error) => {
-    console.error(`prune-backups: ${error.message}`);
+    // The SDK's message is often just "UnknownError"; the name, the HTTP
+    // status and the service's own code are what actually say what happened.
+    console.error(
+      `prune-backups: ${error.name || "error"}: ${error.message}` +
+        (error.$metadata?.httpStatusCode
+          ? ` [http ${error.$metadata.httpStatusCode}]`
+          : "") +
+        (error.Code ? ` [code ${error.Code}]` : "") +
+        (error.BucketName ? ` [bucket ${error.BucketName}]` : ""),
+    );
     process.exit(1);
   });
 }

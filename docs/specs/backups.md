@@ -65,26 +65,71 @@ sudo systemd-run --wait --pipe --collect \
   /usr/bin/node /opt/excalidraw/api/bin/prune-backups.mjs
 ```
 
-## Problem 2 — nobody knows what else is in the bucket
+## Problem 2 — the bucket also held a one-off archive (settled)
 
-The owner reports ~38 GB that may be from an unrelated backup. That has not
-been confirmed: listing the bucket needs Spaces credentials, and both routes to
-them were refused — creating a read-only key, and running a survey on
-production. **Nothing should be deleted until the listing has been read.**
+The other ~36 GB was `archive/2026-10-08T06-32-56Z`: 17,192 objects written by
+`archive-versions.mjs` as a point-in-time copy before a prune of drawing
+version history, kept so that prune could be undone. The database still holds
+restore points from 2026-09-14 onward, so the archive covered history older
+than that and nothing else.
 
-**Fix:** run the command above. It reports a `not mine … (left alone)` line
-with the count and size of everything that is not a backup. Decide from that.
+Deleted on 2026-10-29 on the owner's decision, with
+`server/bin/delete-prefix.mjs`, which takes one named prefix, shows what it
+would remove, and refuses a prefix that is empty, the whole bucket, or the
+nightly backups.
 
-## Problem 3 — a backup is never restored, so nobody knows it restores
+The bucket went from ~46 GB to **7.23 GB**: 3.25 GB of backups beyond the
+policy, and 35.77 GB of that archive.
 
-Checksums prove the bytes arrived. They do not prove the dump loads, that the
-schema matches, or that the drawings archive is complete. The one thing a
-backup is for has never been exercised.
+## Problem 2a — the service reads an environment file the repository does not have
 
-**Fix, not built:** a monthly job that takes the newest dump, restores it into a
-scratch database, counts rows in `users`, `workspaces` and `scenes`, checks the
-newest drawing in the archive opens, then drops the database. It fails loudly if
-any count is zero.
+`excalidraw-backup.service` on the droplet loads **two** environment files:
+
+    EnvironmentFile=/etc/excalidraw-api.env
+    EnvironmentFile=/etc/excalidraw-backup.env
+
+The unit in `server/deploy/` has only the first. The second holds the backup
+bucket and its credentials: without it the storage settings are the app's, the
+bucket resolves to `excalidraw-data` rather than `backups-draw`, and the key is
+rejected. Anything run by hand must pass both files or it will fail in a way
+that looks like broken credentials.
+
+**Fix, not done:** bring `server/deploy/excalidraw-backup.service` in line with
+the droplet, so a deploy cannot overwrite the unit and silently cut the backup
+off from its bucket.
+
+## Problem 3 — a backup was never read back, so nobody knew it restores
+
+Checksums prove the bytes arrived. They do not prove the dump decompresses,
+that it holds the tables a restore needs, or that the drawings archive holds
+drawings.
+
+**Fix:** `server/bin/verify-backup.mjs`. It takes the newest backup of each
+kind, reassembles it from its parts, checks every piece against the checksum
+written beside it, decompresses it, and then looks inside: the dump must define
+a sensible number of tables, must contain `users`, `workspaces`, `scenes`,
+`collections` and `workspace_members`, and must carry data and not only a
+schema; the drawings archive must list, hold an `index.json`, and that index
+must name drawings. It also fails if the newest backup is more than 48 hours
+old. It downloads nothing permanently and changes nothing.
+
+First run, 2026-10-29, against the backup taken that morning:
+
+    database: newest is 2026-10-29T02-31-47Z (10.9 hours old)
+      ok  every piece matches its checksum
+      ok  decompresses (2.0 MB)
+      ok  the dump defines 39 tables
+      ok  tables users, workspaces, scenes, collections, workspace_members present
+      ok  the dump carries data for 39 tables
+    drawings: newest is 2026-10-29T02-31-47Z (10.9 hours old)
+      ok  4 parts reassembled, every piece matches its checksum
+      ok  decompresses (493.3 MB)
+      ok  5953 entries, index.json lists 4077 drawings
+    HEALTHY
+
+**Still not done:** an actual restore into a scratch database. This reads the
+dump; it does not load it. That is the last step to a backup nobody has to
+hope about.
 
 ## Problem 4 — a failure is silent
 
