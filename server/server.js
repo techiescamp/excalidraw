@@ -276,7 +276,29 @@ const sha256 = (v) => crypto.createHash("sha256").update(v).digest("hex");
 
 const app = express();
 app.set("trust proxy", "loopback");
-app.use(helmet());
+// `upgrade-insecure-requests` tells the browser to fetch every subresource
+// over https, whatever the page asked for. On the production host that is
+// right. On a host reached over plain http it is fatal and silent: the page
+// loads, every API call is rewritten to https, nothing is listening on 443,
+// and the browser refuses the connection — so the dashboard sits on
+// "Loading workspace…" for ever. curl does not honour CSP, which is why a
+// health check can pass against a site no browser can use.
+//
+// Keyed off this instance's own origin, so an https deployment is unchanged.
+const servedOverHttp = String(APP_ORIGIN || "").startsWith("http://");
+app.use(
+  helmet(
+    servedOverHttp
+      ? {
+          contentSecurityPolicy: {
+            useDefaults: true,
+            directives: { upgradeInsecureRequests: null },
+          },
+          strictTransportSecurity: false,
+        }
+      : undefined,
+  ),
+);
 app.use(cookieParser());
 const notBlob = (req) => !req.path.startsWith("/api/blob/");
 app.use(

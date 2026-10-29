@@ -3706,4 +3706,37 @@ test("private workspace backend", async (t) => {
       );
     },
   );
+
+  await t.test(
+    "a site served over http does not tell browsers to upgrade to https",
+    async () => {
+      // `upgrade-insecure-requests` is right on the production host and fatal
+      // on one reached over plain http: the page loads, every API call is
+      // rewritten to https, nothing is listening on 443, and the browser
+      // refuses the connection. The dashboard then sits on "Loading
+      // workspace…" for ever. curl does not honour CSP, so a health check
+      // passes against a site no browser can use — which is exactly how this
+      // reached a running development droplet before anyone noticed.
+      //
+      // This suite runs the server with an http APP_ORIGIN.
+      const response = await fetch(`${origin}/api/me`, {
+        headers: { "X-Excalidraw-Request": "1" },
+      });
+      const csp = response.headers.get("content-security-policy") || "";
+      assert.ok(csp, "a content-security-policy is still sent");
+      assert.ok(
+        !/upgrade-insecure-requests/.test(csp),
+        `http origin must not upgrade requests, got: ${csp}`,
+      );
+      assert.ok(
+        /default-src 'self'/.test(csp),
+        "the rest of the policy is untouched",
+      );
+      assert.equal(
+        response.headers.get("strict-transport-security"),
+        null,
+        "and it does not promise HSTS it cannot keep",
+      );
+    },
+  );
 });
