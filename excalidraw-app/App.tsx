@@ -138,6 +138,7 @@ import {
   getActiveWorkspaceId,
   subscribeActiveWorkspace,
   getWorkspaceSceneId,
+  getWorkspaceSceneKey,
   workspaceEditorLocation,
   getWorkspaceUserLabel,
   getWorkspacePermissions,
@@ -146,6 +147,10 @@ import {
   saveWorkspaceScene,
   registerWorkspaceSceneApplier,
 } from "./data/workspaceScene";
+import { mergeOnOpen } from "./data/mergeOnOpen";
+import { renderSelectionAsIcon, selectedForIcon } from "./data/selectionIcon";
+import { fitSavedDrawing } from "./data/fitSavedDrawing";
+import { readSnapPreference, writeSnapPreference } from "./data/snapPreference";
 import {
   LibraryIndexedDBAdapter,
   LibraryLocalStorageMigrationAdapter,
@@ -265,6 +270,12 @@ const initializeScene = async (opts: {
     try {
       const scene = await loadWorkspaceScene(workspaceSceneId);
       opts.collabAPI?.setUsername(getWorkspaceUserLabel());
+      // Snapping is this person's way of working on this one drawing, so it is
+      // laid over the scene on open rather than stored inside it, where it
+      // would follow the drawing onto everybody else's canvas.
+      const remembered = readSnapPreference(getWorkspaceSceneKey());
+      const snapping =
+        remembered === null ? {} : { objectsSnapModeEnabled: remembered };
       const roomLink = getCollaborationLinkData(
         workspaceEditorLocation()?.href || "",
       );
@@ -273,14 +284,17 @@ const initializeScene = async (opts: {
         return {
           scene: {
             ...scene,
-            elements: remote?.elements ?? scene.elements,
+            elements: mergeOnOpen(scene.elements ?? [], remote?.elements),
             files: { ...scene.files, ...remote?.files },
-            appState: { ...scene.appState, isLoading: false },
+            appState: { ...scene.appState, ...snapping, isLoading: false },
           },
           isExternalScene: false,
         };
       }
-      return { scene, isExternalScene: false };
+      return {
+        scene: { ...scene, appState: { ...scene.appState, ...snapping } },
+        isExternalScene: false,
+      };
     } catch (error: any) {
       window.alert(error.message || "Could not open this drawing");
       return {
@@ -439,27 +453,6 @@ const initializeScene = async (opts: {
   return { scene: null, isExternalScene: false };
 };
 
-// Snapping is what makes two images line up instead of nearly lining up. The
-// editor ships with it off, behind a menu item nobody opens, so in practice it
-// did not exist. Every way of opening a drawing passes through here — the
-// dashboard's `?scene=`, a shared link, a local scratch canvas — so the default
-// is applied once, in one place, rather than at each of them. Anything that
-// already said what it wants keeps it.
-const withDefaultSnapping = (
-  scene: ExcalidrawInitialDataState | null,
-): ExcalidrawInitialDataState | null => {
-  if (!scene) {
-    return scene;
-  }
-  if (scene.appState?.objectsSnapModeEnabled !== undefined) {
-    return scene;
-  }
-  return {
-    ...scene,
-    appState: { ...scene.appState, objectsSnapModeEnabled: true },
-  };
-};
-
 const ExcalidrawWrapper = () => {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const excalidrawAPI = useExcalidrawAPI();
@@ -488,9 +481,12 @@ const ExcalidrawWrapper = () => {
     source: string;
   } | null>(null);
   const [iconImageJob, setIconImageJob] = useState<{
-    targetId: string;
-    fileId: FileId;
-    version: number;
+    // What was selected when the dialog opened, so the save can tell whether
+    // the canvas moved on underneath it.
+    selection: readonly { id: string; version: number }[];
+    // Set only when the icon is one stored picture being passed through
+    // untouched; a drawn selection is rendered and has no file behind it.
+    fileId: FileId | null;
     sceneId: string | null;
     location: string;
     source: string;
@@ -531,48 +527,59 @@ const ExcalidrawWrapper = () => {
           if (appState.viewModeEnabled) {
             return false;
           }
-          const selected = elements.filter(
-            (element) => appState.selectedElementIds[element.id],
-          );
-          if (
-            selected.length !== 1 ||
-            !isInitializedImageElement(selected[0])
-          ) {
-            return false;
-          }
-          const file = excalidrawAPI?.getFiles()[selected[0].fileId];
-          return Boolean(
-            !selected[0].isDeleted &&
-              !selected[0].locked &&
-              file &&
-              ICON_IMAGE_MIME_TYPES.has(file.mimeType),
+          return (
+            selectedForIcon(elements, appState).length > 0 &&
+            Boolean(wrapperRef.current?.ownerDocument.defaultView)
           );
         },
         perform: (elements, appState) => {
-          const image = elements.find(
-            (element) => appState.selectedElementIds[element.id],
-          );
-          if (!image || !isInitializedImageElement(image)) {
-            return false;
-          }
-          const file = excalidrawAPI?.getFiles()[image.fileId];
+          const selected = selectedForIcon(elements, appState);
           const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
-          if (
-            !file ||
-            !ownerWindow ||
-            !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
-          ) {
+          if (!selected.length || !ownerWindow || !excalidrawAPI) {
             return false;
           }
-          setIconImageJob({
-            targetId: image.id,
-            fileId: image.fileId,
-            version: image.version,
+          const where = {
+            selection: selected.map((element) => ({
+              id: element.id,
+              version: element.version,
+            })),
             sceneId: getWorkspaceSceneId(),
             location: ownerWindow.location.href,
-            source: file.dataURL,
             workspace: activeWorkspaceId,
-          });
+          };
+          // One stored picture goes in as it is, at its own full quality.
+          // Anything drawn has no file behind it and has to be rendered.
+          const only = selected.length === 1 ? selected[0] : null;
+          const file =
+            only && isInitializedImageElement(only)
+              ? excalidrawAPI.getFiles()[only.fileId]
+              : undefined;
+          if (
+            only &&
+            isInitializedImageElement(only) &&
+            file &&
+            ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+          ) {
+            setIconImageJob({
+              ...where,
+              fileId: only.fileId,
+              source: file.dataURL,
+            });
+            return { captureUpdate: CaptureUpdateAction.NEVER };
+          }
+          void renderSelectionAsIcon(
+            selected,
+            appState,
+            excalidrawAPI.getFiles(),
+          ).then(
+            (source) => setIconImageJob({ ...where, fileId: null, source }),
+            (error: Error) =>
+              excalidrawAPI.setToast({
+                message:
+                  error.message ||
+                  "Could not turn that selection into an icon.",
+              }),
+          );
           return { captureUpdate: CaptureUpdateAction.NEVER };
         },
       },
@@ -591,6 +598,28 @@ const ExcalidrawWrapper = () => {
   }
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Set once the opened drawing has been handed to the editor, which is when
+  // there is something worth pointing the viewport at.
+  const [sceneOnCanvas, setSceneOnCanvas] = useState(false);
+
+  // What snapping was last seen as. null until the first change arrives, so
+  // opening a drawing never announces a setting nobody touched.
+  const snapPreferenceRef = useRef<boolean | null>(null);
+
+  // Opening a saved drawing must show the drawing. See `fitSavedDrawing` for
+  // why the editor cannot be left to work this out at mount.
+  useEffect(() => {
+    const container = wrapperRef.current;
+    if (!sceneOnCanvas || !excalidrawAPI || !container) {
+      return;
+    }
+    if (!getWorkspaceSceneId()) {
+      // Shared links and imported files keep the editor's own behaviour.
+      return;
+    }
+    return fitSavedDrawing(excalidrawAPI, container);
+  }, [sceneOnCanvas, excalidrawAPI]);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -762,9 +791,8 @@ const ExcalidrawWrapper = () => {
 
     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
       loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(
-        withDefaultSnapping(data.scene),
-      );
+      initialStatePromiseRef.current.promise.resolve(data.scene);
+      setSceneOnCanvas(true);
     });
 
     const onHashChange = async (event: HashChangeEvent) => {
@@ -954,6 +982,19 @@ const ExcalidrawWrapper = () => {
 
     const workspaceSceneId = getWorkspaceSceneId();
     if (workspaceSceneId) {
+      // Toggling snapping shows nothing on the canvas until something is
+      // dragged, so say it happened and remember the answer for next time.
+      const snapping = appState.objectsSnapModeEnabled;
+      if (snapPreferenceRef.current === null) {
+        snapPreferenceRef.current = snapping;
+      } else if (snapPreferenceRef.current !== snapping) {
+        snapPreferenceRef.current = snapping;
+        writeSnapPreference(getWorkspaceSceneKey(), snapping);
+        excalidrawAPI?.setToast({
+          message: snapping ? "Snap to objects on" : "Snap to objects off",
+          duration: 2000,
+        });
+      }
       // A save that was behind comes back merged with whatever else was stored;
       // put that on the canvas so the author is drawing on what exists.
       //
@@ -1148,7 +1189,7 @@ const ExcalidrawWrapper = () => {
   const saveCanvasImageAsIcon = useCallback(
     async (name: string, category: string) => {
       if (!iconImageJob || !excalidrawAPI) {
-        throw new Error("Select an image on the canvas and try again.");
+        throw new Error("Select something on the canvas and try again.");
       }
       const ownerWindow = wrapperRef.current?.ownerDocument.defaultView;
       if (
@@ -1161,22 +1202,35 @@ const ExcalidrawWrapper = () => {
       ) {
         throw new Error("The drawing changed or editing is unavailable.");
       }
-      const current = excalidrawAPI
-        .getSceneElementsIncludingDeleted()
-        .find((element) => element.id === iconImageJob.targetId);
-      const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
-      if (
-        !current ||
-        !isInitializedImageElement(current) ||
-        current.isDeleted ||
-        current.locked ||
-        current.version !== iconImageJob.version ||
-        current.fileId !== iconImageJob.fileId ||
-        !file ||
-        file.dataURL !== iconImageJob.source ||
-        !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
-      ) {
-        throw new Error("The selected image changed. Select it and retry.");
+      // The picture in the dialog was taken when it opened. If anything in it
+      // has been edited or deleted since, the icon would not be what is shown.
+      const present = new Map(
+        excalidrawAPI
+          .getSceneElementsIncludingDeleted()
+          .map((element) => [element.id, element]),
+      );
+      const unchanged = iconImageJob.selection.every(({ id, version }) => {
+        const current = present.get(id);
+        return Boolean(
+          current && !current.isDeleted && current.version === version,
+        );
+      });
+      if (!unchanged) {
+        throw new Error("The selection changed. Select it again and retry.");
+      }
+      if (iconImageJob.fileId) {
+        const current = present.get(iconImageJob.selection[0].id);
+        const file = excalidrawAPI.getFiles()[iconImageJob.fileId];
+        if (
+          !current ||
+          !isInitializedImageElement(current) ||
+          current.fileId !== iconImageJob.fileId ||
+          !file ||
+          file.dataURL !== iconImageJob.source ||
+          !ICON_IMAGE_MIME_TYPES.has(file.mimeType)
+        ) {
+          throw new Error("The selected image changed. Select it and retry.");
+        }
       }
       const response = await ownerWindow.fetch(
         `${API}/workspaces/${encodeURIComponent(iconImageJob.workspace)}/icons`,
