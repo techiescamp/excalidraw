@@ -4,7 +4,7 @@
 //   yarn test:app --watch=false scripts/dev-env
 import { describe, expect, it } from "vitest";
 
-import { devNginxSite, rewriteEnv } from "./configure.mjs";
+import { devNginxSite, rewriteEnv, storageChanges } from "./configure.mjs";
 
 // The production host's env file, comments and all.
 const PRODUCTION_ENV = `# /etc/excalidraw-api.env
@@ -216,5 +216,57 @@ describe("devNginxSite", () => {
     expect(result).toMatch(/^\s*listen 80;$/m);
     expect(result).toMatch(/^\s*server_name _;$/m);
     expect(result).toMatch(/proxy_pass http:\/\/127\.0\.0\.1:4000;/);
+  });
+});
+
+describe("storageChanges", () => {
+  it("names only the five values that decide where image bytes live", () => {
+    // Deliberately not APP_ORIGIN or JWT_SECRET: pointing an already-prepared
+    // box at a bucket must not rewrite its origin or its signing secret, and
+    // writing either of those empty would break it.
+    expect(Object.keys(storageChanges({})).sort()).toEqual([
+      "AWS_ACCESS_KEY_ID",
+      "AWS_REGION",
+      "AWS_SECRET_ACCESS_KEY",
+      "S3_BUCKET",
+      "S3_ENDPOINT",
+    ]);
+  });
+
+  it("empties every one of them when no bucket is given", () => {
+    expect(storageChanges({})).toEqual({
+      AWS_ACCESS_KEY_ID: "",
+      AWS_SECRET_ACCESS_KEY: "",
+      S3_BUCKET: "",
+      S3_ENDPOINT: "",
+      AWS_REGION: "",
+    });
+  });
+
+  it("carries a bucket through, and leaves the rest of the file alone", () => {
+    const before = [
+      "APP_ORIGIN=http://198.51.100.10",
+      "JWT_SECRET=do-not-touch-this",
+      "DATABASE_URL=postgres:///excalidraw",
+      "S3_BUCKET=",
+      "AWS_ACCESS_KEY_ID=",
+      "",
+    ].join("\n");
+    const after = rewriteEnv(
+      before,
+      storageChanges({
+        DEV_S3_BUCKET: "backups-draw",
+        DEV_S3_KEY_ID: "AKIAEXAMPLE",
+        DEV_S3_SECRET: "s3cret",
+        DEV_S3_ENDPOINT: "https://blr1.digitaloceanspaces.com",
+        DEV_S3_REGION: "blr1",
+      }),
+    );
+    expect(after).toContain("S3_BUCKET=backups-draw");
+    expect(after).toContain("AWS_ACCESS_KEY_ID=AKIAEXAMPLE");
+    expect(after).toContain("AWS_REGION=blr1");
+    expect(after).toContain("APP_ORIGIN=http://198.51.100.10");
+    expect(after).toContain("JWT_SECRET=do-not-touch-this");
+    expect(after).toContain("DATABASE_URL=postgres:///excalidraw");
   });
 });

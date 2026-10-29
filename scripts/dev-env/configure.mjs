@@ -113,18 +113,26 @@ export const devNginxSite = (text, sourcePath = "the production site") => {
   return site.replace(/\n{3,}/g, "\n\n");
 };
 
-// The keys unproduction.sh replaces, and where their values come from.
-const envChanges = (env) => ({
-  APP_ORIGIN: env.NEW_APP_ORIGIN ?? "",
-  COOKIE_SECURE: "false",
-  JWT_SECRET: env.NEW_JWT_SECRET ?? "",
-  // Empty when no dev bucket was given: the server then falls back to its
-  // local-disk driver, which cannot reach production storage at all.
+// The five values that decide where image bytes live. Kept on their own
+// because pointing an already-prepared box at a bucket must not touch its
+// origin or its signing secret: writing either of those empty would break it.
+//
+// All empty when no bucket was given — the server then falls back to its
+// local-disk driver, which cannot reach production storage at all.
+export const storageChanges = (env) => ({
   AWS_ACCESS_KEY_ID: env.DEV_S3_KEY_ID ?? "",
   AWS_SECRET_ACCESS_KEY: env.DEV_S3_SECRET ?? "",
   S3_BUCKET: env.DEV_S3_BUCKET ?? "",
   S3_ENDPOINT: env.DEV_S3_ENDPOINT ?? "",
   AWS_REGION: env.DEV_S3_REGION ?? "",
+});
+
+// The keys unproduction.sh replaces, and where their values come from.
+const envChanges = (env) => ({
+  APP_ORIGIN: env.NEW_APP_ORIGIN ?? "",
+  COOKIE_SECURE: "false",
+  JWT_SECRET: env.NEW_JWT_SECRET ?? "",
+  ...storageChanges(env),
   // Alerts are production's business.
   DISCORD_WEBHOOK: "",
 });
@@ -143,6 +151,17 @@ const main = (argv) => {
     writeFileSync(path, rewriteEnv(readFileSync(path, "utf8"), changes));
     return;
   }
+  if (action === "storage") {
+    const [path] = rest;
+    if (!path) {
+      throw new Error("usage: configure.mjs storage <path>");
+    }
+    writeFileSync(
+      path,
+      rewriteEnv(readFileSync(path, "utf8"), storageChanges(process.env)),
+    );
+    return;
+  }
   if (action === "nginx") {
     const [source, target] = rest;
     if (!source || !target) {
@@ -151,7 +170,9 @@ const main = (argv) => {
     writeFileSync(target, devNginxSite(readFileSync(source, "utf8"), source));
     return;
   }
-  throw new Error("usage: configure.mjs env <path> | nginx <source> <target>");
+  throw new Error(
+    "usage: configure.mjs env <path> | storage <path> | nginx <source> <target>",
+  );
 };
 
 // Only when run as a program, so the test can import the two functions.

@@ -344,11 +344,12 @@ ENV_FILE=/etc/excalidraw-api.env
 DEV_S3_BUCKET="${DEV_S3_BUCKET:-}" DEV_S3_ENDPOINT="${DEV_S3_ENDPOINT:-}" \
 DEV_S3_REGION="${DEV_S3_REGION:-}" DEV_S3_KEY_ID="${DEV_S3_KEY_ID:-}" \
 DEV_S3_SECRET="${DEV_S3_SECRET:-}" \
-  node /tmp/dev-storage/configure.mjs env "$ENV_FILE"
+  node /tmp/dev-storage/configure.mjs storage "$ENV_FILE"
 rm -rf /tmp/dev-storage
 systemctl restart excalidraw-api
 for _ in $(seq 1 30); do
-  code=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/me || echo 000)
+  # Errors are expected while it comes back up; only the verdict is wanted.
+  code=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/me 2>/dev/null || echo 000)
   case "$code" in 200|401) break ;; esac
   sleep 1
 done
