@@ -95,6 +95,56 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-29 — Claude — v1.4.1 is on production; the dev droplet is gone
+
+**Released.** `fix/canvas-overwrite` → `dev` (#5) → `main` (#7) → tag `v1.4.1`
+→ `deploy.yml` with `v1.4.1`. Deploy run 40860594559, success. Production
+answers 200 on `/`, 401 on `/api/me`, and the dashboard loads in a browser
+with thumbnails rendering.
+
+Production is https, so it still sends `upgrade-insecure-requests` and HSTS —
+checked after the deploy, because the server change only drops those for an
+instance served over http.
+
+**The dev droplet was destroyed** at the owner's request: droplet 613811155
+and the `excalidraw-dev` firewall are gone, the `excalidraw-server` snapshot
+and the production droplet are untouched. The scripts stay on
+`feature/dev-environment` (#6, still open) and are now proven against a real
+droplet.
+
+**What the droplet found before it was destroyed** — four faults that passed
+every local check:
+
+1. `upgrade-insecure-requests` made the application unusable on any host
+   served over plain http. Every API call was rewritten to https, nothing
+   listened on 443, and the dashboard hung on "Loading workspace…". **curl
+   does not honour CSP**, so every health check had passed against a site no
+   browser could use. Fixed and released in v1.4.1.
+2. `prepare` rotates `JWT_SECRET`, which is what the 113 rows in
+   `scene_room_keys` were encrypted under. Opening any of those drawings threw
+   while reading its room key and answered 500 with nothing in any log. Now
+   cleared along with `scenes.room_id`.
+3. `prepare`'s health check slept three seconds; the real API took nearer ten,
+   so it called a working box broken.
+4. The firewall check compared the firewall's droplet ids to the dev
+   droplet's. The firewall attaches by **tag**, so that list is always empty
+   and the check compared two empty strings. It could never fail.
+
+**Still true, and the reason the droplet could not finish its job:** a
+drawing's contents are objects in Spaces, not rows in the database. With no
+bucket configured the box has the index and none of the contents, and every
+drawing answers 503. The snapshot's own Spaces key no longer works — rotated
+after 26 October — and creating a replacement is the owner's to do:
+
+    doctl spaces keys create dev-readonly --grants 'bucket=excalidraw-data;permission=read'
+    DEV_S3_BUCKET=excalidraw-data DEV_S3_KEY_ID=… DEV_S3_SECRET=… dev-env.sh storage
+
+`prepare` now says this out loud instead of leaving it to be discovered.
+
+**Open, and not mine to close:** the production droplet is attached to a
+firewall named `test-firewall` that admits all TCP, including port 22, from
+`0.0.0.0/0`.
+
 ### 2026-10-29 — Claude — the "ghost": work vanishing, and the canvas stuttering
 
 **Branch:** `fix/canvas-overwrite`, off `dev` at `c5282acd`. Four commits, local
