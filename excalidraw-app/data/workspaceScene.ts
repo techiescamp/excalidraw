@@ -109,6 +109,13 @@ type EditorSession = {
   editable: boolean;
   loaded: boolean;
   current: string;
+  // The scene as the canvas last had it, by reference. Turned into a payload
+  // once a save is actually due; see `materialize`.
+  latest?: {
+    elements: readonly OrderedExcalidrawElement[];
+    appState: AppState;
+    files: BinaryFiles;
+  };
   pending?: Payload;
   running?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
@@ -116,7 +123,12 @@ type EditorSession = {
   generation: number;
   acknowledged: number;
   renaming?: boolean;
+  // What the status bar was last built for; see `showStatus`.
+  statusShape?: string;
   thumbnail?: Promise<void>;
+  // A preview waiting for the drawing to sit still; see `scheduleThumbnail`.
+  thumbnailDue?: { version: number; scene: Payload };
+  thumbnailTimer?: ReturnType<typeof setTimeout>;
 };
 let node: HTMLElement;
 let status: HTMLElement;
@@ -222,15 +234,32 @@ function showStatus(session: EditorSession, text: string) {
   if (active !== session) {
     return;
   }
+  const shown = status.querySelector('[role="status"]');
   if (session.renaming) {
     // an inline rename is in progress: refresh only the status text so the
     // input being typed into is not torn down by an autosave tick
-    const message = status.querySelector('[role="status"]');
-    if (message) {
-      message.textContent = text;
+    if (shown) {
+      shown.textContent = text;
       return;
     }
   }
+  // Everything below builds the whole bar: the back link, the title button and
+  // its handler, the Scenes button, and the error buttons. That ran on every
+  // change the editor reported, which while drawing is every frame, and all of
+  // it to change one word. Nothing but the word differs between those calls,
+  // so when that is true the word is all that is replaced. If the bar has been
+  // taken apart by something else the query below finds nothing and it is
+  // rebuilt as before.
+  const shape = `${session.name}\u0000${session.error || ""}\u0000${
+    permissions?.["drawing.rename"] ? "1" : "0"
+  }`;
+  if (shown && session.statusShape === shape) {
+    if (shown.textContent !== text) {
+      shown.textContent = text;
+    }
+    return;
+  }
+  session.statusShape = shape;
   status.replaceChildren();
   status.classList.toggle("has-error", Boolean(session.error));
   const doc = node.ownerDocument;
@@ -1295,16 +1324,24 @@ export function initializeWorkspaceEditor(
   doc.addEventListener("visibilitychange", () => {
     if (!doc.hidden) {
       revalidate();
+    } else if (active) {
+      // Nobody is watching this canvas, so the preview costs nothing now.
+      renderDueThumbnail(active);
     }
   });
   win.addEventListener("online", () => {
-    if (active?.pending && !active.error?.includes("changed")) {
+    if (
+      (active?.pending || active?.latest) &&
+      !active.error?.includes("changed")
+    ) {
       active.error = undefined;
       void flush(active);
     }
   });
   win.addEventListener("beforeunload", (event) => {
-    if (active?.pending || active?.running) {
+    // `latest` counts as unsaved: a change made in the last moment is on the
+    // canvas and has not been turned into a payload yet.
+    if (active?.pending || active?.latest || active?.running) {
       event.preventDefault();
       event.returnValue = "";
     }
@@ -1319,7 +1356,12 @@ export function initializeWorkspaceEditor(
         !anchor ||
         // export downloads are blob links on this origin, not navigation
         anchor.hasAttribute("download") ||
-        !(active?.pending || active?.thumbnail) ||
+        !(
+          active?.pending ||
+          active?.latest ||
+          active?.thumbnail ||
+          active?.thumbnailDue
+        ) ||
         anchor.origin !== win.location.origin ||
         event.ctrlKey ||
         event.metaKey
@@ -1328,6 +1370,10 @@ export function initializeWorkspaceEditor(
       }
       event.preventDefault();
       await flush(active);
+      // The preview is normally left until the drawing sits still. Leaving the
+      // drawing is the other moment it is wanted, and the dashboard this is
+      // heading for is the only place it is seen.
+      renderDueThumbnail(active);
       if (!active.pending && active.thumbnail) {
         // let the preview of the last save finish, or the dashboard keeps
         // showing the old picture and the edit looks lost
@@ -1494,6 +1540,48 @@ export async function loadWorkspaceScene(
 }
 // Thumbnail failure never changes scene save success; version gates stale renders.
 // The upload is kept on the session so leaving the editor can wait for it.
+/** How long the drawing must sit still before a preview is worth rendering. */
+const THUMBNAIL_IDLE_MS = 2500;
+
+/**
+ * Queues the dashboard preview instead of rendering it on the spot.
+ *
+ * `uploadThumbnail` draws the whole scene to a PNG, which on a drawing with a
+ * dozen images is a fifth of a second of the main thread. It used to run on
+ * every save — once a second while someone was drawing — so the canvas froze
+ * at a steady beat, which is what made the editor feel as though something
+ * else had hold of it. The preview is only ever looked at from the dashboard,
+ * so it can wait for a pause.
+ */
+function scheduleThumbnail(
+  session: EditorSession,
+  version: number,
+  scene: Payload,
+) {
+  session.thumbnailDue = { version, scene };
+  if (session.thumbnailTimer) {
+    clearTimeout(session.thumbnailTimer);
+  }
+  session.thumbnailTimer = setTimeout(
+    () => renderDueThumbnail(session),
+    THUMBNAIL_IDLE_MS,
+  );
+}
+
+/** Renders a queued preview now — on the way out of the drawing, say. */
+function renderDueThumbnail(session: EditorSession) {
+  if (session.thumbnailTimer) {
+    clearTimeout(session.thumbnailTimer);
+    session.thumbnailTimer = undefined;
+  }
+  const due = session.thumbnailDue;
+  if (!due) {
+    return;
+  }
+  session.thumbnailDue = undefined;
+  uploadThumbnail(session, due.version, due.scene);
+}
+
 function uploadThumbnail(
   session: EditorSession,
   version: number,
@@ -1536,6 +1624,9 @@ async function flush(session: EditorSession): Promise<void> {
     await session.running;
     return;
   }
+  // The scene is only turned into a payload here, so this has to run before
+  // anything asks whether there is one.
+  materialize(session);
   if (!session.pending || session.error || !session.loaded) {
     return;
   }
@@ -1581,6 +1672,10 @@ async function flush(session: EditorSession): Promise<void> {
           );
           applyToCanvas(saved.scene);
         }
+        // Whatever was drawn while that round trip was in the air is on the
+        // canvas and in nothing else yet. Take it now, so the loop sends it
+        // rather than ending and leaving it until the next stroke.
+        materialize(session);
         if (session.pending === pending) {
           session.pending = undefined;
           await draftStore("delete", session.key);
@@ -1592,7 +1687,7 @@ async function flush(session: EditorSession): Promise<void> {
             scene: session.pending,
           });
         }
-        uploadThumbnail(session, saved.version, saved.scene || pending);
+        scheduleThumbnail(session, saved.version, saved.scene || pending);
       } catch (error: any) {
         session.error = error.message;
         showStatus(
@@ -1620,21 +1715,23 @@ export const registerWorkspaceSceneApplier = (apply: SceneApplier) => {
   applyToCanvas = apply;
 };
 
-export function saveWorkspaceScene(
-  id: string,
-  elements: readonly OrderedExcalidrawElement[],
-  appState: AppState,
-  files: BinaryFiles,
-) {
-  const session = sessions.get(id);
-  if (
-    !session?.loaded ||
-    !session.editable ||
-    appState.isLoading ||
-    appState.viewModeEnabled
-  ) {
+/**
+ * Turns the scene last seen on the canvas into the payload that will be sent.
+ *
+ * This is the expensive half of saving: the drawing is serialised, and on one
+ * with images that is every picture's bytes as base64. It used to run inside
+ * `saveWorkspaceScene`, which the editor calls on every change — meaning once
+ * per frame while a shape is being dragged. A drawing with a dozen icons was
+ * stringified, compared and deep-copied sixty times a second, and the drawing
+ * itself stuttered under it. The work has not changed; only when it runs. It
+ * now happens once a pause, which is as often as a save can be sent anyway.
+ */
+function materialize(session: EditorSession) {
+  const latest = session.latest;
+  if (!latest) {
     return;
   }
+  const { elements, appState, files } = latest;
   if (
     elements.some(
       (element) =>
@@ -1643,12 +1740,20 @@ export function saveWorkspaceScene(
         (!element.fileId || !files[element.fileId]?.dataURL),
     )
   ) {
+    // Still waiting on an image. Leave `latest` in place: the next change, or
+    // the next flush, tries again once the bytes are there.
     showStatus(session, "Loading images…");
     return;
   }
-  const payload = scenePayload(elements, appState, files);
-  const serialized = JSON.stringify(payload);
+  session.latest = undefined;
+  const serialized = JSON.stringify(scenePayload(elements, appState, files));
   if (serialized === session.current) {
+    // Nothing really changed — a selection, a scroll, or the canvas being
+    // handed back the copy it just sent. Say so, or the bar reads "Saving…"
+    // for ever.
+    if (!session.pending && !session.error) {
+      showStatus(session, "Saved");
+    }
     return;
   }
   session.current = serialized;
@@ -1667,6 +1772,30 @@ export function saveWorkspaceScene(
       session,
       "Save failed: cannot retain a recovery draft. Keep this tab open.",
     ),
+  );
+}
+
+export function saveWorkspaceScene(
+  id: string,
+  elements: readonly OrderedExcalidrawElement[],
+  appState: AppState,
+  files: BinaryFiles,
+) {
+  const session = sessions.get(id);
+  if (
+    !session?.loaded ||
+    !session.editable ||
+    appState.isLoading ||
+    appState.viewModeEnabled
+  ) {
+    return;
+  }
+  // Held by reference, not copied. Everything this costs is paid once, when
+  // the save is actually made; see `materialize`.
+  session.latest = { elements, appState, files };
+  showStatus(
+    session,
+    session.error ? `Save failed: ${session.error}` : "Saving…",
   );
   if (session.timer) {
     clearTimeout(session.timer);
