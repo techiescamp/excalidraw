@@ -95,6 +95,86 @@ pipeline existed.
 
 ## Log
 
+### 2026-10-29 — Claude — the "ghost": work vanishing, and the canvas stuttering
+
+**Branch:** `fix/canvas-overwrite`, off `dev` at `c5282acd`. Four commits, local
+only, **not pushed, not deployed**. Production stays on `v1.3.0` and still has
+both faults. Spec: `docs/specs/save-without-interference.md`.
+
+**Reported as** a screen recording of production: an icon dropped on the canvas
+at ~5s, gone by ~6.5s, back at ~19.8s, "Saving…" throughout — and the editor
+generally not smooth to draw on.
+
+**Two faults, one shared origin.** The editor gives every drawing a
+collaboration room the moment it is opened (`GET /scenes/:id/data` creates one
+and returns the keys; a solo session's URL gains `#room=…`). The server then
+read `room_id` as "people are collaborating" and merged *every* save — which
+meant reading the whole stored drawing back with every image inline, and
+sending it back to the caller.
+
+1. **Work disappearing.** The editor applied that answer by assignment:
+   `updateScene({ elements: scene.elements })`. The answer describes the
+   drawing as it was when the request left, so anything drawn during the round
+   trip was wiped, returning only when a later save carried it.
+2. **The stutter.** `saveWorkspaceScene` ran on every `onChange`, which while
+   dragging is every frame, and did the whole job each time: serialise the
+   drawing with every image as base64, compare, deep-copy, write to IndexedDB,
+   rebuild the status bar. The dashboard preview (`exportToBlob`, a full render
+   to PNG) ran after every save.
+
+**What changed**
+
+| file | change |
+|---|---|
+| `excalidraw-app/App.tsx` | the applier reconciles against the live canvas instead of assigning over it, and adds files the merge brought in |
+| `excalidraw-app/data/workspaceScene.ts` | `materialize` does the expensive half once a pause; the preview waits for stillness; the status bar is not rebuilt per frame |
+| `server/lib/drawings.js` | a save is merged because it is **behind**, not because it named a room |
+| `server/test/private-workspaces.test.js` | the merge test now covers the in-a-room, up-to-date save |
+
+**Verified**
+
+- `server`: `TEST_DATABASE_URL=… npm test` → 60 pass, 0 fail. Reverting the
+  server change makes the new assertions fail (checked, then restored).
+- `npx vitest run` → 128 files, 1927 pass, 47 skipped. `tsc --noEmit` clean.
+  `yarn test:code` and `yarn test:other` clean.
+- **By hand, in a browser, old build against new**, two local instances
+  (`:55460` on `feature/icon-drag`, `:55470` on this branch), same test:
+  the save's answer held back 2.5s, a change made out of band so the save comes
+  back merged, then rectangle A drawn, and rectangle B drawn one second later
+  while the save was still in the air.
+  - old build: **B was gone.** Status read "Saved".
+  - this branch: A, B and the out-of-band element all present, on the canvas
+    and on the server.
+- **Cost of four seconds of dragging** a drawing of 192 elements and 12 images,
+  measured by wrapping the calls in the page:
+
+  | | old | this branch |
+  |---|---|---|
+  | IndexedDB writes of the whole drawing | 224 | 10 |
+  | `JSON.parse` of the whole drawing | 223 | 5 |
+  | `JSON.stringify` | 917 | 42 |
+  | preview renders | 1 | 0 |
+
+**Not done, and worth knowing**
+
+- A drawing is still given a room the moment it is opened. It should probably
+  only get one when somebody shares it; that is a separate change.
+- Frame timing in the browser pane was too noisy to trust — rAF gaps of 200ms+
+  appeared with no long task recorded, and came and went with the pane rather
+  than the build. The call counts above are the honest measurement; treat any
+  "frames per second" claim from that pane as unproven.
+- `POST /api/scenes/:id/room` still fails with `duplicate key value violates
+  unique constraint "scenes_room_id_key"` on the local instance, on scene open.
+- The local test bed's bundle at `:55460` has production's websocket and
+  shareable-link addresses compiled into it (`draw.devopsproject.dev`, from the
+  untracked root `.env.production.local`). The main API is same-origin, so
+  drawings are safe, but live collaboration and shareable-link export from a
+  local build point at the live site. This branch's own build has none of
+  those addresses.
+- The disposable fixture password on the `:55460` instance was reset to the one
+  in `server/test/dev-instance.mjs` so it could be signed into. Disposable
+  database; nothing else touched.
+
 ### 2026-10-27 — Codex — publish icon work to dev
 
 Committed the icon-library and gallery changes as `c27cf9a3` on `Icons`,
