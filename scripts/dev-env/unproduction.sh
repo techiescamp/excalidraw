@@ -208,6 +208,22 @@ say "backup timer disabled"
 # another name, so a dev site is generated from the production one instead of
 # editing it: the original stays on disk, readable, and is put back if the
 # generated one does not validate.
+# The shared security snippet promises HSTS: "every request to this name must
+# use https, for a year". That is production's promise and this box cannot keep
+# it — it answers on http only. A browser ignores HSTS served over http, so
+# nothing breaks today; it is removed because production configuration that
+# survives into a development box is how a development box stops telling the
+# truth about production.
+SECURITY_SNIPPET=/etc/nginx/snippets/excalidraw-security.conf
+if [ -f "$SECURITY_SNIPPET" ] &&
+   grep -q '^[^#]*Strict-Transport-Security' "$SECURITY_SNIPPET"; then
+  [ -f "$SECURITY_SNIPPET.production-snapshot" ] ||
+    cp -a "$SECURITY_SNIPPET" "$SECURITY_SNIPPET.production-snapshot"
+  sed -i 's|^\([^#]*Strict-Transport-Security.*\)$|# (development: no HSTS on a plain-http box) \1|' \
+    "$SECURITY_SNIPPET"
+  say "HSTS removed from $SECURITY_SNIPPET"
+fi
+
 if [ -f "$SITE" ]; then
   node "$CONFIGURE" nginx "$SITE" "$DEV_SITE"
   ln -sfn "$DEV_SITE" /etc/nginx/sites-enabled/excalidraw-dev
