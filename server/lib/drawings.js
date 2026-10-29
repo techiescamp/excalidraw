@@ -537,7 +537,7 @@ export function installDrawings(
     });
   });
   // Shared by the editor's save route and the MCP drawing tools.
-  const saveScene = async (user, id, incoming, { expected, roomId } = {}) => {
+  const saveScene = async (user, id, incoming, { expected } = {}) => {
     let payload = validateScene(incoming);
     let cacheCandidate;
     // The images go to storage before the transaction opens. Uploading inside
@@ -683,11 +683,11 @@ export function installDrawings(
     const expected = req.body?.version;
     if (!Number.isSafeInteger(expected) || expected < 0)
       fail(400, "Expected scene version is required.");
+    // `room_id` is still accepted in the body and deliberately ignored: older
+    // editors send it, and whether a save merges is decided by the version it
+    // was made against, not by a room.
     res.json(
-      await saveScene(req.user, req.params.id, req.body?.scene, {
-        expected,
-        roomId: req.body?.room_id,
-      }),
+      await saveScene(req.user, req.params.id, req.body?.scene, { expected }),
     );
   });
   app.get("/api/scenes/:id/versions", auth, async (req, res) => {

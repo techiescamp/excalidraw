@@ -3,7 +3,10 @@
 // eslint-disable-next-line import/order
 import "./workspaceScene.css";
 
-import { getNonDeletedElements } from "@excalidraw/element";
+import {
+  getNonDeletedElements,
+  hashElementsVersion,
+} from "@excalidraw/element";
 import { exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 
 import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
@@ -116,6 +119,9 @@ type EditorSession = {
     appState: AppState;
     files: BinaryFiles;
   };
+  // Cheap answer to "has anything that is stored actually changed?"; see
+  // `saveWorkspaceScene`.
+  signature?: string;
   pending?: Payload;
   running?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
@@ -1671,6 +1677,13 @@ async function flush(session: EditorSession): Promise<void> {
             ),
           );
           applyToCanvas(saved.scene);
+          // The canvas has just had the stored copy reconciled into it, so
+          // what was captured before that is no longer the whole of it.
+          // Serialising it here would send a scene without the elements the
+          // merge brought in and briefly store that. The change the apply
+          // itself reports carries the real canvas, and becomes the next save.
+          session.latest = undefined;
+          session.signature = undefined;
         }
         // Whatever was drawn while that round trip was in the air is on the
         // canvas and in nothing else yet. Take it now, so the loop sends it
@@ -1790,6 +1803,20 @@ export function saveWorkspaceScene(
   ) {
     return;
   }
+  // The editor reports a change for a selection, a scroll and a zoom as well
+  // as an edit. Serialising the drawing to find that out is what this is
+  // trying to avoid, so ask a question that can be answered by walking the
+  // elements once: a hash of their nonces, which changes on any edit and on a
+  // reorder, plus the few things outside them that are stored.
+  const signature = `${elements.length}\u0000${hashElementsVersion(
+    elements,
+  )}\u0000${Object.keys(files).length}\u0000${
+    appState.viewBackgroundColor
+  }\u0000${appState.gridSize}\u0000${appState.gridStep}`;
+  if (signature === session.signature) {
+    return;
+  }
+  session.signature = signature;
   // Held by reference, not copied. Everything this costs is paid once, when
   // the save is actually made; see `materialize`.
   session.latest = { elements, appState, files };
