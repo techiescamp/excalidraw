@@ -125,12 +125,26 @@ ensure_firewall() {
       --tag-names "$TAG" --format ID --no-header >/dev/null
   fi
 
+  # Read the attachment back. This firewall is attached by tag, so DigitalOcean
+  # reports no droplet ids against it at all — checking those alone looked like
+  # a check and was not one. What matters is which droplets carry the tag: if
+  # production ever wore it, this would be rewriting production's firewall.
+  local tagged
+  tagged=$(doctl compute droplet list --tag-name "$TAG" --format ID --no-header |
+             paste -sd, -)
+  [ -n "$tagged" ] ||
+    die "no droplet carries the '$TAG' tag, so firewall $NAME protects nothing"
+  if [ "$tagged" != "$id" ]; then
+    die "the '$TAG' tag is on droplets [$tagged] but the dev droplet is $id; firewall $NAME would cover them too. Fix the tag before continuing"
+  fi
+
   local covered
   covered=$(doctl compute firewall list --format Name,DropletIDs --no-header |
               awk -v n="$NAME" '$1 == n { $1=""; print }' | tr -d ' ,')
   if [ -n "$covered" ] && [ "$covered" != "$id" ]; then
-    die "firewall $NAME covers droplets [$covered] but the dev droplet is $id; fix the '$TAG' tag before continuing"
+    die "firewall $NAME is also attached directly to droplets [$covered]; fix that before continuing"
   fi
+  say "firewall: $NAME admits $cidr, and covers only droplet $id"
 }
 
 cmd_up() {
@@ -227,7 +241,7 @@ cmd_status() {
   local ip
   ip=$(droplet_ip "$id")
   doctl compute droplet get "$id" \
-    --format ID,Name,PublicIPv4,Region,Memory,Status,Created
+    --format ID,Name,PublicIPv4,Region,Memory,VCPUs,Disk,Status
   say ""
   doctl compute firewall list --format Name,Status,DropletIDs,InboundRules |
     head -1
