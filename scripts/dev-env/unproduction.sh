@@ -129,9 +129,54 @@ END $do$;
 -- environment's storage settings apply once it is gone.
 DELETE FROM app_settings WHERE key = 'storage';
 
+-- Every collaboration room key is encrypted under the old JWT_SECRET too, and
+-- this box has a new one. Left in place they cannot be decrypted, and opening
+-- any drawing that has a room throws while reading its key: on the first real
+-- snapshot that was 113 of them, every one answering "Server error" with
+-- nothing to say why. They are production's shared secrets besides, and have
+-- no business here. Cleared, so each drawing is given a fresh room on its next
+-- open, exactly as a drawing that never had one.
+DO $do$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['scene_room_keys'] LOOP
+    IF to_regclass(t) IS NOT NULL THEN
+      EXECUTE format('DELETE FROM %I', t);
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'scenes' AND column_name = 'room_id') THEN
+    EXECUTE 'UPDATE scenes SET room_id = NULL';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'scenes' AND column_name = 'collab_s3_key') THEN
+    -- The encrypted live-session snapshot goes with the key that opened it.
+    EXECUTE 'UPDATE scenes SET collab_s3_key = NULL';
+  END IF;
+END $do$;
+
 COMMIT;
 SQL
 say "credentials cleared from the database; drawings left untouched"
+
+# ── say whether this box can actually read its drawings ─────────────────────
+# The rows are here; the drawings themselves are objects in the bucket the
+# snapshot was using. With no bucket configured this box has the index and
+# none of the contents, and every drawing answers 503. That was discovered by
+# opening one, which is too late — so it is said here, plainly, while whoever
+# ran this is still looking.
+missing_storage=$(sudo -u postgres psql -At -d "$DB_NAME" -c \
+  "SELECT count(*) FROM scenes WHERE s3_key IS NOT NULL" 2>/dev/null || echo 0)
+if [ -z "${DEV_S3_BUCKET:-}" ] && [ "${missing_storage:-0}" -gt 0 ]; then
+  say ""
+  say "  NOTE: $missing_storage drawings keep their contents in object storage,"
+  say "  and no bucket is configured, so none of them will open. Give it one:"
+  say ""
+  say "    DEV_S3_BUCKET=… DEV_S3_KEY_ID=… DEV_S3_SECRET=… dev-env.sh storage"
+  say ""
+  say "  A read-only key is enough, and cannot write to production storage."
+  say ""
+fi
 
 # ── one account that can sign in ─────────────────────────────────────────────
 # Done in node, with the application's own argon2 settings and a parameterised
