@@ -2345,6 +2345,91 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
+    "the same picture is one icon, however many names it is given",
+    async () => {
+      // A library that shows the same image four times is not a library. The
+      // bytes were already stored once; the entries were kept apart by name,
+      // so adding one picture under two names made two tiles of it.
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M/wn4ERRDAxgAAADm0CAUrpA5YAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const dataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+      const first = await call(`/workspaces/${workspace}/icons`, {
+        cookie: editor.cookie,
+        method: "POST",
+        body: { data_url: dataUrl, display_name: "Onlyonce alpha", category: "Onlyonce" },
+      });
+      assert.equal(first.status, 201, JSON.stringify(first.body));
+      assert.equal(first.body.existing, false);
+
+      // Same picture, different name. Nothing new is created, and the answer
+      // says so rather than reporting an icon that was not made.
+      const again = await call(`/workspaces/${workspace}/icons`, {
+        cookie: editor.cookie,
+        method: "POST",
+        body: { data_url: dataUrl, display_name: "Onlyonce beta", category: "Onlyonce" },
+      });
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal(again.body.existing, true);
+      assert.equal(
+        again.body.icon.display_name,
+        "Onlyonce alpha",
+        "the name the library already knows it by is the one that stands",
+      );
+
+      const listed = await call(
+        `/workspaces/${workspace}/icons?category=Onlyonce`,
+        { cookie: editor.cookie },
+      );
+      assert.deepEqual(
+        listed.body.icons.map((icon) => icon.display_name),
+        ["Onlyonce alpha"],
+        "one tile, not two",
+      );
+
+      // A different picture is a different icon: changing so much as a pixel
+      // changes the digest, which is the distinction worth keeping.
+      const other = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z/C/HgAGgwJ/lK3Q6wAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      const different = await call(`/workspaces/${workspace}/icons`, {
+        cookie: editor.cookie,
+        method: "POST",
+        body: {
+          data_url: `data:image/png;base64,${other.toString("base64")}`,
+          display_name: "Onlyonce gamma",
+          category: "Onlyonce",
+        },
+      });
+      assert.equal(different.status, 201, JSON.stringify(different.body));
+      assert.equal(different.body.existing, false);
+      const bothListed = await call(
+        `/workspaces/${workspace}/icons?category=Onlyonce`,
+        { cookie: editor.cookie },
+      );
+      assert.deepEqual(
+        bothListed.body.icons.map((icon) => icon.display_name).sort(),
+        ["Onlyonce alpha", "Onlyonce gamma"],
+      );
+
+      // Put the library back as it was found. The suite shares one workspace,
+      // and a category left behind here turns up in another test's list.
+      for (const icon of [first.body.icon, different.body.icon]) {
+        assert.equal(
+          (
+            await call(
+              `/workspaces/${workspace}/icons/${icon.set_name}/${icon.name}`,
+              { cookie: editor.cookie, method: "DELETE" },
+            )
+          ).status,
+          200,
+        );
+      }
+    },
+  );
+  await t.test(
     "workspace editors can save a canvas image to the icon library",
     async () => {
       const bytes = Buffer.from(
@@ -2447,7 +2532,7 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
-    "the same image added twice is stored once, and deleting a name leaves the other working",
+    "the same image is one icon everywhere, and deleting it cleans up",
     async () => {
       const bytes = Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -2465,14 +2550,21 @@ test("private workspace backend", async (t) => {
           },
         });
 
-      // The same logo, saved by two people under the names each prefers.
+      // The same logo, saved by two people in two workspaces. The library is
+      // shared, so both of them are looking at one picture — and one picture
+      // is one icon. The second add is answered with the entry that is already
+      // there rather than making a second name for the same thing, which is
+      // what filled the library with repeats.
       const first = await add("Kubernetes");
       assert.equal(first.status, 201, JSON.stringify(first.body));
+      assert.equal(first.body.existing, false);
       const second = await add("k8s", admin, otherWorkspace);
-      assert.equal(second.status, 201, JSON.stringify(second.body));
-      assert.notEqual(first.body.icon.name, second.body.icon.name);
+      assert.equal(second.status, 200, JSON.stringify(second.body));
+      assert.equal(second.body.existing, true);
+      assert.equal(second.body.icon.name, first.body.icon.name);
+      assert.equal(second.body.icon.display_name, "Kubernetes");
 
-      // Two entries in the library, one copy of the image behind them.
+      // One entry, one copy of the image behind it.
       const stored = await db.query(
         `SELECT count(*)::int AS blobs FROM icon_blobs
           WHERE digest IN (SELECT digest FROM icons WHERE category='Dedupe')`,
@@ -2481,45 +2573,36 @@ test("private workspace backend", async (t) => {
       const named = await db.query(
         "SELECT count(*)::int AS rows FROM icons WHERE category='Dedupe'",
       );
-      assert.equal(named.rows[0].rows, 2, "both names should be kept");
+      assert.equal(named.rows[0].rows, 1, "and named once");
 
-      // Deleting one name must not take the other's image with it.
-      const removed = await call(
-        `/workspaces/${workspace}/icons/${first.body.icon.set_name}/${first.body.icon.name}`,
-        { cookie: editor.cookie, method: "DELETE" },
-      );
-      assert.equal(removed.status, 200, JSON.stringify(removed.body));
-
-      const survivor = await fetch(
-        `${origin}/api/workspaces/${workspace}/icons/${second.body.icon.set_name}/${second.body.icon.name}`,
-        { headers: { Cookie: editor.cookie } },
-      );
-      assert.equal(survivor.status, 200, "the other name still resolves");
-      assert.deepEqual(Buffer.from(await survivor.arrayBuffer()), bytes);
-
-      // A deleted icon is gone from every workspace, not just the one it was
-      // deleted from, because the library is shared.
+      // Both workspaces see that one entry, under the one name.
       for (const ws of [workspace, otherWorkspace]) {
         const listed = await call(`/workspaces/${ws}/icons?category=Dedupe`, {
           cookie: admin,
         });
         assert.deepEqual(
           listed.body.icons.map((icon) => icon.display_name),
-          ["k8s"],
-          `the deleted icon should be gone from ${ws}`,
+          ["Kubernetes"],
+          `one tile in ${ws}`,
         );
       }
 
-      // With the last name gone the image goes too, rather than lingering.
-      const removedLast = await call(
-        `/workspaces/${otherWorkspace}/icons/${second.body.icon.set_name}/${second.body.icon.name}`,
-        { cookie: admin, method: "DELETE" },
+      // Deleting it takes it from every workspace, because the library is
+      // shared, and the image goes with it rather than lingering.
+      const removed = await call(
+        `/workspaces/${workspace}/icons/${first.body.icon.set_name}/${first.body.icon.name}`,
+        { cookie: editor.cookie, method: "DELETE" },
       );
-      assert.equal(removedLast.status, 200);
+      assert.equal(removed.status, 200, JSON.stringify(removed.body));
+      for (const ws of [workspace, otherWorkspace]) {
+        const listed = await call(`/workspaces/${ws}/icons?category=Dedupe`, {
+          cookie: admin,
+        });
+        assert.deepEqual(listed.body.icons, [], `gone from ${ws}`);
+      }
       const left = await db.query(
-        `SELECT count(*)::int AS blobs FROM icon_blobs
-          WHERE digest=$1`,
-        [first.body.icon.digest ?? second.body.icon.digest],
+        "SELECT count(*)::int AS blobs FROM icon_blobs WHERE digest=$1",
+        [first.body.icon.digest],
       );
       assert.equal(left.rows[0].blobs, 0, "the image should be cleaned up");
     },

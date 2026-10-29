@@ -218,6 +218,22 @@ export function installIcons(
     // The image is named by what it contains, so the same logo added again —
     // under any name, by anyone — lands on the row that is already there.
     const digest = crypto.createHash("sha256").update(body).digest("hex");
+    // That held for the bytes, not for the library. Entries were kept apart by
+    // name, so the same picture added twice under two names was two tiles, and
+    // the library showed one image over and over — the thing a library exists
+    // to stop. What an icon *is* decides: identical bytes are the same icon,
+    // and the entry already there is returned instead of a second one made.
+    // Anything genuinely different — a colour changed, a line moved — hashes
+    // differently and is a new icon, which is the distinction worth keeping.
+    const already = await db.query(
+      `SELECT id,set_name,name,mime,s3_key,digest,category,display_name
+         FROM icons
+        WHERE digest=$1 AND (workspace_id=$2 OR shared)
+        ORDER BY (workspace_id=$2) DESC, created_at ASC
+        LIMIT 1`,
+      [digest, workspace],
+    );
+    if (already.rows[0]) return { ...already.rows[0], existing: true };
     await db.query(
       `INSERT INTO icon_blobs(digest,bytes,mime) VALUES($1,$2,$3)
        ON CONFLICT (digest) DO NOTHING`,
@@ -296,14 +312,20 @@ export function installIcons(
       .slice(0, 40);
     const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
     const [{ rows }, categories] = await Promise.all([
+      // One tile per picture. Duplicates that predate the rule are collapsed
+      // here as well, so a library that already holds the same image twice
+      // stops showing it twice. Rows from before the shared store have no
+      // digest and fall back to their name, which is how they were told apart
+      // before.
       db.query(
-        `SELECT DISTINCT ON (set_name,name)
+        `SELECT * FROM (
+         SELECT DISTINCT ON (COALESCE(digest, set_name||'/'||name))
          set_name,name,mime,source,license,created_at,category,display_name
        FROM icons WHERE (workspace_id=$1 OR shared)
        AND ($2::text='' OR set_name ILIKE '%'||$2||'%' OR name ILIKE '%'||$2||'%' OR display_name ILIKE '%'||$2||'%')
        AND ($3::text='' OR category=$3)
-       ORDER BY set_name,name,(workspace_id=$1) DESC,created_at ASC
-       LIMIT $4`,
+       ORDER BY COALESCE(digest, set_name||'/'||name),(workspace_id=$1) DESC,created_at ASC
+       ) one_per_picture ORDER BY set_name,name LIMIT $4`,
         [req.params.workspace, query, category, limit],
       ),
       db.query(
@@ -336,7 +358,11 @@ export function installIcons(
       displayName,
     );
     await audit(db, req.user.id, "icons.add_from_canvas", workspace);
-    res.status(201).json({ icon });
+    // 200 rather than 201 when nothing was created: the caller asked for this
+    // picture to be in the library and it is, but it is not a new icon and
+    // should not be reported as one.
+    const existing = Boolean(icon.existing);
+    res.status(existing ? 200 : 201).json({ icon, existing });
   });
 
   app.delete(
