@@ -72,4 +72,38 @@ describe("snap preference", () => {
       expect(() => writeSnapPreference(KEY, true)).not.toThrow();
     });
   });
+
+  // What the editor does with the answer. The rule is that a drawing nobody
+  // has expressed a preference about opens with snapping off: the editor keeps
+  // its own copy of the setting in the browser, so inheriting it meant one
+  // person turning snapping on once had every drawing they opened afterwards
+  // snapping, with nothing on screen to say why.
+  const openingState = (key: string | null) => ({
+    objectsSnapModeEnabled: readSnapPreference(key) ?? false,
+  });
+
+  it("opens a drawing with snapping off when nothing was remembered", () => {
+    expect(openingState(KEY)).toEqual({ objectsSnapModeEnabled: false });
+  });
+
+  it("opens with snapping off for a drawing that has no key at all", () => {
+    expect(openingState(null)).toEqual({ objectsSnapModeEnabled: false });
+  });
+
+  it("honours a drawing that was told to snap", () => {
+    writeSnapPreference(KEY, true);
+    expect(openingState(KEY)).toEqual({ objectsSnapModeEnabled: true });
+  });
+
+  it("honours a drawing that was told not to snap", () => {
+    writeSnapPreference(KEY, false);
+    expect(openingState(KEY)).toEqual({ objectsSnapModeEnabled: false });
+  });
+
+  it("keeps the answer to one drawing", () => {
+    writeSnapPreference(KEY, true);
+    expect(openingState("someone:workspace:another-drawing")).toEqual({
+      objectsSnapModeEnabled: false,
+    });
+  });
 });

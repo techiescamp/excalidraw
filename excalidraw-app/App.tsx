@@ -273,9 +273,16 @@ const initializeScene = async (opts: {
       // Snapping is this person's way of working on this one drawing, so it is
       // laid over the scene on open rather than stored inside it, where it
       // would follow the drawing onto everybody else's canvas.
+      //
+      // Off unless this drawing has been told otherwise. The editor keeps its
+      // own copy of the setting in the browser, so turning snapping on once
+      // left it on for every drawing opened afterwards, on every later visit —
+      // shapes jumping to each other for people who had never asked for it and
+      // had no idea what had changed. A drawing with no preference of its own
+      // now starts with it off, and whoever wants it turns it on, which is
+      // then remembered for that drawing.
       const remembered = readSnapPreference(getWorkspaceSceneKey());
-      const snapping =
-        remembered === null ? {} : { objectsSnapModeEnabled: remembered };
+      const snapping = { objectsSnapModeEnabled: remembered ?? false };
       const roomLink = getCollaborationLinkData(
         workspaceEditorLocation()?.href || "",
       );
