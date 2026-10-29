@@ -208,6 +208,132 @@ really connected — cursors and shapes crossed between tabs):
 - The disposable fixture password on the `:55460` instance was reset to the one
   in `server/test/dev-instance.mjs` so it could be signed into. Disposable
   database; nothing else touched.
+### 2026-10-28 — Claude — the drawing that was "here, then there" was the view, not the data
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed. Production
+stays on `v1.3.0`.
+
+The owner reported it again after the earlier re-check passed: draw something,
+move back and forth, and it is here, then there; sometimes gone until you
+scroll. The earlier check was looking for lost elements and there were none —
+the elements were always saved and always on the canvas. What moved was where
+the canvas was looking.
+
+**Two faults, both about the width the editor divides by.**
+
+1. The workspace sidebar narrows the editor by shrinking `#root`. The window
+   never changes size, and the editor only re-measures on a window resize, so
+   it kept believing it was as wide as the window — 1024 where the canvas was
+   752. Everything it computed from that was 272px out. `notifyEditorResized`
+   in `workspaceScene.ts` now tells it, **synchronously**: the first attempt
+   used `requestAnimationFrame`, and animation frames and ResizeObservers are
+   both suspended in a background tab, so the correction arrived sometimes and
+   not others. That inconsistency is exactly what "here, then there" was.
+2. `scrollToContent` — what opened a workspace drawing — stops centring the
+   drawing the moment the work is wider than the viewport and centres the
+   single nearest element instead. Removed. `excalidraw-app/data/
+   fitSavedDrawing.ts` fits the whole drawing instead, once the editor's own
+   measurement agrees with the box it is drawn in **and** has held still;
+   either test alone is not enough, as a stale width sits perfectly still and
+   a matching one can be mid-change.
+
+**How it was found, since guessing cost most of the time here:** a temporary
+probe pushed `getAppState().width` against `container.clientWidth` every 50ms
+into `window.__fitProbe`. It showed the editor stuck at 1024 for 2.2s while
+the DOM read 752 throughout. Nothing short of that settled it — four theories
+before it were all wrong. The probe was removed before committing.
+
+_Verified in the editor_, on a drawing whose work sits at x2400,y1800: it used
+to open blank, or with one shape half off the right edge, differently each
+time. It now opens at 55% with all five shapes inside the canvas, landing on
+the same pixels on every open (ink box 65,158→686,668 twice over).
+
+Checks: typecheck clean, `yarn fix` clean, frontend 1,953 passed (132 files),
+server 60/62 — the same
+`two administrators deleting each other always leave one administrator` flake
+as this morning, which passes alone and is unrelated to this change.
+
+**Worth knowing:** opening a drawing now always frames the whole drawing. It
+does not remember where you were last looking. That is a deliberate trade and
+nobody has asked for the alternative yet.
+
+### 2026-10-28 — Claude — anything can be an icon, and the vanishing drawing re-checked
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
+Production stays on `v1.3.0`.
+
+**Icons from any selection.** The library only ever accepted one stored
+picture, so a shape somebody drew could not become an icon — the obvious thing
+to want from a drawing tool. Any selection now offers it: a shape, a group, a
+label, a whole board. A single stored picture still passes through untouched
+at its own quality; anything else is rendered to PNG at up to 512px on its
+longest side, which stays sharp inside the 256px box an icon is placed in.
+
+PNG and not SVG, deliberately. Excalidraw's SVG carries its fonts and any
+placed picture inline as `url(data:…)`, and `server/lib/icons.js` refuses an
+SVG that reaches outside itself — that rule is what stops a hostile icon
+reading the page it lands in. Do not "improve" this to SVG without changing
+that rule first, and think hard before changing that rule.
+
+New: `excalidraw-app/data/selectionIcon.ts` (+5 unit tests). The save still
+refuses if the canvas moved under the dialog, now checking every element that
+was selected rather than one image's file.
+
+**The vanishing drawing, re-checked end to end.** The owner is nervous about
+this release, so it was driven through the real editor rather than the API:
+
+| What was done | Result |
+|---|---|
+| 6 × draw a shape → dashboard → back | 6 shapes, never fewer; ink on canvas 1,081 → 6,187px, only ever rising |
+| a second person (bibin) writes while it is open, then reopen | his red shape is on screen (468 red pixels) and stored — the bug from yesterday |
+| 6 rapid trips out and back, drawing nothing | ink 6,187 and 468 red pixels, identical to the pixel; 7 elements stored |
+
+Evidence left in the local test bed: drawing "Back and forth probe", icon
+"Hand drawn oval".
+
+Also run: the 26-check production-shaped pass (26/26), frontend 1,953 passed
+(132 files), server 62/62, typecheck and `yarn fix` clean.
+
+**Noticed, not fixed:** opening a drawing writes a new version even when
+nothing is edited — the probe went from version 16 to 24 over eight opens.
+Harmless today, but it inflates version history.
+
+### 2026-10-28 — Claude — snapping is now a per-person, per-drawing choice
+
+**Branch:** `feature/icon-drag`, committed locally. Not pushed, not released.
+Production stays on `v1.3.0`.
+
+The report was "Alt+S does nothing, right-click works". Alt+S was never broken.
+Proved it in the running editor: press Alt+S, open the context menu, the
+"Snap to objects" row comes back ticked. What was missing was any sign that it
+had happened — the canvas looks identical until something is dragged, and the
+only place the state shows is a menu you have to open to see.
+
+Two changes:
+
+- Toggling snapping now says so, as a toast ("Snap to objects on" / "off").
+- The answer is remembered against `user:workspace:scene` — the same key the
+  draft store already uses — so it belongs to one person on one drawing. It is
+  **not** saved into the scene, which would have carried one person's working
+  preference onto everybody else's canvas and onto their other drawings.
+
+New: `excalidraw-app/data/snapPreference.ts`, `getWorkspaceSceneKey()` in
+`workspaceScene.ts`, applied in `initializeScene` and persisted in `onChange`.
+Every storage access is guarded — a private window or a full store falls back
+to the editor's default rather than throwing mid-drag.
+
+_Verified in the running editor_ on the local test bed: toggled with Alt+S,
+reloaded the drawing and the tick was still there; opened a different drawing
+in the same window and it was unticked. Plus 7 unit tests covering both
+separations and both storage-failure paths.
+
+Checks: typecheck clean, `yarn fix` clean, frontend 1,948 passed (131 files),
+server 62/62.
+
+**Worth knowing:** the server suite failed once on
+`two administrators deleting each other always leave one administrator`, then
+passed on a rerun and passed alone. That test is flaky under the shared
+database. Nobody has looked at why.
 
 ### 2026-10-27 — Codex — publish icon work to dev
 

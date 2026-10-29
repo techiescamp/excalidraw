@@ -738,6 +738,84 @@ test("private workspace backend", async (t) => {
       );
     },
   );
+  await t.test(
+    "an asset key that points at a directory 404s instead of killing the server",
+    async () => {
+      // PUT stores an asset under files/<scope>/<id>/<fileId>/<uuid>, so the
+      // fileId itself is a directory. When the scene_files row is missing the
+      // GET falls back to that directory path, and streaming a directory used
+      // to raise an unhandled EISDIR that took the whole API process down.
+      const scene = await createDrawing();
+      const fileId = crypto.randomUUID();
+      await mkdir(path.join(storage, "files", "scenes", scene.id, fileId), {
+        recursive: true,
+      });
+      assert.equal(
+        (await call(`/files/scenes/${scene.id}/${fileId}`, { cookie: admin }))
+          .status,
+        404,
+      );
+      // The process has to still be serving afterwards.
+      assert.equal((await call("/me", { cookie: admin })).status, 200);
+    },
+  );
+  await t.test(
+    "a save carrying no elements cannot blank a drawing that has them",
+    async () => {
+      // Deleting everything in the editor still sends every element, as a
+      // tombstone, so a payload with no elements at all never means "I cleared
+      // this". It means the editor was reset or had not loaded — which happens
+      // while a drawing opens, and used to replace real work with nothing.
+      const drawing = await createDrawing();
+      const scene = {
+        type: "excalidraw",
+        version: 2,
+        elements: [
+          { id: "kept-1", type: "rectangle", version: 3, isDeleted: false },
+          { id: "kept-2", type: "ellipse", version: 3, isDeleted: false },
+        ],
+        appState: { viewBackgroundColor: "#fff" },
+        files: {},
+      };
+      const stored = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: { version: 1, scene },
+      });
+      assert.equal(stored.status, 200);
+      assert.equal(
+        (
+          await call(`/scenes/${drawing.id}/room`, {
+            cookie: admin,
+            method: "POST",
+            body: { room_id: "roomwithoutahash1" },
+          })
+        ).status,
+        200,
+      );
+      // Up to date with the server, and no room_id: the shape of the save the
+      // editor sends while the hash is missing.
+      const blanking = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: stored.body.version,
+          scene: { ...scene, elements: [] },
+        },
+      });
+      assert.equal(blanking.status, 200);
+      const loaded = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      assert.deepEqual(
+        loaded.body.scene.elements
+          .filter((element) => !element.isDeleted)
+          .map((element) => element.id)
+          .sort(),
+        ["kept-1", "kept-2"],
+      );
+    },
+  );
   await t.test("generic credentials, CSRF, and revocable logout", async () => {
     for (const username of ["missing", "viewer"]) {
       const result = await call("/auth/login", {

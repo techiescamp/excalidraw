@@ -214,9 +214,17 @@ kbd {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 24px 8px 8px;
-  color: var(--muted);
+  /* Sits on the same rhythm as a navigation row above it, so the eye reads
+     one column rather than a list and a caption that drifted apart. */
+  padding: 22px 8px 6px;
+  min-height: 39px;
+  color: var(--accent);
   font-size: 14px;
+}
+.section-head > span {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .section-head .primary {
   background: #eeecff;
