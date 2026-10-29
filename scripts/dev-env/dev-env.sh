@@ -4,6 +4,7 @@
 #
 #   dev-env.sh up            create a droplet from the newest production snapshot
 #   dev-env.sh prepare       turn that clone into a development box
+#   dev-env.sh storage       point its storage at a Spaces bucket, or local disk
 #   dev-env.sh status        what exists right now
 #   dev-env.sh ssh [cmd]     open a shell on it
 #   dev-env.sh sync-bucket   copy the production bucket to a dev bucket
@@ -286,12 +287,71 @@ cmd_down() {
   say "destroyed"
 }
 
+# Points the droplet's storage at a bucket, without going through `prepare`
+# again. Separate because the credentials belong to whoever is running this and
+# should not have to be handed over to re-run everything else; and because
+# getting the bucket wrong should cost one command, not a rebuild.
+#
+#   DEV_S3_BUCKET=… DEV_S3_KEY_ID=… DEV_S3_SECRET=… dev-env.sh storage
+#
+# With no DEV_S3_BUCKET it puts the droplet back on local disk.
+cmd_storage() {
+  doctl_ready
+  local id ip
+  id=$(require_droplet)
+  ip=$(droplet_ip "$id")
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER@$ip" \
+    'grep -q "^environment=development$" /etc/excalidraw-dev' ||
+    die "$ip has no /etc/excalidraw-dev marker; it has not been through prepare"
+
+  [ -f "$here/configure.mjs" ] || die "cannot find $here/configure.mjs"
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER@$ip" \
+    'rm -rf /tmp/dev-storage && mkdir -m 700 -p /tmp/dev-storage'
+  scp -q -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
+    "$here/configure.mjs" "$SSH_USER@$ip:/tmp/dev-storage/"
+
+  # Over the connection as a file, never as arguments: a Spaces secret on a
+  # command line is readable in the droplet's process list.
+  {
+    printf 'DEV_S3_BUCKET=%q\n' "${DEV_S3_BUCKET:-}"
+    printf 'DEV_S3_ENDPOINT=%q\n' "${DEV_S3_ENDPOINT:-https://blr1.digitaloceanspaces.com}"
+    printf 'DEV_S3_REGION=%q\n' "${DEV_S3_REGION:-blr1}"
+    printf 'DEV_S3_KEY_ID=%q\n' "${DEV_S3_KEY_ID:-}"
+    printf 'DEV_S3_SECRET=%q\n' "${DEV_S3_SECRET:-}"
+  } | ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER@$ip" \
+      'umask 077 && cat > /tmp/dev-storage/settings'
+
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER@$ip" \
+    'sudo bash -s' <<'REMOTE'
+set -euo pipefail
+. /tmp/dev-storage/settings
+rm -f /tmp/dev-storage/settings
+ENV_FILE=/etc/excalidraw-api.env
+DEV_S3_BUCKET="${DEV_S3_BUCKET:-}" DEV_S3_ENDPOINT="${DEV_S3_ENDPOINT:-}" \
+DEV_S3_REGION="${DEV_S3_REGION:-}" DEV_S3_KEY_ID="${DEV_S3_KEY_ID:-}" \
+DEV_S3_SECRET="${DEV_S3_SECRET:-}" \
+  node /tmp/dev-storage/configure.mjs env "$ENV_FILE"
+rm -rf /tmp/dev-storage
+systemctl restart excalidraw-api
+for _ in $(seq 1 30); do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/me || echo 000)
+  case "$code" in 200|401) break ;; esac
+  sleep 1
+done
+echo "[storage] api answered $code"
+sed -i "s|^storage=.*|storage=${DEV_S3_BUCKET:-local disk}|" /etc/excalidraw-dev
+grep '^storage=' /etc/excalidraw-dev
+REMOTE
+  say "storage set. Open a drawing with images and check they render."
+}
+
 case "${1:-}" in
   up)          shift; cmd_up "$@" ;;
   prepare)     shift; cmd_prepare "$@" ;;
+  storage)     shift; cmd_storage "$@" ;;
   status)      shift; cmd_status "$@" ;;
   ssh)         shift; cmd_ssh "$@" ;;
   sync-bucket) shift; cmd_sync_bucket "$@" ;;
   down)        shift; cmd_down "$@" ;;
-  *) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
