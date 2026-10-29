@@ -1337,6 +1337,56 @@ test("private workspace backend", async (t) => {
         afterReplace.body.scene.elements.map((e) => e.id),
         ["only-this"],
       );
+
+      // The editor puts every drawing in a collaboration room the moment it is
+      // opened, so a save naming that room is the ordinary case — one person,
+      // alone — and not evidence that two people are drawing at once. It used
+      // to be merged all the same, which read the whole stored drawing back
+      // and put every image into it inline on every single save.
+      const opened = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      assert.ok(opened.body.room_id, "opening a drawing gives it a room");
+      const alone = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: opened.body.version,
+          room_id: opened.body.room_id,
+          scene: base([element("alone-in-the-room", 1)]),
+        },
+      });
+      assert.equal(alone.status, 200, JSON.stringify(alone.body));
+      assert.equal(alone.body.merged, undefined);
+      assert.equal(
+        alone.body.scene,
+        undefined,
+        "a save that is up to date gets an answer, not the whole drawing back",
+      );
+      const afterAlone = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+      });
+      assert.deepEqual(
+        afterAlone.body.scene.elements.map((e) => e.id),
+        ["alone-in-the-room"],
+      );
+
+      // Two people really drawing at once are still caught, because each save
+      // moves the version on and leaves the other one behind.
+      const behindInRoom = await call(`/scenes/${drawing.id}/data`, {
+        cookie: admin,
+        method: "PUT",
+        body: {
+          version: opened.body.version,
+          room_id: opened.body.room_id,
+          scene: base([element("the-other-person", 1)]),
+        },
+      });
+      assert.equal(behindInRoom.body.merged, true);
+      assert.deepEqual(
+        behindInRoom.body.scene.elements.map((e) => e.id).sort(),
+        ["alone-in-the-room", "the-other-person"],
+      );
     },
   );
   await t.test(
@@ -2257,7 +2307,9 @@ test("private workspace backend", async (t) => {
         cookie: editor.cookie,
         method: "POST",
         body: {
-          data_url: `data:image/png;base64,${Buffer.from("<svg/>").toString("base64")}`,
+          data_url: `data:image/png;base64,${Buffer.from("<svg/>").toString(
+            "base64",
+          )}`,
           display_name: "Invalid image",
           category: "Programming",
         },
@@ -2328,7 +2380,11 @@ test("private workspace backend", async (t) => {
         call(`/workspaces/${ws}/icons`, {
           cookie,
           method: "POST",
-          body: { data_url: dataURL, display_name: displayName, category: "Dedupe" },
+          body: {
+            data_url: dataURL,
+            display_name: displayName,
+            category: "Dedupe",
+          },
         });
 
       // The same logo, saved by two people under the names each prefers.
@@ -2465,10 +2521,12 @@ test("private workspace backend", async (t) => {
         filtered.body.icons.map(({ name }) => name),
         ["helm", "kubernetes"],
       );
-      assert.deepEqual(
-        filtered.body.categories,
-        ["Databases", "General", "Kubernetes", "Programming"],
-      );
+      assert.deepEqual(filtered.body.categories, [
+        "Databases",
+        "General",
+        "Kubernetes",
+        "Programming",
+      ]);
       assert.ok(
         filtered.body.icons.every((icon) => icon.category === "Kubernetes"),
       );
