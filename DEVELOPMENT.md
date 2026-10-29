@@ -91,13 +91,20 @@ Code plus tests, following section 3. Commit as you go.
 
 ### 4. Verify locally
 
-Section 4a. There is no staging server, so this is the only place it runs
-before production. Write down what you observed.
+Section 4a. The first place it runs, and the only place with a fixture small
+enough to reason about. Write down what you observed.
 
 ### 5. Pull request into `develop`
 
 Open it against `develop`. CI must be green and a human reviews it. The
 description says what changed, how it was verified, and what was not tested.
+
+### 5a. Try it on the dev droplet
+
+Section 4b. Merging to `dev` installs the branch on a droplet restored from a
+production snapshot, so the change meets real drawings at real scale before
+anybody decides to ship it. Exercise the path that changed there, and write
+down what you saw.
 
 ### 6. Merge to `develop`, then let it settle
 
@@ -120,7 +127,7 @@ The pipeline installs the artifact from the release. Section 7a is the gate and
 section 7b is what gets announced.
 
 ```
-feature/icons → develop → main → tag → artifact → production
+feature/icons → develop → dev droplet → main → tag → artifact → production
 ```
 
 Each arrow is a pull request or a pipeline. No arrow is a person typing rsync.
@@ -184,8 +191,8 @@ came from skipping it.
 
 - Never push straight to `main` or `develop`.
 - Never deploy by hand from a laptop. Deployment is section 7.
-- Never deploy anything that has not run on the local instance first. There is
-  no staging server; section 4a is the substitute and section 7a is the gate.
+- Never deploy anything that has not run on the local instance first, and then
+  on the dev droplet. Sections 4a and 4b; section 7a is the gate.
 - Never report success you did not verify. Read the result back from the system
   that was supposed to change — a tool's own success message is not evidence.
   A script once reported deleting 9,069 objects it had not deleted, because
@@ -236,12 +243,12 @@ tests do not mean the change is safe under load. Section 9 covers that gap.
 
 ---
 
-## 4a. Local verification — this project's staging
+## 4a. Local verification — the first environment
 
-There is **no staging server**. Local is the only place a change can be tried
-before production, so local verification is not optional and is not "I ran the
-tests". Production is the next environment after a laptop, which is exactly why
-the gate in section 7a exists.
+Local is where a change is tried first, so local verification is not optional
+and is not "I ran the tests". It is the only environment with a fixture small
+enough to hold in your head, which is what makes a failure there readable.
+Section 4b is the second environment and section 7a is the gate.
 
 ### The disposable instance
 
@@ -305,6 +312,56 @@ Be honest about this rather than assuming a green local run means safe:
 
 When a change cannot be verified locally, say so explicitly in the pull
 request and name what is unverified. Do not let it pass silently.
+
+Three of the four gaps above — scale, real object storage, and data the fixture
+does not have — are what section 4b exists for.
+
+---
+
+## 4b. The dev droplet — real data, before production
+
+A DigitalOcean droplet restored from a production snapshot, reachable by IP
+over HTTP. It holds the real drawings, the real workspaces and the real volume,
+so a query that is fine against three drawings and hopeless against 636 fails
+there instead of on the live site. `docs/specs/dev-environment.md` is the
+specification; this is how it is used.
+
+```bash
+scripts/dev-env/dev-env.sh up        # from the newest production snapshot
+scripts/dev-env/dev-env.sh prepare   # make the clone a dev box, not a second production
+scripts/dev-env/dev-env.sh status    # address, firewall, whether it is prepared
+scripts/dev-env/dev-env.sh down      # destroy it
+```
+
+Then `Deploy to dev` installs a branch on it, and every push to `dev` installs
+`dev`. The droplet costs about 3.5 cents an hour, so it is created for a round
+of verification and destroyed afterwards.
+
+**A fresh snapshot is production with a different address.** Its editor bundle
+has the production API compiled into it, its database holds live sessions, and
+its Spaces credentials still work. `prepare` is what ends that: a new signing
+secret, no usable password on any real account, no backup timer, storage that
+cannot reach the production bucket, and the inherited editor replaced with a
+placeholder until a dev build is installed over it. It refuses to run on a host
+the production domain resolves to. Until `prepare` has run, do not open the box
+in a browser.
+
+What the dev droplet still does not give you:
+
+- **The production artifact.** The editor's API address is compiled in, so the
+  dev box runs a build made for its own address. Everything else is identical.
+  `VITE_APP_API_URL` already falls back to a relative `/api`; giving
+  `VITE_APP_BACKEND_V2_*` and `VITE_APP_WS_SERVER_URL` the same same-origin
+  default would make one artifact run anywhere, and is the next thing worth
+  doing here.
+- **Fresh data.** It is as old as the snapshot. Refreshing means taking a new
+  snapshot and creating the droplet again.
+- **Production's object storage, by default.** Its storage driver is local disk
+  unless a copied bucket is passed to `prepare`, so images saved in production
+  will not load. That is deliberate: local disk is the only setting that cannot
+  reach the production bucket at all.
+- **Monitoring.** No alerts, no backups, no Discord. A broken dev box is
+  destroyed and made again.
 
 ---
 
@@ -393,6 +450,17 @@ currently runs the server tests at all** — the 11 inherited workflows trigger
 on `master` and `release`, which this fork does not develop on. 51 server tests
 exist and have never run automatically.
 
+### 7.2 `deploy-dev.yml` — on push to `dev`, and on demand
+
+Builds the ref and installs it on the dev droplet with the same
+`excalidraw-deploy install` script production uses. It refuses to run if the
+build still contains the production address, or if the host has no
+`/etc/excalidraw-dev` marker — either of those would mean writing to the live
+site from a box people think is a test.
+
+Secrets needed: `DEV_HOST`, `DEV_USER`, `DEV_SSH_KEY`. Without them the
+workflow stops at the first step and says so.
+
 ### 7a. The gate before production
 
 **Nothing reaches production that has not passed locally first.** In order, and
@@ -406,12 +474,15 @@ no step may be skipped because the change "looks small":
    A migration that works on an empty table and fails on 636 drawings is worse
    than no migration.
 4. It is merged to `develop` through a pull request with CI green.
-5. `develop` is left to settle. Nothing is deployed in the same motion as the
+5. It is installed on the dev droplet (section 4b) and the path that changed is
+   exercised there, against real drawings. What was seen is written down. A
+   migration must have run there before it runs on production.
+6. `develop` is left to settle. Nothing is deployed in the same motion as the
    merge.
-6. A tag is cut from `main` and the release artifact is built (section 6).
-7. Production is deployed from that artifact, by the pipeline, with a human
+7. A tag is cut from `main` and the release artifact is built (section 6).
+8. Production is deployed from that artifact, by the pipeline, with a human
    approving the step.
-8. After deploying: check the health endpoint, read the service log for errors,
+9. After deploying: check the health endpoint, read the service log for errors,
    and check the database for sessions waiting on locks. Say what you saw. The
    alerts in section 7b watch the same things continuously; they do not replace
    looking once, by hand, straight after a deploy.
@@ -524,8 +595,7 @@ health check
 if the health check fails, reinstall the previous release and restart
 ```
 
-There is no staging server, so `develop` has no environment to deploy to;
-section 4a's local instance plays that role. Production requires a human
+`dev` deploys to the droplet in section 4b; production requires a human
 approval step in the GitHub environment, and the pipeline is the only thing
 that touches production.
 
@@ -603,9 +673,9 @@ In order. Each step is independently useful.
    to roll back to.
 5. **Add `release.yml`** and cut `v1.1.0` through it, to prove the artifacts
    build.
-6. **Add `deploy.yml`.** With no staging server, prove it by deploying one
-   release to production during a quiet hour, with the previous artifact ready
-   to reinstall.
+6. **Add `deploy.yml`.** Prove it by deploying one release to the dev droplet
+   (section 4b) and then one to production during a quiet hour, with the
+   previous artifact ready to reinstall.
 7. **Add the alerts in section 7b**, starting with the lock wait and idle
    transaction ones. The 24 October outage would have been a Discord message
    instead of you finding a frozen site.

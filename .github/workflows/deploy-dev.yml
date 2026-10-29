@@ -1,0 +1,191 @@
+# Installs the current branch on the development droplet — the box restored
+# from a production snapshot, described in docs/specs/dev-environment.md. This
+# is where a change meets real data before anything is tagged for production.
+#
+# Unlike Deploy, this builds from a ref rather than installing a published
+# release, because the editor bundle has its API address compiled in and the
+# dev box answers on a different address. The build is checked for that: a
+# bundle still pointing at production would send this box's drawings to the
+# live site.
+name: Deploy to dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to install
+        required: false
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and install on dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # Fail here with something readable rather than at the first ssh.
+      - name: Check the droplet is configured
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+          DEV_USER: ${{ secrets.DEV_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$DEV_HOST" ] || missing="$missing DEV_HOST"
+          [ -n "$DEV_USER" ] || missing="$missing DEV_USER"
+          [ -n "$DEV_SSH_KEY" ] || missing="$missing DEV_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::no development droplet configured; missing secrets:$missing"
+            echo "Create one with scripts/dev-env/dev-env.sh up, then prepare it." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Record the version
+        id: v
+        run: echo "version=dev-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - run: yarn install --frozen-lockfile
+
+      # The same values the release build writes, pointed at the droplet. None
+      # of them are secret — they end up in the JavaScript either way — but the
+      # address is held as a secret so the box is not advertised, which is why
+      # it is written from the environment rather than inlined.
+      - name: Editor configuration
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+        run: |
+          cat > .env.production.local <<ENV
+          VITE_APP_BACKEND_V2_GET_URL=http://${DEV_HOST}/api/v2/
+          VITE_APP_BACKEND_V2_POST_URL=http://${DEV_HOST}/api/v2/post/
+          VITE_APP_WS_SERVER_URL=http://${DEV_HOST}
+          VITE_APP_API_URL=http://${DEV_HOST}/api
+          VITE_APP_FIREBASE_CONFIG={}
+          VITE_APP_ENABLE_TRACKING=false
+          VITE_APP_DISABLE_SENTRY=true
+          VITE_APP_FONTS_CDN=/
+          ENV
+
+      - name: Build the editor
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: yarn build:app
+
+      # Two ways this build can be wrong, and both are quiet until someone
+      # opens a drawing: no API address at all, which loads plain Excalidraw;
+      # or production's address, which writes this box's drawings to the live
+      # site. Grep output is never echoed — the host is a masked secret.
+      - name: Check the editor points at the dev box and not at production
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+        run: |
+          if grep -rq "draw.devopsproject.dev" excalidraw-app/build/assets/; then
+            echo "::error::this build still contains the production address; it would write to the live site"
+            exit 1
+          fi
+          if ! grep -rq "${DEV_HOST}/api" excalidraw-app/build/assets/; then
+            echo "::error::this build has no API address; it would load as plain Excalidraw"
+            exit 1
+          fi
+          echo "the editor is configured for the dev box"
+
+      - name: Package
+        run: |
+          version="${{ steps.v.outputs.version }}"
+          tar -czf "excalidraw-editor-${version}.tar.gz" -C excalidraw-app/build .
+          tar -czf "excalidraw-server-${version}.tar.gz" \
+            --exclude=node_modules --exclude=test \
+            server dashboard
+
+      - name: Open the connection
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "$DEV_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEV_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Refuse to install onto anything that has not been through
+      # unproduction.sh: without it this is a second production, holding real
+      # sessions and able to write to the production bucket.
+      - name: Check the droplet is a prepared dev box
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+          DEV_USER: ${{ secrets.DEV_USER }}
+        run: |
+          if ! ssh -i ~/.ssh/id_ed25519 "$DEV_USER@$DEV_HOST" \
+               'grep -q "^environment=development$" /etc/excalidraw-dev' 2>/dev/null; then
+            echo "::error::that host has no /etc/excalidraw-dev marker; run scripts/dev-env/dev-env.sh prepare first"
+            exit 1
+          fi
+
+      - name: Install it
+        id: install
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+          DEV_USER: ${{ secrets.DEV_USER }}
+        run: |
+          scp -i ~/.ssh/id_ed25519 excalidraw-*-${{ steps.v.outputs.version }}.tar.gz \
+            "$DEV_USER@$DEV_HOST:/tmp/"
+          ssh -i ~/.ssh/id_ed25519 "$DEV_USER@$DEV_HOST" \
+            "sudo /usr/local/bin/excalidraw-deploy install ${{ steps.v.outputs.version }}"
+
+      - name: Health check
+        id: health
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' "http://${DEV_HOST}/api/me" || echo 000)
+            # 401 is a healthy answer here: the endpoint replies, we are not signed in.
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
+              echo "api answered $code"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the api never answered; last code $code"
+          exit 1
+
+      - name: Put the previous build back
+        if: failure() && steps.install.outcome == 'success'
+        env:
+          DEV_HOST: ${{ secrets.DEV_HOST }}
+          DEV_USER: ${{ secrets.DEV_USER }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "$DEV_USER@$DEV_HOST" \
+            "sudo /usr/local/bin/excalidraw-deploy rollback"
+
+      # The address is a secret, so it is masked in the log. The summary says
+      # what to do rather than where, and the address comes from
+      # 'dev-env.sh status'.
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ steps.v.outputs.version }} on the dev box"
+            echo ""
+            echo "- result: ${{ job.status }}"
+            echo "- ref: \`${{ inputs.ref || github.ref_name }}\`"
+            echo ""
+            echo "Open the box and exercise what changed. The address is in"
+            echo "\`scripts/dev-env/dev-env.sh status\`; the sign-in details are in"
+            echo "\`/root/dev-admin-password\` on the droplet."
+          } >> "$GITHUB_STEP_SUMMARY"
