@@ -537,7 +537,7 @@ export function installDrawings(
     });
   });
   // Shared by the editor's save route and the MCP drawing tools.
-  const saveScene = async (user, id, incoming, { expected, roomId } = {}) => {
+  const saveScene = async (user, id, incoming, { expected } = {}) => {
     let payload = validateScene(incoming);
     let cacheCandidate;
     // The images go to storage before the transaction opens. Uploading inside
@@ -555,7 +555,6 @@ export function installDrawings(
       const { scene } = await sceneAccess(user, id, "drawing.edit", tx);
       const expectedVersion =
         expected === undefined ? scene.scene_version : expected;
-      const collaborative = Boolean(scene.room_id && roomId === scene.room_id);
       // A version ahead of the server's cannot be honest: the caller is
       // claiming to have saved something this drawing never received.
       if (expectedVersion > scene.scene_version)
@@ -568,16 +567,26 @@ export function installDrawings(
       // reconcile by hand, and on a drawing that takes seconds to save the
       // window for it is wide. Merge instead, by the same element rules
       // collaboration uses, and hand the result back so the caller adopts it.
+      //
+      // Being behind is the whole test. It used to merge whenever the caller
+      // named this drawing's collaboration room as well — but the editor puts
+      // every drawing in a room the moment it is opened, so that was every
+      // save, by one person editing alone. Each one read the entire stored
+      // drawing back and put every image into it inline, only to merge it with
+      // a copy it already matched. On a drawing full of icons that is what
+      // made saving take seconds. Two people editing at once are caught by
+      // this test anyway: each save moves the version on, so the other one is
+      // behind by the time it sends.
       const stale = scene.scene_version !== expectedVersion;
-      if (collaborative || stale)
+      if (stale)
         payload = validateScene(
           mergeSceneSnapshots(await readScene(scene), payload),
         );
       const nextVersion = scene.scene_version + 1;
-      // A collaborative save merged more elements in after the upload, so any
-      // image that arrived with them is stored now; for an ordinary save this
-      // finds everything already uploaded and does nothing.
-      const { payload: stored, refs } = collaborative || stale
+      // A merged save brought more elements in after the upload, so any image
+      // that arrived with them is stored now; for an ordinary save this finds
+      // everything already uploaded and does nothing.
+      const { payload: stored, refs } = stale
         ? // merging can bring in elements saved by someone else, but their
           // images are already stored, so this records references only
           await blobs.split(scene.workspace_id, payload, { mayUpload: false })
@@ -651,7 +660,7 @@ export function installDrawings(
         // Whenever the save was merged, the caller's copy is no longer what is
         // stored; return the merged scene so it can adopt it rather than keep
         // drawing on top of a version that no longer exists.
-        ...(collaborative || stale ? { scene: payload, merged: stale } : {}),
+        ...(stale ? { scene: payload, merged: true } : {}),
       };
     });
     if (cacheCandidate) {
@@ -674,11 +683,11 @@ export function installDrawings(
     const expected = req.body?.version;
     if (!Number.isSafeInteger(expected) || expected < 0)
       fail(400, "Expected scene version is required.");
+    // `room_id` is still accepted in the body and deliberately ignored: older
+    // editors send it, and whether a save merges is decided by the version it
+    // was made against, not by a room.
     res.json(
-      await saveScene(req.user, req.params.id, req.body?.scene, {
-        expected,
-        roomId: req.body?.room_id,
-      }),
+      await saveScene(req.user, req.params.id, req.body?.scene, { expected }),
     );
   });
   app.get("/api/scenes/:id/versions", auth, async (req, res) => {
