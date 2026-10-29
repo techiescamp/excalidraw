@@ -1255,7 +1255,17 @@ const ExcalidrawWrapper = () => {
       ownerWindow.dispatchEvent(
         new ownerWindow.Event("workspace-icons-updated"),
       );
-      excalidrawAPI.setToast({ message: `${name} added to the icon library.` });
+      // The same picture is one icon however many times it is added, so say
+      // which happened rather than claiming a second one was made. The name
+      // reported is the one the library already knows it by, not the one just
+      // typed, because that is what will be seen on the tile.
+      excalidrawAPI.setToast({
+        message: result.existing
+          ? `Already in the icon library as “${
+              result.icon?.display_name || result.icon?.name || name
+            }”.`
+          : `${name} added to the icon library.`,
+      });
     },
     [excalidrawAPI, iconImageJob, workspacePermissions],
   );
