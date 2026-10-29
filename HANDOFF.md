@@ -155,6 +155,40 @@ sending it back to the caller.
   | `JSON.stringify` | 917 | 42 |
   | preview renders | 1 | 0 |
 
+**Reviewed line by line afterwards, and three things came out of it**
+
+1. The editor reports a change for a selection, a scroll and a zoom as well as
+   an edit. Holding the scene and starting the timer on every one of those
+   made the bar read "Saving…" when nothing was being saved, and made the
+   unload prompt claim unsaved work for 800 ms after merely clicking a shape.
+   Now a hash of the elements' nonces answers "has anything stored changed?"
+   first. Measured in the browser: panning, zooming and clicking make **no**
+   save, where each used to queue one.
+2. Materialising straight after a merged answer was applied could serialise
+   the canvas as it was *before* the apply and briefly store a scene without
+   the elements the merge had brought in. The captured scene is now dropped
+   when the apply happens.
+3. `saveScene` kept a `roomId` parameter it no longer reads. Removed; the
+   route records that `room_id` is still accepted in the body because older
+   editors send it.
+
+**Checked in two browser tabs on one drawing, live collaboration on**
+(`VITE_APP_WS_SERVER_URL` pointed at the local server, so the socket was
+really connected — cursors and shapes crossed between tabs):
+
+| | result |
+|---|---|
+| both tabs drawing at the same time | all four shapes on both canvases and on the server |
+| delete in one tab | gone in the other, tombstone kept |
+| **delete in one tab while the other tab's save was held back 2.5 s** | deletion stood, and the shape drawn during that save survived |
+| pan, zoom, click | 0 saves, status stays "Saved" |
+| text, undo, redo | all three survive a round trip |
+| images: move one | position saved, all three blob references and the export intact |
+| rename | server, status bar and tab title all follow |
+| reload | scene restored, opens in view |
+| leaving for the dashboard | preview rendered on the way out and current |
+| five saves while drawing | **one** preview rendered, not five |
+
 **Not done, and worth knowing**
 
 - A drawing is still given a room the moment it is opened. It should probably
