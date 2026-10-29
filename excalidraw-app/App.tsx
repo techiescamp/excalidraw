@@ -956,12 +956,37 @@ const ExcalidrawWrapper = () => {
     if (workspaceSceneId) {
       // A save that was behind comes back merged with whatever else was stored;
       // put that on the canvas so the author is drawing on what exists.
-      registerWorkspaceSceneApplier((scene) =>
-        excalidrawAPI?.updateScene({
-          elements: scene.elements,
+      //
+      // Reconciled against the canvas as it is now, never assigned over it. A
+      // save takes time to make the round trip — on a drawing full of images,
+      // seconds of it — and anything drawn in that window is on the canvas but
+      // not in the answer coming back. Assigning the answer threw that work
+      // away: a shape placed during a save disappeared, and returned only when
+      // a later save happened to carry it. Reconciling keeps the local copy of
+      // whatever the author has touched more recently, which is the rule
+      // collaboration already uses.
+      registerWorkspaceSceneApplier((scene) => {
+        if (!excalidrawAPI) {
+          return;
+        }
+        excalidrawAPI.updateScene({
+          elements: reconcileElements(
+            excalidrawAPI.getSceneElementsIncludingDeleted(),
+            scene.elements as unknown as RemoteExcalidrawElement[],
+            excalidrawAPI.getAppState(),
+          ),
           captureUpdate: CaptureUpdateAction.NEVER,
-        }),
-      );
+        });
+        // The merge can bring in an element somebody else drew, whose image
+        // this editor has never seen. Without its bytes it renders as nothing.
+        const known = excalidrawAPI.getFiles();
+        const arrived = Object.values(scene.files || {}).filter(
+          (file) => file && !known[file.id],
+        );
+        if (arrived.length) {
+          excalidrawAPI.addFiles(arrived);
+        }
+      });
       saveWorkspaceScene(workspaceSceneId, elements, appState, files);
       return;
     }
