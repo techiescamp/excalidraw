@@ -259,12 +259,24 @@ storage=$([ -n "${DEV_S3_BUCKET:-}" ] && echo "spaces:${DEV_S3_BUCKET}" || echo 
 EOF
 
 systemctl start excalidraw-api
-sleep 3
 
 # ── read the result back ─────────────────────────────────────────────────────
-code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:4000/api/me" || echo 000)
+# Waited for rather than slept past. Three seconds was enough on the machine
+# this was written on and not on the first real droplet, where the API took
+# nearer ten — and the script declared a working box broken.
+code=000
+for _ in $(seq 1 30); do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:4000/api/me" || echo 000)
+  case "$code" in
+  200 | 401) break ;;
+  esac
+  sleep 1
+done
 say "api /api/me answered $code (401 is correct: it is up, nobody is signed in)"
-[ "$code" = "401" ] || [ "$code" = "200" ] || die "the API is not answering"
+[ "$code" = "401" ] || [ "$code" = "200" ] || {
+  journalctl -u excalidraw-api -n 20 --no-pager >&2 || true
+  die "the API is not answering"
+}
 
 say ""
 say "prepared as a development box:"
