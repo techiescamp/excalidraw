@@ -1,4 +1,13 @@
 .excalidraw {
+  // The sidebar is a column of flex items, and a flex item will not shrink
+  // below its own content unless it is told it may. Without this the icon
+  // grid pushed the panel past the bottom of the sidebar, which clips, so
+  // the last icons could not be reached by scrolling or by any other means.
+  .sidebar-tabs-root,
+  .sidebar-tabs-root [role="tabpanel"] {
+    min-height: 0;
+  }
+
   .app-icon-library {
     position: relative;
     display: flex;
@@ -115,7 +124,12 @@
     grid-template-columns: repeat(auto-fill, minmax(3.75rem, 1fr));
     gap: 0.375rem;
     align-content: start;
-    overflow: auto;
+    // The grid is the part that scrolls. A flex item will not shrink below
+    // its content, so without min-height the grid grew past the panel and
+    // the last rows of icons could not be reached at all.
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     padding: 0.125rem 0.125rem 0.5rem;
   }
 
