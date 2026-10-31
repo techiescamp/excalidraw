@@ -37,8 +37,8 @@ mcp       duplicate of dev, to be deleted
 background-removal  merged 8 October, to be deleted
 ```
 
-**Deployed right now:** commit `cca6e5fd`, installed by hand before the
-pipeline existed.
+**Deployed right now:** `v5.2.0`, installed by the deploy pipeline. `v5.3.0`
+is tagged and on its way through it.
 
 **Pipelines** — on branch `feature/cicd-pipeline`, pull request #1, not merged:
 
@@ -94,6 +94,48 @@ pipeline existed.
 ---
 
 ## Log
+
+### 2026-10-30/31 — Claude — v5.1.0, v5.2.0, v5.3.0: snap, icon scrolling, icon delete
+
+Three small releases, each one file of behaviour, all built and deployed through
+the pipeline. Production ran `v5.1.0`, then `v5.2.0`; `v5.3.0` carries the
+delete fix below.
+
+- **v5.1.0** — **Snap to objects** now starts off for a drawing nobody has
+  toggled it on for, and the choice is remembered per drawing. Checked by
+  forcing the remembered value on and confirming the context menu still shows it
+  off. *Arrow binding* and *Snap to midpoints* are separate settings and still
+  default on; nobody has said whether they should change.
+- **v5.2.0** — the icon library could not be scrolled to its last icon. The
+  sidebar is a column of flex items and every one of them defaulted to
+  `min-height: auto`, so the grid grew past the panel instead of scrolling and
+  the overflow was clipped away; search was the only way to reach an icon past
+  the fold. The tabs root and panel may now shrink and the grid is the part that
+  scrolls. One file, `excalidraw-app/components/AppSidebar.scss`.
+- **v5.3.0** — **Delete from library** asked for confirmation and then did
+  nothing. The API refuses a non-GET request without the `X-Excalidraw-Request`
+  header as cross-site (403 "Invalid request origin."), and this delete was the
+  single write in the app that did not send it. PR #13.
+
+**How the delete fault was proved**, before changing anything: the same `DELETE`
+against a disposable local instance answered 403 without the header and 200 with
+it. After the fix, deleting an icon in the browser removed it from the panel and
+it stayed gone across a reload.
+
+**Guard against the same class of fault:** `excalidraw-app/tests/apiRequestHeader.test.ts`
+walks the app's sources and fails on any `fetch` that writes to our own API
+without the header. It fails on the old delete call.
+
+**Checks:** typecheck, lint, and the full front-end suite (133 files, 1,959
+tests) locally; all ten CI checks on PR #13.
+
+**Still open from this stretch**
+
+- The server's CSP (`script-src 'self'`) blocks the editor's inline scripts in
+  the built `index.html`. Pre-existing, cosmetic, same on production today.
+- One server test — "two administrators deleting each other always leave one
+  administrator" — failed once with 400 where it expects 200 or 409, and passed
+  on two full re-runs. Flake, not a regression; it predates these releases.
 
 ### 2026-10-29 — Claude — the "ghost": work vanishing, and the canvas stuttering
 
