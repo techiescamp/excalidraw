@@ -193,7 +193,13 @@ const IconLibrary = ({ workspace }: { workspace: string }) => {
         `${API}/workspaces/${workspace}/icons/${encodeURIComponent(
           icon.set_name,
         )}/${encodeURIComponent(icon.name)}`,
-        { method: "DELETE", credentials: "include" },
+        {
+          method: "DELETE",
+          credentials: "include",
+          // The API rejects a write that arrives without this header as
+          // cross-site, so without it deleting an icon only ever failed.
+          headers: { "X-Excalidraw-Request": "1" },
+        },
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
