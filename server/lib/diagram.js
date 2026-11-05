@@ -39,7 +39,7 @@ export const COLORS = {
   yellow: { stroke: "#f08c00", fill: "#ffec99" },
 };
 const SHAPES = ["rectangle", "ellipse", "diamond"];
-const FONT_SIZE = 20;
+const FONT_SIZE = 16;
 const LINE_HEIGHT = 1.25;
 const PADDING = 24;
 const MIN_WIDTH = 160;
@@ -48,8 +48,68 @@ const GAP_ACROSS = 140;
 const GAP_DOWN = 70;
 const MAX_NODES = 120;
 const MAX_LABEL = 160;
-const ICON = 52;
-const ICON_GAP = 10;
+const ICON = 40;
+const ICON_GAP = 20;
+
+// Everything below exists to make a drawing read as a blueprint rather than a
+// flowchart: one grid, one colour per role, boundaries that nest, and arrows
+// that turn at right angles. docs/specs/diagram-blueprint.md says why.
+
+// One grid, and every coordinate on it. This single rule does most of the work
+// of making a diagram look deliberate rather than placed by hand.
+const GRID = 20;
+const snap = (value) => Math.round(value / GRID) * GRID;
+
+const ZONE_PADDING = 40; // between a boundary and anything inside it
+const SIBLING_GAP = 40; // between tiles in the same boundary
+const ZONE_GAP = 60; // between boundaries
+const BADGE = 36; // numbered step
+const TITLE_SIZE = 30;
+const ZONE_LABEL_SIZE = 16;
+const SMALL_SIZE = 14; // arrow labels, legend rows, the brand mark
+const LEGEND_WIDTH = 280;
+const LEGEND_ROW = 32;
+const MAX_FILLS = 6; // more than this and two roles are really one role
+
+// Colour means role, never decoration. A reader learns "violet is the control
+// plane" once and carries it through the whole diagram.
+export const ROLES = {
+  "control-plane": {
+    fill: "#e5dbff",
+    stroke: "#8b5cf6",
+    name: "Control plane",
+  },
+  "data-plane": { fill: "#a5d8ff", stroke: "#4a9eed", name: "Data plane" },
+  storage: { fill: "#c3fae8", stroke: "#0d9488", name: "Storage" },
+  external: { fill: "#ffd8a8", stroke: "#f59e0b", name: "External system" },
+  gateway: { fill: "#b2f2bb", stroke: "#22c55e", name: "Gateway" },
+  error: { fill: "#ffc9c9", stroke: "#ef4444", name: "Failure path" },
+  observability: { fill: "#eebefa", stroke: "#c026d3", name: "Observability" },
+  neutral: { fill: "#f1f3f5", stroke: "#757575", name: "Other" },
+};
+
+// Each nesting level is drawn differently so the eye can separate them. Four
+// levels is the practical ceiling; past that a diagram reads as one blob.
+const LEVELS = [
+  { fill: "transparent", opacity: 100, stroke: "#757575", strokeWidth: 1 },
+  { fill: "#dbe4ff", opacity: 25, stroke: "#4a9eed", strokeWidth: 2 },
+  { fill: "#fff3bf", opacity: 40, stroke: "#f59e0b", strokeWidth: 1 },
+  {
+    fill: "#e5dbff",
+    opacity: 45,
+    stroke: "#8b5cf6",
+    strokeWidth: 1,
+    strokeStyle: "dashed",
+  },
+];
+
+// An edge says what kind of connection it is; the drawing follows from that.
+const EDGE_KINDS = {
+  sync: { color: "#1e1e1e", strokeWidth: 2, strokeStyle: "solid" },
+  async: { color: "#757575", strokeWidth: 1, strokeStyle: "dashed" },
+  primary: { color: null, strokeWidth: 4, strokeStyle: "solid" },
+  bidirectional: { color: "#1e1e1e", strokeWidth: 2, strokeStyle: "solid" },
+};
 
 // Average advance width per font size unit. Close enough for box sizing; the
 // editor rewraps bound text to the container, so small errors stay invisible.
@@ -113,12 +173,18 @@ const element = (type, props) => ({
   ...props,
 });
 
-const label = (text, container, fontFamily, strokeColor) => {
-  const size = measure(text);
+const label = (
+  text,
+  container,
+  fontFamily,
+  strokeColor,
+  fontSize = FONT_SIZE,
+) => {
+  const size = measure(text, fontSize);
   return element("text", {
     text,
     originalText: text,
-    fontSize: FONT_SIZE,
+    fontSize,
     fontFamily,
     textAlign: "center",
     verticalAlign: "middle",
@@ -158,10 +224,212 @@ const layerNodes = (nodes, edges) => {
   return columns;
 };
 
-export function buildDiagram(spec, icons = new Map()) {
+// One block of nodes, laid out in columns along the flow direction. Local
+// coordinates: the caller decides where the block as a whole lands.
+const layoutNodes = (nodes, edges, down, sizes) => {
+  const columns = layerNodes(nodes, edges);
+  const depths = [...columns.keys()].sort((a, b) => a - b);
+  const spans = depths.map((depth) =>
+    columns
+      .get(depth)
+      .reduce(
+        (total, node) =>
+          total +
+          (down ? sizes.get(node.id).width : sizes.get(node.id).height) +
+          SIBLING_GAP,
+        -SIBLING_GAP,
+      ),
+  );
+  const longest = Math.max(0, ...spans);
+  const boxes = new Map();
+  let across = 0;
+  depths.forEach((depth, position) => {
+    // Columns are centred against the longest one, so a diagram reads down its
+    // middle instead of hanging off one edge.
+    let along = snap((longest - spans[position]) / 2);
+    let thickest = 0;
+    for (const node of columns.get(depth)) {
+      const size = sizes.get(node.id);
+      boxes.set(node.id, {
+        x: snap(down ? along : across),
+        y: snap(down ? across : along),
+        width: size.width,
+        height: size.height,
+      });
+      along += (down ? size.width : size.height) + SIBLING_GAP;
+      thickest = Math.max(thickest, down ? size.height : size.width);
+    }
+    across += thickest + GAP_ACROSS;
+  });
+  return { boxes, ...bounds(boxes.values()) };
+};
+
+const bounds = (boxes) => {
+  let width = 0;
+  let height = 0;
+  for (const box of boxes) {
+    width = Math.max(width, box.x + box.width);
+    height = Math.max(height, box.y + box.height);
+  }
+  return { width: snap(width), height: snap(height) };
+};
+
+// A boundary holds its own nodes and any boundaries inside it, stacked along the
+// flow direction, with the padding that keeps a diagram from reading as one blob.
+const layoutGroup = (zoneId, context) => {
+  const own = context.nodesByZone.get(zoneId) || [];
+  const children = context.zonesByParent.get(zoneId) || [];
+  const boxes = new Map();
+  const rects = [];
+  let width = 0;
+  let height = 0;
+  let cursor = 0;
+  if (own.length) {
+    const block = layoutNodes(own, context.edges, context.down, context.sizes);
+    for (const [id, box] of block.boxes) boxes.set(id, box);
+    width = block.width;
+    height = block.height;
+    cursor = (context.down ? block.height : block.width) + ZONE_GAP;
+  }
+  for (const child of children) {
+    const inner = layoutGroup(child.id, context);
+    const dx = context.down ? 0 : cursor;
+    const dy = context.down ? cursor : 0;
+    for (const [id, box] of inner.boxes)
+      boxes.set(id, { ...box, x: box.x + dx, y: box.y + dy });
+    for (const rect of inner.rects)
+      rects.push({ ...rect, x: rect.x + dx, y: rect.y + dy });
+    rects.push({
+      zone: child,
+      x: dx,
+      y: dy,
+      width: inner.width,
+      height: inner.height,
+    });
+    width = Math.max(width, dx + inner.width);
+    height = Math.max(height, dy + inner.height);
+    cursor += (context.down ? inner.height : inner.width) + ZONE_GAP;
+  }
+  if (zoneId === null)
+    return { boxes, rects, width: snap(width), height: snap(height) };
+  // Inside a boundary everything moves in by the padding, and the boundary
+  // itself is the content plus that padding on all four sides.
+  for (const [id, box] of boxes)
+    boxes.set(id, {
+      ...box,
+      x: box.x + ZONE_PADDING,
+      y: box.y + ZONE_PADDING,
+    });
+  for (const rect of rects) {
+    rect.x += ZONE_PADDING;
+    rect.y += ZONE_PADDING;
+  }
+  return {
+    boxes,
+    rects,
+    width: snap(width + ZONE_PADDING * 2),
+    height: snap(height + ZONE_PADDING * 2),
+  };
+};
+
+// Connections leave a box on one side and enter the next on the facing side,
+// turning at right angles. A diagonal arrow is the fastest way to make a
+// reference architecture look amateur.
+const route = (from, to) => {
+  const rightwards = to.x >= from.x + from.width;
+  const leftwards = from.x >= to.x + to.width;
+  if (rightwards || leftwards) {
+    const start = {
+      x: rightwards ? from.x + from.width : from.x,
+      y: snap(from.y + from.height / 2),
+    };
+    const end = {
+      x: rightwards ? to.x : to.x + to.width,
+      y: snap(to.y + to.height / 2),
+    };
+    const turn = snap((start.x + end.x) / 2) - start.x;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    return {
+      start,
+      end,
+      points:
+        dy === 0
+          ? [
+              [0, 0],
+              [dx, 0],
+            ]
+          : [
+              [0, 0],
+              [turn, 0],
+              [turn, dy],
+              [dx, dy],
+            ],
+    };
+  }
+  const downwards = to.y >= from.y + from.height;
+  const start = {
+    x: snap(from.x + from.width / 2),
+    y: downwards ? from.y + from.height : from.y,
+  };
+  const end = {
+    x: snap(to.x + to.width / 2),
+    y: downwards ? to.y : to.y + to.height,
+  };
+  const turn = snap((start.y + end.y) / 2) - start.y;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  return {
+    start,
+    end,
+    points:
+      dx === 0
+        ? [
+            [0, 0],
+            [0, dy],
+          ]
+        : [
+            [0, 0],
+            [0, turn],
+            [dx, turn],
+            [dx, dy],
+          ],
+  };
+};
+
+const plainText = (
+  text,
+  x,
+  y,
+  fontFamily,
+  fontSize,
+  strokeColor,
+  align = "left",
+) => {
+  const size = measure(text, fontSize);
+  return element("text", {
+    text,
+    originalText: text,
+    fontSize,
+    fontFamily,
+    textAlign: align,
+    verticalAlign: "top",
+    containerId: null,
+    strokeColor,
+    x: snap(x),
+    y: snap(y),
+    width: size.width,
+    height: size.height,
+    lineHeight: LINE_HEIGHT,
+    autoResize: true,
+  });
+};
+
+export function buildDiagram(spec, icons = new Map(), warnings = []) {
   order = 0;
   const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
   const edges = Array.isArray(spec?.edges) ? spec.edges : [];
+  const zoneList = Array.isArray(spec?.zones) ? spec.zones : [];
   if (!nodes.length) fail(400, "Describe at least one node.");
   if (nodes.length > MAX_NODES)
     fail(400, `Up to ${MAX_NODES} nodes per drawing.`);
@@ -193,182 +461,442 @@ export function buildDiagram(spec, icons = new Map()) {
   const sketchy = style.sketchy === true;
   const down = String(spec.layout || "right").startsWith("down");
 
-  const columns = layerNodes(nodes, edges);
-  const boxes = new Map();
-  const elements = [];
-  const files = {};
+  // ── boundaries ─────────────────────────────────────────────────────────────
+  const zones = new Map();
+  for (const zone of zoneList) {
+    if (!zone?.id || zones.has(zone.id)) {
+      warnings.push(
+        `Boundary "${zone?.id}" has no id or repeats one; ignored.`,
+      );
+      continue;
+    }
+    zones.set(zone.id, {
+      id: zone.id,
+      label: zone.label || zone.id,
+      parent: zone.parent || null,
+      level: Math.min(Math.max(Number(zone.level) || 0, 1), LEVELS.length) - 1,
+      members: new Set((zone.nodes || []).map(String)),
+    });
+  }
+  for (const zone of zones.values())
+    if (zone.parent && !zones.has(zone.parent)) {
+      warnings.push(
+        `Boundary "${zone.id}" names a parent "${zone.parent}" that does not exist; drawn at the top level.`,
+      );
+      zone.parent = null;
+    }
+  // A level nobody set is read off the depth of the nesting itself.
+  const depthOf = (zone, seen = new Set()) => {
+    if (!zone.parent || seen.has(zone.id)) return 0;
+    seen.add(zone.id);
+    return 1 + depthOf(zones.get(zone.parent), seen);
+  };
+  for (const zone of zones.values())
+    if (!zoneList.find((z) => z.id === zone.id)?.level)
+      zone.level = Math.min(depthOf(zone), LEVELS.length - 1);
+
+  const zoneOf = new Map();
+  for (const zone of zones.values())
+    for (const member of zone.members)
+      if (ids.has(member)) zoneOf.set(member, zone.id);
+  for (const node of nodes) {
+    if (!node.zone) continue;
+    if (!zones.has(node.zone)) {
+      warnings.push(
+        `Node "${node.id}" names a boundary "${node.zone}" that does not exist; drawn outside any boundary.`,
+      );
+      continue;
+    }
+    zoneOf.set(node.id, node.zone);
+  }
+
+  // ── tiles ──────────────────────────────────────────────────────────────────
+  const fills = new Set();
+  const rolesUsed = new Map();
   const sizes = new Map(
     nodes.map((node) => {
-      const text = wrap(node.label || node.id);
-      const size = measure(text);
       const art = node.icon ? icons.get(String(node.icon)) : null;
+      const text = wrap(node.label || node.id, art ? 18 : 24);
+      const size = measure(text, FONT_SIZE);
+      const width = art
+        ? ICON_GAP + ICON + 16 + size.width + ICON_GAP
+        : size.width + PADDING * 2;
       return [
         node.id,
         {
           text,
           art,
-          width: Math.max(MIN_WIDTH, size.width + PADDING * 2),
-          height:
-            Math.max(MIN_HEIGHT, size.height + PADDING) +
-            (art ? ICON + ICON_GAP : 0),
+          width: snap(Math.max(MIN_WIDTH, width)),
+          height: snap(Math.max(MIN_HEIGHT, size.height + PADDING)),
         },
       ];
     }),
   );
-  const depths = [...columns.keys()].sort((a, b) => a - b);
-  let across = 0;
-  for (const depth of depths) {
-    const column = columns.get(depth);
-    const widest = Math.max(...column.map((n) => sizes.get(n.id).width));
-    const tallest = Math.max(...column.map((n) => sizes.get(n.id).height));
-    const span = column.reduce(
-      (total, node) =>
-        total + (down ? sizes.get(node.id).width : sizes.get(node.id).height),
-      0,
-    );
-    let along = -(span + (column.length - 1) * GAP_DOWN) / 2;
-    for (const node of column) {
-      const size = sizes.get(node.id);
-      const colors = COLORS[String(node.color || "").toLowerCase()] || palette;
-      const shape = SHAPES.includes(node.shape) ? node.shape : "rectangle";
-      const box = element(shape, {
-        x: down ? along : across,
-        y: down ? across : along,
-        width: size.width,
-        height: size.height,
-        strokeColor: node.stroke || colors.stroke,
-        backgroundColor: node.fill || colors.fill,
-        roughness: sketchy ? 1 : 0,
-        roundness: shape === "rectangle" ? { type: 3 } : null,
-      });
-      const text = label(
-        size.text,
-        size.art
-          ? {
-              ...box,
-              y: box.y + (ICON + ICON_GAP) / 2,
-              height: box.height - ICON - ICON_GAP,
-            }
-          : box,
-        fontFamily,
-        "#1e1e1e",
-      );
-      box.boundElements = [{ id: text.id, type: "text" }];
-      boxes.set(node.id, box);
-      elements.push(box, text);
-      if (size.art) {
-        const fileId = crypto
-          .createHash("sha256")
-          .update(size.art.dataURL)
-          .digest("hex")
-          .slice(0, 40);
-        files[fileId] = {
-          id: fileId,
-          mimeType: size.art.mime,
-          dataURL: size.art.dataURL,
-          created: Date.now(),
-          lastRetrieved: Date.now(),
-        };
-        elements.push(
-          element("image", {
-            fileId,
-            x: box.x + (box.width - ICON) / 2,
-            y: box.y + ICON_GAP,
-            width: ICON,
-            height: ICON,
-            status: "saved",
-            scale: [1, 1],
-            crop: null,
-            strokeColor: "transparent",
-            backgroundColor: "transparent",
-            roundness: null,
-          }),
-        );
-      }
-      along += (down ? size.width : size.height) + GAP_DOWN;
-    }
-    across += (down ? tallest : widest) + GAP_ACROSS;
+
+  const context = {
+    edges,
+    down,
+    sizes,
+    nodesByZone: new Map(),
+    zonesByParent: new Map(),
+  };
+  for (const node of nodes) {
+    const key = zoneOf.get(node.id) || null;
+    if (!context.nodesByZone.has(key)) context.nodesByZone.set(key, []);
+    context.nodesByZone.get(key).push(node);
+  }
+  for (const zone of zones.values()) {
+    const key = zone.parent || null;
+    if (!context.zonesByParent.has(key)) context.zonesByParent.set(key, []);
+    context.zonesByParent.get(key).push(zone);
   }
 
+  const layout = layoutGroup(null, context);
+  const boxes = new Map();
+  const elements = [];
+  const files = {};
+
+  // Boundaries are drawn first so every tile sits on top of the one holding it.
+  for (const rect of layout.rects) {
+    const level = LEVELS[rect.zone.level] || LEVELS[0];
+    const container = element("rectangle", {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      backgroundColor: level.fill,
+      fillStyle: "solid",
+      opacity: level.opacity,
+      strokeColor: level.stroke,
+      strokeWidth: level.strokeWidth,
+      strokeStyle: level.strokeStyle || "solid",
+      roughness: 0,
+      roundness: { type: 3 },
+    });
+    elements.push(
+      container,
+      plainText(
+        rect.zone.label,
+        rect.x + 16,
+        rect.y + 12,
+        fontFamily,
+        ZONE_LABEL_SIZE,
+        level.stroke,
+      ),
+    );
+  }
+
+  for (const node of nodes) {
+    const placed = layout.boxes.get(node.id);
+    const size = sizes.get(node.id);
+    const role = ROLES[String(node.role || "").toLowerCase()];
+    if (node.role && !role)
+      warnings.push(
+        `Node "${node.id}" asks for role "${
+          node.role
+        }", which is not one of: ${Object.keys(ROLES).join(
+          ", ",
+        )}. Drawn in the default colour.`,
+      );
+    if (role) rolesUsed.set(String(node.role).toLowerCase(), role);
+    const colors =
+      role || COLORS[String(node.color || "").toLowerCase()] || palette;
+    const shape = SHAPES.includes(node.shape) ? node.shape : "rectangle";
+    const fill = node.fill || colors.fill;
+    fills.add(fill);
+    const box = element(shape, {
+      x: placed.x,
+      y: placed.y,
+      width: placed.width,
+      height: placed.height,
+      strokeColor: node.stroke || colors.stroke,
+      backgroundColor: fill,
+      strokeWidth: 2,
+      roughness: sketchy ? 1 : 0,
+      roundness: shape === "rectangle" ? { type: 3 } : null,
+    });
+    boxes.set(node.id, box);
+    elements.push(box);
+    if (size.art) {
+      // The icon sits in from the left edge and the label beside it, the way a
+      // reference architecture names a product.
+      const fileId = crypto
+        .createHash("sha256")
+        .update(size.art.dataURL)
+        .digest("hex")
+        .slice(0, 40);
+      files[fileId] = {
+        id: fileId,
+        mimeType: size.art.mime,
+        dataURL: size.art.dataURL,
+        created: Date.now(),
+        lastRetrieved: Date.now(),
+      };
+      elements.push(
+        element("image", {
+          fileId,
+          x: box.x + ICON_GAP,
+          y: snap(box.y + (box.height - ICON) / 2),
+          width: ICON,
+          height: ICON,
+          status: "saved",
+          scale: [1, 1],
+          crop: null,
+          strokeColor: "transparent",
+          backgroundColor: "transparent",
+          roundness: null,
+        }),
+      );
+      const size_ = measure(size.text, FONT_SIZE);
+      elements.push(
+        plainText(
+          size.text,
+          box.x + ICON_GAP + ICON + 16,
+          box.y + (box.height - size_.height) / 2,
+          fontFamily,
+          FONT_SIZE,
+          "#1e1e1e",
+        ),
+      );
+    } else {
+      const text = label(size.text, box, fontFamily, "#1e1e1e");
+      box.boundElements = [{ id: text.id, type: "text" }];
+      elements.push(text);
+    }
+  }
+
+  // ── connections ────────────────────────────────────────────────────────────
+  const badges = [];
   for (const edge of edges) {
-    const from = boxes.get(edge.from),
-      to = boxes.get(edge.to);
-    const start = {
-      x: from.x + from.width / (down ? 2 : 1),
-      y: from.y + from.height / (down ? 1 : 2),
-    };
-    const end = {
-      x: to.x + (down ? to.width / 2 : 0),
-      y: to.y + (down ? 0 : to.height / 2),
-    };
+    const from = boxes.get(edge.from);
+    const to = boxes.get(edge.to);
+    const kind = EDGE_KINDS[String(edge.kind || "").toLowerCase()] || null;
+    if (edge.kind && !kind)
+      warnings.push(
+        `Edge ${edge.from} → ${edge.to} asks for kind "${
+          edge.kind
+        }", which is not one of: ${Object.keys(EDGE_KINDS).join(
+          ", ",
+        )}. Drawn as a plain arrow.`,
+      );
+    const path = route(from, to);
+    const stroke =
+      edge.color ||
+      (kind?.color ?? null) ||
+      (kind ? from.strokeColor : "#1e1e1e");
     const arrow = element("arrow", {
-      x: start.x,
-      y: start.y,
-      width: Math.abs(end.x - start.x),
-      height: Math.abs(end.y - start.y),
-      points: [
-        [0, 0],
-        [end.x - start.x, end.y - start.y],
-      ],
-      strokeColor: edge.color || "#1e1e1e",
+      x: path.start.x,
+      y: path.start.y,
+      width: Math.abs(path.end.x - path.start.x),
+      height: Math.abs(path.end.y - path.start.y),
+      points: path.points,
+      strokeColor: stroke,
+      strokeWidth: kind?.strokeWidth || 2,
       backgroundColor: "transparent",
-      strokeStyle: edge.style === "dashed" ? "dashed" : "solid",
+      strokeStyle:
+        edge.style === "dashed" ? "dashed" : kind?.strokeStyle || "solid",
       roughness: sketchy ? 1 : 0,
       roundness: { type: 2 },
-      startArrowhead: null,
+      startArrowhead: edge.kind === "bidirectional" ? "arrow" : null,
       endArrowhead: "arrow",
-      startBinding: { elementId: from.id, focus: 0, gap: 8 },
-      endBinding: { elementId: to.id, focus: 0, gap: 8 },
       elbowed: false,
+      // A straight run can stay bound to its boxes; a routed one cannot, because
+      // the editor would recompute it into a diagonal and undo the routing.
+      startBinding:
+        path.points.length === 2
+          ? { elementId: from.id, focus: 0, gap: 8 }
+          : null,
+      endBinding:
+        path.points.length === 2
+          ? { elementId: to.id, focus: 0, gap: 8 }
+          : null,
     });
-    from.boundElements = [
-      ...(from.boundElements || []),
-      { id: arrow.id, type: "arrow" },
-    ];
-    to.boundElements = [
-      ...(to.boundElements || []),
-      { id: arrow.id, type: "arrow" },
-    ];
+    if (path.points.length === 2) {
+      from.boundElements = [
+        ...(from.boundElements || []),
+        { id: arrow.id, type: "arrow" },
+      ];
+      to.boundElements = [
+        ...(to.boundElements || []),
+        { id: arrow.id, type: "arrow" },
+      ];
+    }
     elements.push(arrow);
     if (edge.label) {
       const text = label(
         wrap(edge.label, 18),
         {
           id: arrow.id,
-          x: Math.min(start.x, end.x),
-          y: Math.min(start.y, end.y),
-          width: Math.abs(end.x - start.x),
-          height: Math.abs(end.y - start.y),
+          x: Math.min(path.start.x, path.end.x),
+          y: Math.min(path.start.y, path.end.y),
+          width: Math.abs(path.end.x - path.start.x),
+          height: Math.abs(path.end.y - path.start.y),
         },
         fontFamily,
-        edge.color || "#1e1e1e",
+        stroke,
+        SMALL_SIZE,
       );
       arrow.boundElements = [{ id: text.id, type: "text" }];
       elements.push(text);
     }
+    if (edge.step !== undefined && edge.step !== null)
+      badges.push({ step: edge.step, at: path.start, heading: path.points[1] });
+  }
+
+  // Numbered steps, drawn clear of the line they belong to.
+  badges.sort((a, b) => Number(a.step) - Number(b.step));
+  for (const badge of badges) {
+    // Beside the line it belongs to and clear of the box it leaves, so a badge
+    // never sits on top of either.
+    const [headX, headY] = badge.heading || [0, 0];
+    const sideways = headX !== 0;
+    const x = sideways
+      ? headX > 0
+        ? badge.at.x + 12
+        : badge.at.x - BADGE - 12
+      : badge.at.x + 12;
+    const y = sideways
+      ? badge.at.y - BADGE - 12
+      : headY > 0
+      ? badge.at.y + 12
+      : badge.at.y - BADGE - 12;
+    const circle = element("ellipse", {
+      x: snap(x),
+      y: snap(y),
+      width: BADGE,
+      height: BADGE,
+      backgroundColor: "#1e1e1e",
+      fillStyle: "solid",
+      strokeColor: "#1e1e1e",
+      strokeWidth: 1,
+      roundness: null,
+    });
+    const text = label(
+      String(badge.step),
+      circle,
+      fontFamily,
+      "#ffffff",
+      FONT_SIZE,
+    );
+    circle.boundElements = [{ id: text.id, type: "text" }];
+    elements.push(circle, text);
+  }
+
+  if (fills.size > MAX_FILLS)
+    warnings.push(
+      `This drawing uses ${fills.size} fill colours. More than ${MAX_FILLS} and the colours stop meaning anything; give nodes a role instead.`,
+    );
+
+  // ── title, legend, brand ───────────────────────────────────────────────────
+  const frame = bounds([
+    ...layout.boxes.values(),
+    ...layout.rects.map((rect) => ({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    })),
+  ]);
+
+  const wantsLegend =
+    spec.legend === true || (spec.legend !== false && rolesUsed.size >= 5);
+  let legendBottom = frame.height;
+  if (wantsLegend && rolesUsed.size) {
+    const x = snap(Math.max(0, frame.width - LEGEND_WIDTH));
+    const y = snap(frame.height + ZONE_GAP);
+    const height = snap(60 + LEGEND_ROW * rolesUsed.size);
+    elements.push(
+      element("rectangle", {
+        x,
+        y,
+        width: LEGEND_WIDTH,
+        height,
+        backgroundColor: "#ffffff",
+        fillStyle: "solid",
+        strokeColor: "#757575",
+        strokeWidth: 1,
+        roundness: { type: 3 },
+      }),
+      element("rectangle", {
+        x,
+        y,
+        width: LEGEND_WIDTH,
+        height: 40,
+        backgroundColor: "#fff3bf",
+        fillStyle: "solid",
+        strokeColor: "#757575",
+        strokeWidth: 1,
+        roundness: { type: 3 },
+      }),
+      plainText(
+        "Key Components",
+        x + 16,
+        y + 12,
+        fontFamily,
+        ZONE_LABEL_SIZE,
+        "#1e1e1e",
+      ),
+    );
+    let row = y + 56;
+    for (const [key, role] of rolesUsed) {
+      elements.push(
+        element("rectangle", {
+          x: x + 16,
+          y: snap(row),
+          width: 20,
+          height: 20,
+          backgroundColor: role.fill,
+          fillStyle: "solid",
+          strokeColor: role.stroke,
+          strokeWidth: 1,
+          roughness: 0,
+          roundness: null,
+        }),
+        plainText(
+          `${role.name}  (${key})`,
+          x + 48,
+          row,
+          fontFamily,
+          SMALL_SIZE,
+          "#1e1e1e",
+        ),
+      );
+      row += LEGEND_ROW;
+    }
+    legendBottom = y + height;
   }
 
   if (spec.title) {
     const text = String(spec.title).slice(0, MAX_LABEL);
-    const size = measure(text, 28);
-    elements.unshift(
-      element("text", {
-        text,
-        originalText: text,
-        fontSize: 28,
-        fontFamily,
-        textAlign: "left",
-        verticalAlign: "top",
-        x: 0,
-        y: -(size.height + 60),
-        width: size.width,
-        height: size.height,
-        lineHeight: LINE_HEIGHT,
-        autoResize: true,
-        containerId: null,
-      }),
-    );
+    const size = measure(text, TITLE_SIZE);
+    const banner = element("rectangle", {
+      x: 0,
+      y: -(ZONE_GAP + 80),
+      width: snap(Math.max(400, size.width + 80)),
+      height: 80,
+      backgroundColor: "#ffc9c9",
+      fillStyle: "solid",
+      strokeColor: "#1e1e1e",
+      strokeWidth: 1,
+      roughness: 0,
+      roundness: { type: 3 },
+    });
+    const bannerText = label(text, banner, fontFamily, "#1e1e1e", TITLE_SIZE);
+    banner.boundElements = [{ id: bannerText.id, type: "text" }];
+    elements.unshift(banner, bannerText);
   }
+
+  if (style.brand)
+    elements.push(
+      plainText(
+        String(style.brand).slice(0, 60),
+        frame.width - 160,
+        legendBottom + 40,
+        fontFamily,
+        SMALL_SIZE,
+        "#757575",
+      ),
+    );
 
   return {
     type: "excalidraw",
@@ -383,8 +911,33 @@ export function buildDiagram(spec, icons = new Map()) {
 export const styleGuide = () => ({
   fonts: Object.keys(FONTS),
   colors: Object.keys(COLORS),
+  roles: Object.fromEntries(
+    Object.entries(ROLES).map(([key, role]) => [key, role.name]),
+  ),
   shapes: SHAPES,
   layouts: ["right", "down"],
   edge_styles: ["solid", "dashed"],
-  limits: { nodes: MAX_NODES, label_characters: MAX_LABEL },
+  edge_kinds: Object.keys(EDGE_KINDS),
+  boundaries: {
+    levels: LEVELS.length,
+    note: "Nest boundaries with `zones`. Level 1 is the outermost (a cloud or platform), level 4 the innermost (a pod or process).",
+  },
+  grid: {
+    unit: GRID,
+    tile: `${MIN_WIDTH} x ${MIN_HEIGHT}`,
+    note: "The server places everything on this grid; you do not send coordinates.",
+  },
+  how_to_make_it_read_well: [
+    "Give every node a role rather than a colour. One role looks the same everywhere.",
+    "Use zones for anything with an inside and an outside: a cloud, an account, a cluster, a node.",
+    "Number the steps of a request with `step` on the edges, starting at 1.",
+    "Say what a connection is with `kind`: sync, async, primary or bidirectional.",
+    "Name an icon from this workspace's library on the nodes that are products.",
+    "Keep to six fill colours; past that the colours stop meaning anything.",
+  ],
+  limits: {
+    nodes: MAX_NODES,
+    label_characters: MAX_LABEL,
+    fill_colours: MAX_FILLS,
+  },
 });

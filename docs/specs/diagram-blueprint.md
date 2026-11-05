@@ -18,6 +18,7 @@ A richer drawing spec, and an engine that honours it:
 - **A legend**, drawn when the diagram uses five or more roles or when it is asked for, listing each role once.
 - **A title banner** and an optional brand mark in the corner.
 - **Icons on the left of a tile**, not above the label, so a tile reads as a product the way a reference architecture does.
+- **A prompt, `diagram_rules`**, carrying the house rules an assistant should follow, including how to turn a picture somebody sends it into a description this server can draw. A tool description has to be short; this does not.
 - **Warnings.** Every create or redraw answers with what the engine had to correct or could not do — an unknown icon, a seventh colour, a label that had to wrap — in words the assistant can act on.
 
 ## What this does not do

@@ -2172,10 +2172,17 @@ test("private workspace backend", async (t) => {
       const saved = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
         .body.scene;
       const kinds = saved.elements.map((e) => e.type);
-      assert.equal(kinds.filter((k) => k === "rectangle").length, 3);
       assert.equal(kinds.filter((k) => k === "arrow").length, 2);
       assert.ok(kinds.filter((k) => k === "text").length >= 5);
-      const boxes = saved.elements.filter((e) => e.type === "rectangle");
+      // A title is drawn as a banner, so the node boxes are the rest.
+      const banner = saved.elements.find(
+        (e) => e.type === "rectangle" && e.backgroundColor === "#ffc9c9",
+      );
+      assert.ok(banner, "the title is drawn as a banner");
+      const boxes = saved.elements.filter(
+        (e) => e.type === "rectangle" && e !== banner,
+      );
+      assert.equal(boxes.length, 3);
       assert.ok(
         boxes.every((box) => box.width > 0 && box.height > 0),
         "every shape has a size",
@@ -2320,10 +2327,16 @@ test("private workspace backend", async (t) => {
         scene.files[image.fileId]?.dataURL.startsWith("data:image/svg+xml"),
         "the icon travels with the drawing",
       );
+      // The icon sits in from the left edge with the label beside it, the way a
+      // reference architecture names a product.
       const box = scene.elements.find(
-        (e) => e.type === "rectangle" && e.x === image.x - (e.width - 52) / 2,
+        (e) => e.type === "rectangle" && image.x === e.x + 20,
       );
       assert.ok(box, "the icon sits inside its box");
+      assert.ok(
+        image.y > box.y && image.y + image.height < box.y + box.height,
+        "and is held inside it top to bottom",
+      );
       // an unknown icon leaves the drawing intact rather than failing
       const plain = await rpc(
         "create_drawing",

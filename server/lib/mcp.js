@@ -53,11 +53,23 @@ const summarize = (scene, payload) => {
 const nodeSchema = z.object({
   id: z.string().describe("Short name used by edges, e.g. api"),
   label: z.string().optional().describe("Words shown inside the shape"),
+  role: z
+    .string()
+    .optional()
+    .describe(
+      "What this is, which decides its colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. Prefer this over picking a colour.",
+    ),
+  zone: z
+    .string()
+    .optional()
+    .describe("Id of the boundary this sits inside, from zones"),
   shape: z.enum(["rectangle", "ellipse", "diamond"]).optional(),
   color: z
     .string()
     .optional()
-    .describe("blue, green, red, orange, violet, teal, pink, grey, black"),
+    .describe(
+      "Only when no role fits: blue, green, red, orange, violet, teal, pink, grey, black",
+    ),
   fill: z.string().optional().describe("Exact background colour, e.g. #a5d8ff"),
   stroke: z.string().optional().describe("Exact outline colour, e.g. #1971c2"),
   icon: z
@@ -69,8 +81,41 @@ const edgeSchema = z.object({
   from: z.string(),
   to: z.string(),
   label: z.string().optional().describe("Words shown on the arrow"),
+  kind: z
+    .enum(["sync", "async", "primary", "bidirectional"])
+    .optional()
+    .describe(
+      "What the connection is: a request (sync), a watch or background flow (async), the main data path (primary), or both ways (bidirectional)",
+    ),
+  step: z
+    .number()
+    .int()
+    .min(1)
+    .max(99)
+    .optional()
+    .describe("Step number in a request flow; drawn as a badge on the arrow"),
   style: z.enum(["solid", "dashed"]).optional(),
   color: z.string().optional(),
+});
+const zoneSchema = z.object({
+  id: z.string().describe("Short name used by nodes and by nested boundaries"),
+  label: z.string().optional().describe("Words shown at the boundary's corner"),
+  parent: z.string().optional().describe("Id of the boundary this sits inside"),
+  level: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .optional()
+    .describe(
+      "1 is the outermost (a cloud or platform), 4 the innermost (a pod or process). Left out, it follows the nesting.",
+    ),
+  nodes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Node ids inside this boundary; a node's own zone field does the same",
+    ),
 });
 const specSchema = {
   title: z.string().optional().describe("Heading drawn above the diagram"),
@@ -81,10 +126,26 @@ const specSchema = {
       color: z.string().optional().describe("Default colour for shapes"),
       background: z.string().optional().describe("Canvas colour, e.g. #ffffff"),
       sketchy: z.boolean().optional().describe("Hand-drawn look"),
+      brand: z
+        .string()
+        .optional()
+        .describe("Small mark in the corner, e.g. a site or author name"),
     })
     .optional(),
   nodes: z.array(nodeSchema).describe("The boxes"),
   edges: z.array(edgeSchema).optional().describe("Arrows between boxes"),
+  zones: z
+    .array(zoneSchema)
+    .optional()
+    .describe(
+      "Boundaries that hold nodes and other boundaries: a cloud, an account, a cluster, a node",
+    ),
+  legend: z
+    .boolean()
+    .optional()
+    .describe(
+      "Draw a key of the roles used. Left out, one appears when five or more roles are in the drawing.",
+    ),
 };
 
 export function installMcp(
@@ -125,18 +186,28 @@ export function installMcp(
 
   // Icons named by the model are looked up (and fetched once, if the workspace
   // allows it) before the diagram is built.
-  const artwork = async (workspace, spec) => {
+  const artwork = async (workspace, spec, warnings = []) => {
     const found = new Map();
+    const missing = new Set();
     if (!icons) return found;
     for (const node of spec?.nodes || []) {
-      if (!node?.icon || found.has(node.icon)) continue;
+      if (!node?.icon || found.has(node.icon) || missing.has(node.icon))
+        continue;
       try {
         const art = await icons.iconData(workspace, node.icon);
         if (art) found.set(node.icon, art);
+        else missing.add(node.icon);
       } catch {
         // a missing icon never fails the drawing; the box is simply drawn plain
+        missing.add(node.icon);
       }
     }
+    // An icon that was asked for and not found is the kind of thing an assistant
+    // can fix on its next call, but only if it is told.
+    for (const name of missing)
+      warnings.push(
+        `No icon named "${name}" in this workspace. The box was drawn without one; list_icons shows what is there.`,
+      );
     return found;
   };
 
@@ -328,7 +399,7 @@ export function installMcp(
       {
         title: "Drawing options",
         description:
-          "The fonts, colours, shapes and layouts this workspace can draw with. Read this before creating a drawing.",
+          "The roles, boundary levels, fonts, shapes, layouts and limits this workspace draws with, and the rules that make a diagram read well. Read this before creating a drawing.",
         inputSchema: {},
       },
       async () => {
@@ -339,13 +410,50 @@ export function installMcp(
         };
       },
     );
+    // The house rules, where an assistant can pick them up without being told.
+    // A tool description has to be short; this does not.
+    server.registerPrompt(
+      "diagram_rules",
+      {
+        title: "How to draw here",
+        description:
+          "The rules this workspace draws by, including how to turn a picture somebody sends you into a drawing.",
+      },
+      () => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: [
+                "Before drawing in this workspace, work out the structure, then describe it.",
+                "",
+                "1. Name the one thing the drawing explains. That is the title.",
+                "2. Write the boundaries outermost first, for example: cloud > account > cluster > node. Send them as zones, and put each node in the zone that holds it.",
+                "3. Give every node a role rather than a colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. One role always looks the same, which is what lets a reader learn the drawing in two seconds.",
+                "4. Say what each connection is with kind: sync for a request, async for a watch or a background flow, primary for the main data path, bidirectional for both ways.",
+                "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
+                "6. Put an icon from this workspace's library on the nodes that are named products. list_icons shows what is there.",
+                "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know.",
+                "",
+                "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
+                "",
+                "When somebody gives you a picture and asks for one like it: read the picture and write down what it contains, then send that as the description. List the boundaries you can see, what sits inside each one, which way the arrows point, and what the numbers on them say. Name the roles from what each box is, not from the colour it happens to have in the picture. The result will be a clean redrawing of the same structure, not a copy of the image.",
+                "",
+                "Every create_drawing and update_drawing answers with any warnings. Read them: they say what could not be done, such as an icon this workspace does not have. Fix the description and call update_drawing on the same drawing rather than making a second one.",
+              ].join("\n"),
+            },
+          },
+        ],
+      }),
+    );
     if (context.scope === "write") {
       server.registerTool(
         "create_drawing",
         {
           title: "Create a drawing",
           description:
-            "Draw a new diagram from a description. Say which boxes exist and what connects to what; positions are worked out here.",
+            "Draw a new diagram. Say which boxes exist, what connects to what, which boundary each box sits in, and what each box is (its role); every position, colour and arrow route is worked out here, on a grid. Read drawing_style_guide first for the roles and boundary levels.",
           inputSchema: {
             name: z.string().describe("Name of the drawing"),
             collection: z
@@ -357,7 +465,12 @@ export function installMcp(
         },
         async ({ name, collection, ...spec }) => {
           const workspace = await workspaceFor(context);
-          const payload = buildDiagram(spec, await artwork(workspace, spec));
+          const warnings = [];
+          const payload = buildDiagram(
+            spec,
+            await artwork(workspace, spec, warnings),
+            warnings,
+          );
           const scene = await transaction(db, (tx) =>
             drawings.create(
               {
@@ -378,12 +491,16 @@ export function installMcp(
             name: scene.name,
             url: editorUrl(scene.id),
             elements: payload.elements.length,
+            warnings,
           };
           return {
             content: [
               {
                 type: "text",
-                text: `Drew "${scene.name}" with ${result.elements} elements: ${result.url}`,
+                text: [
+                  `Drew "${scene.name}" with ${result.elements} elements: ${result.url}`,
+                  ...warnings.map((warning) => `- ${warning}`),
+                ].join("\n"),
               },
             ],
             structuredContent: result,
@@ -395,14 +512,16 @@ export function installMcp(
         {
           title: "Redraw a drawing",
           description:
-            "Replace the contents of an existing drawing with a new diagram. The old version stays in its history.",
+            "Replace the contents of an existing drawing with a new diagram, using the same description as create_drawing. The old version stays in its history, so this is how you correct a drawing after looking at it.",
           inputSchema: { id: z.string().describe("Drawing id"), ...specSchema },
         },
         async ({ id, ...spec }) => {
           const scene = await sceneRow(context, id);
+          const warnings = [];
           const payload = buildDiagram(
             spec,
-            await artwork(scene.workspace_id, spec),
+            await artwork(scene.workspace_id, spec, warnings),
+            warnings,
           );
           const saved = await drawings.saveScene(
             context.user,
@@ -414,12 +533,16 @@ export function installMcp(
             version: saved.version,
             url: editorUrl(scene.id),
             elements: payload.elements.length,
+            warnings,
           };
           return {
             content: [
               {
                 type: "text",
-                text: `Redrew "${scene.name}" (version ${saved.version}): ${result.url}`,
+                text: [
+                  `Redrew "${scene.name}" (version ${saved.version}): ${result.url}`,
+                  ...warnings.map((warning) => `- ${warning}`),
+                ].join("\n"),
               },
             ],
             structuredContent: result,
