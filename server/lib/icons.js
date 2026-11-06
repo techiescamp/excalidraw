@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import { fail, uuid, audit } from "./core.js";
+import { cutIcon } from "./cutout.js";
 
 // Icons live in the workspace's own library. Anything fetched from the internet
 // is stored here on first use, so drawings never depend on a site staying up and
 // the same icon is never downloaded twice.
-const SOURCE = "https://api.iconify.design";
+// One host, fixed. The override exists so a test can point at a stub instead
+// of the real site; nothing a request carries can change where this points.
+const SOURCE = process.env.ICON_SOURCE_URL || "https://api.iconify.design";
 const MAX_BYTES = 256 * 1024;
 const MAX_WORKSPACE_ICON_BYTES = 5 * 1024 * 1024;
 // Icon bytes live in PostgreSQL, which is the expensive storage and the one
@@ -30,7 +33,215 @@ const WORKSPACE_ICON_MIMES = new Set([
   "image/jfif",
 ]);
 const REF = /^[a-z0-9][a-z0-9_-]{0,59}\/[a-z0-9][a-z0-9._-]{0,79}$/i;
+
+// How wide an icon is for its height. A drawing that stretches a logo to fill
+// whatever box it was given is the first thing anyone notices, so the shape the
+// icon was drawn at travels with it and the drawing fits inside the box
+// instead of filling it.
+export function aspectOf(body, mime) {
+  try {
+    if (mime === "image/svg+xml") {
+      const head = body.toString("utf8").slice(0, 2000);
+      const box = head.match(
+        /viewBox\s*=\s*["']\s*[-\d.]+[,\s]+[-\d.]+[,\s]+([\d.]+)[,\s]+([\d.]+)/i,
+      );
+      if (box) {
+        const [, w, h] = box.map(Number);
+        if (w > 0 && h > 0) return w / h;
+      }
+      const width = head.match(/\swidth\s*=\s*["']([\d.]+)/i);
+      const height = head.match(/\sheight\s*=\s*["']([\d.]+)/i);
+      if (width && height && Number(height[1]) > 0)
+        return Number(width[1]) / Number(height[1]);
+      return null;
+    }
+    // A PNG says its size in the IHDR chunk, which is always the first one.
+    if (mime === "image/png" && body.length > 24) {
+      const w = body.readUInt32BE(16);
+      const h = body.readUInt32BE(20);
+      if (w > 0 && h > 0) return w / h;
+    }
+  } catch {
+    // an icon whose header cannot be read is simply drawn in its box
+  }
+  return null;
+}
 const TIMEOUT_MS = 8000;
+// Sets that draw a product the way the product draws itself. When the source
+// offers the same picture from several sets, one of these is taken first, so a
+// diagram gets the real logo rather than a monochrome outline of it.
+const PREFERRED_SETS = [
+  "logos",
+  "devicon",
+  "skill-icons",
+  "vscode-icons",
+  "simple-icons",
+];
+// Icons the library did not have and this server went and found are filed
+// together, so whoever looks after the library can see what arrived on its own.
+const FETCHED_CATEGORY = "Found online";
+
+// Matching an icon by meaning rather than by name. An assistant describing a
+// diagram knows it wants "a database" or "the queue"; it does not know that this
+// library calls that picture logos/postgresql. Asking it to list every icon and
+// guess is how boxes end up with no icon at all, so the words it used are
+// matched against every name, label and category in the library, and words that
+// mean the same thing are treated as the same word.
+//
+// Each group is one idea. A word from a group matches any other word in it, at
+// a lower score than a direct hit, so "database" finds postgresql but an icon
+// actually called "database" still wins.
+const MEANINGS = [
+  ["database", "db", "postgres", "postgresql", "mysql", "mariadb", "sqlite", "oracle", "mssql", "rds", "sql"],
+  ["nosql", "mongodb", "mongo", "dynamodb", "cassandra", "couchdb", "firestore"],
+  ["cache", "caching", "redis", "memcached", "varnish", "valkey"],
+  ["queue", "messaging", "broker", "kafka", "rabbitmq", "sqs", "nats", "pubsub", "activemq", "events"],
+  ["kubernetes", "k8s", "eks", "gke", "aks", "openshift", "rancher", "cluster"],
+  ["container", "containers", "docker", "podman", "containerd", "image", "registry"],
+  ["gateway", "ingress", "loadbalancer", "balancer", "lb", "nginx", "haproxy", "traefik", "envoy", "elb", "alb", "apigateway", "kong"],
+  ["cdn", "edge", "cloudflare", "fastly", "akamai", "cloudfront"],
+  ["storage", "object", "bucket", "blob", "s3", "minio", "spaces", "disk", "volume", "efs", "nfs"],
+  ["cicd", "ci", "cd", "pipeline", "build", "jenkins", "argocd", "argo", "gitlab", "circleci", "travis", "tekton", "spinnaker", "actions"],
+  ["git", "repo", "repository", "source", "github", "bitbucket", "gitea"],
+  ["monitoring", "metrics", "observability", "prometheus", "grafana", "datadog", "newrelic", "thanos", "cloudwatch"],
+  ["logs", "logging", "elasticsearch", "opensearch", "loki", "kibana", "splunk", "fluentd", "fluentbit"],
+  ["tracing", "trace", "jaeger", "zipkin", "opentelemetry", "otel"],
+  ["alerting", "alert", "pagerduty", "opsgenie", "alertmanager", "bell", "notification"],
+  ["auth", "authentication", "identity", "sso", "oauth", "oidc", "keycloak", "auth0", "okta", "ldap", "iam", "login"],
+  ["secrets", "secret", "vault", "credentials", "key", "lock", "certificate", "tls", "ssl"],
+  ["security", "firewall", "waf", "shield", "guard", "protection"],
+  ["cloud", "aws", "amazon", "gcp", "google", "azure", "digitalocean", "oracle", "linode", "hetzner"],
+  ["dns", "domain", "route53", "coredns", "bind", "nameserver"],
+  ["server", "vm", "instance", "ec2", "droplet", "host", "machine", "compute", "node"],
+  ["serverless", "lambda", "function", "functions", "cloudrun", "fargate"],
+  ["user", "users", "person", "people", "client", "customer", "browser", "chrome", "firefox", "laptop", "desktop", "visitor", "developer"],
+  ["mobile", "phone", "android", "ios", "apple", "app"],
+  ["api", "rest", "graphql", "grpc", "endpoint", "service", "backend", "openapi", "swagger"],
+  ["frontend", "web", "website", "ui", "react", "vue", "angular", "svelte", "nextjs"],
+  ["mail", "email", "smtp", "ses", "sendgrid", "mailgun", "postfix"],
+  ["chat", "slack", "discord", "teams", "telegram", "whatsapp"],
+  ["terraform", "infrastructure", "iac", "ansible", "pulumi", "cloudformation", "puppet", "chef", "helm"],
+  ["linux", "ubuntu", "debian", "centos", "rhel", "redhat", "alpine", "fedora", "suse"],
+  ["language", "node", "nodejs", "python", "java", "golang", "go", "rust", "ruby", "php", "dotnet", "typescript", "javascript"],
+  ["ai", "llm", "model", "claude", "anthropic", "openai", "gpt", "gemini", "ollama"],
+  ["payment", "billing", "stripe", "paypal", "invoice", "card"],
+  ["analytics", "report", "dashboard", "chart", "bigquery", "snowflake", "warehouse", "etl", "airflow", "spark"],
+  ["mesh", "istio", "linkerd", "consul", "sidecar", "proxy"],
+  ["test", "testing", "qa", "jest", "cypress", "playwright", "selenium"],
+];
+const MEANING_OF = (() => {
+  const index = new Map();
+  MEANINGS.forEach((group, id) => {
+    for (const word of group) {
+      const groups = index.get(word) || [];
+      groups.push(id);
+      index.set(word, groups);
+    }
+  });
+  return index;
+})();
+const words = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+// "k8s" and "s3" carry meaning; one-letter fragments do not.
+const meaningful = (list) => list.filter((word) => word.length > 1);
+
+// How well one icon answers the words asked for, and how much else its own name
+// says besides. Strength is the match; the penalty only separates two icons that
+// match equally, so it is kept apart rather than folded in.
+function weigh(query, icon) {
+  const none = { strength: 0, penalty: 0, direct: 0 };
+  const asked = meaningful(words(query));
+  if (!asked.length) return none;
+  const ref = `${icon.set_name}/${icon.name}`.toLowerCase();
+  if (query.trim().toLowerCase().replace(":", "/") === ref)
+    return { strength: 100, penalty: 0, direct: asked.length };
+  const name = words(icon.name);
+  const shown = words(icon.display_name);
+  const own = new Set([...name, ...shown]);
+  const near = new Set();
+  for (const word of own)
+    for (const group of MEANING_OF.get(word) || [])
+      for (const sibling of MEANINGS[group]) near.add(sibling);
+  const set = words(icon.set_name);
+  const category = words(icon.category);
+  let strength = 0;
+  // How many of the asked words are in the icon's own name or label, rather
+  // than reached through a word that means something similar. An icon actually
+  // called what was asked for is a different kind of answer from one that only
+  // belongs to the same idea, and callers need to tell them apart.
+  let direct = 0;
+  for (const word of asked) {
+    if (own.has(word)) {
+      strength += 300;
+      direct += 1;
+    }
+    else if (near.has(word)) strength += 120;
+    else if ([...own].some((had) => had.includes(word) || word.includes(had)))
+      strength += 90;
+    // A set or category is matched loosely on purpose: a library files things
+    // under "Databases" and nobody asks for a "databases".
+    else if (set.some((had) => had.includes(word) || word.includes(had)))
+      strength += 40;
+    else if (category.some((had) => had.includes(word) || word.includes(had)))
+      strength += 30;
+  }
+  if (!strength) return none;
+  // Of two icons that answer equally well, the one whose own name says less
+  // besides is the closer match: "redis" over "redis-cluster-failover".
+  return {
+    strength,
+    direct,
+    penalty: Math.min(99, own.size * 2 + ref.length),
+  };
+}
+
+// One number for how well an icon answers the words. Higher is better; 0 means
+// the words have nothing to do with this icon and it must not be offered.
+export function scoreIcon(query, icon) {
+  const { strength, penalty } = weigh(query, icon);
+  return strength ? strength * 100 - penalty : 0;
+}
+
+// Below this, the words and the icon have nothing in common but a set or a
+// category. Scores are built in hundreds, so this is one loose word hit.
+export const MIN_MATCH = 9000;
+
+// Icons that answer the words, best first. Rows are whatever the library holds.
+// A hint is the words around the request — the label on the box the icon is
+// going into. It never makes a match; it only settles which of two equally good
+// matches to use, so a box labelled Prometheus asking for "metrics" does not
+// come back with Grafana.
+export function rankIcons(query, rows, limit = 8, hint = "") {
+  return rows
+    .map((icon) => ({ icon, ...weigh(query, icon) }))
+    .filter((candidate) => candidate.strength > 0)
+    .map((candidate) => ({
+      ...candidate,
+      hint: hint ? weigh(hint, candidate.icon).strength : 0,
+    }))
+    // Match first, then what the surrounding words prefer, and only then the
+    // shorter name: a hint must be able to settle a tie the name length would
+    // otherwise decide.
+    .sort(
+      (a, b) =>
+        b.strength - a.strength || b.hint - a.hint || a.penalty - b.penalty,
+    )
+    .slice(0, limit)
+    .map((hit) => ({
+      ref: `${hit.icon.set_name}/${hit.icon.name}`,
+      // How much of what was asked for this icon is actually named after,
+      // out of how many words were asked. A caller deciding between this and
+      // somewhere else needs the fraction, not just that something matched.
+      covers: hit.direct,
+      of: Math.max(1, meaningful(words(query)).length),
+      name: hit.icon.display_name || hit.icon.name,
+      category: hit.icon.category,
+      score: hit.strength * 100 - hit.penalty,
+    }));
+}
 // The icon source names things "set:name"; this library uses "set/name".
 const normal = (value) =>
   String(value || "")
@@ -218,6 +429,22 @@ export function installIcons(
     // The image is named by what it contains, so the same logo added again —
     // under any name, by anyone — lands on the row that is already there.
     const digest = crypto.createHash("sha256").update(body).digest("hex");
+    // That held for the bytes, not for the library. Entries were kept apart by
+    // name, so the same picture added twice under two names was two tiles, and
+    // the library showed one image over and over — the thing a library exists
+    // to stop. What an icon *is* decides: identical bytes are the same icon,
+    // and the entry already there is returned instead of a second one made.
+    // Anything genuinely different — a colour changed, a line moved — hashes
+    // differently and is a new icon, which is the distinction worth keeping.
+    const already = await db.query(
+      `SELECT id,set_name,name,mime,s3_key,digest,category,display_name
+         FROM icons
+        WHERE digest=$1 AND (workspace_id=$2 OR shared)
+        ORDER BY (workspace_id=$2) DESC, created_at ASC
+        LIMIT 1`,
+      [digest, workspace],
+    );
+    if (already.rows[0]) return { ...already.rows[0], existing: true };
     await db.query(
       `INSERT INTO icon_blobs(digest,bytes,mime) VALUES($1,$2,$3)
        ON CONFLICT (digest) DO NOTHING`,
@@ -282,8 +509,131 @@ export function installIcons(
     return {
       ref: `${icon.set_name}/${icon.name}`,
       mime: icon.mime,
+      aspect: aspectOf(body, icon.mime),
       dataURL: `data:${icon.mime};base64,${body.toString("base64")}`,
     };
+  };
+
+  // The library this workspace can draw with, for matching by meaning.
+  const libraryFor = async (workspace) => {
+    const { rows } = await db.query(
+      `SELECT DISTINCT ON (COALESCE(digest, set_name||'/'||name))
+              set_name,name,display_name,category
+         FROM icons WHERE workspace_id=$1 OR shared
+        ORDER BY COALESCE(digest, set_name||'/'||name),
+                 (workspace_id=$1) DESC, created_at ASC`,
+      [workspace],
+    );
+    return rows;
+  };
+
+  // Plain words in, icons out, best first. Used by the drawing tools so a
+  // description can ask for "the queue" and still get a picture of Kafka.
+  const matchIcons = async (workspace, query, limit = 8, hint = "") =>
+    rankIcons(String(query || ""), await libraryFor(workspace), limit, hint);
+
+  // Ask the icon source what it has for these words. Only the one host is ever
+  // contacted, and only for a list of names; nothing is downloaded here.
+  const searchSource = async (query) => {
+    const response = await fetch(
+      `${SOURCE}/search?query=${encodeURIComponent(query)}&limit=48`,
+      { signal: AbortSignal.timeout(TIMEOUT_MS) },
+    );
+    if (!response.ok) return [];
+    const body = await response.json();
+    return (Array.isArray(body.icons) ? body.icons : [])
+      .map((entry) => normal(entry))
+      .filter((ref) => REF.test(ref));
+  };
+
+  // The library did not have it, so go and find it. The same scoring decides
+  // what the source offered, which is what stops a search for words that mean
+  // nothing from dragging an unrelated picture into the drawing. What arrives
+  // is saved in the library, so the next drawing needs no network at all.
+  const fetchFromSource = async (workspace, wanted, hint, better_than = 0) => {
+    if (!(await settings()).fetch_enabled) return null;
+    const refs = await searchSource(wanted);
+    if (!refs.length) return null;
+    const preferred = refs.filter((ref) =>
+      PREFERRED_SETS.includes(ref.split("/")[0]),
+    );
+    const rows = (preferred.length ? preferred : refs).map((ref) => ({
+      set_name: ref.split("/")[0],
+      name: ref.split("/")[1],
+      display_name: null,
+      // The set a source files an icon under says nothing about what the icon
+      // is, so it is not allowed to count towards the match.
+      category: "",
+    }));
+    // The source is asked for words, so it answers with whatever shares one.
+    // Only an icon that is actually named what was asked for is worth
+    // downloading, and only if it is named after more of it than whatever the
+    // library was ready to offer; anything looser is a guess made on someone
+    // else's index.
+    const [best] = rankIcons(String(wanted), rows, 1, hint);
+    if (!best || best.covers / best.of <= better_than) return null;
+    const [set, name] = best.ref.split("/");
+    const body = await download(set, name);
+    const saved = await store(
+      workspace,
+      set,
+      name,
+      body,
+      "image/svg+xml",
+      { source: `${SOURCE}/${set}/${name}.svg`, license: "see source" },
+      null,
+      FETCHED_CATEGORY,
+    );
+    return iconData(workspace, `${saved.set_name}/${saved.name}`);
+  };
+
+  // One icon ready to embed, found by exact name or, failing that, by meaning.
+  // The reference actually used is reported back, because a diagram that
+  // quietly swapped one picture for another is worse than one that says so.
+  const findIcon = async (workspace, wanted, hint = "") => {
+    const asked = String(wanted || "").trim();
+    if (!asked) return null;
+    let words = asked;
+    if (REF.test(normal(asked))) {
+      const exact = await iconData(workspace, asked);
+      if (exact) return { ...exact, matched: false };
+      // An exact name that is not here: only the name part says what was
+      // wanted. The set it named is no reason to reach for a different picture
+      // out of the same set.
+      words = normal(asked).split("/")[1].replace(/[._-]+/g, " ");
+    }
+    const [best] = await matchIcons(workspace, words, 1, hint);
+    // A weak match is worse than no icon. Standing in for what was asked for
+    // takes a real hit on the icon's own name or on a word that means the same;
+    // sharing a set or a category is not enough.
+    const usable = best && best.score >= MIN_MATCH ? best : null;
+    // How much of what was asked for this library icon is actually named
+    // after. All of it, and the search is over: an icon called what was asked
+    // for is the answer. Short of that it is a stand-in, and a stand-in must
+    // not beat the real logo sitting at the source — that is how a box
+    // labelled Terraform ends up wearing Ansible's badge, because the two
+    // mean the same thing, and how every AWS box ends up with Route 53's,
+    // because they all begin with the word "aws".
+    const covered = usable ? usable.covers / usable.of : 0;
+    if (covered >= 1) {
+      const art = await iconData(workspace, usable.ref);
+      if (art) return { ...art, matched: true, asked };
+    }
+    // What is here is a stand-in at best, so look outside for something named
+    // after more of what was asked. A drawing is better with the real logo
+    // than with an empty box, and the source failing is not a reason for the
+    // drawing to fail: the box is simply drawn plain.
+    try {
+      const found = await fetchFromSource(workspace, words, hint, covered);
+      if (found) return { ...found, matched: true, fetched: true, asked };
+    } catch {
+      // fall through to whatever the library could offer
+    }
+    if (usable) {
+      const art = await iconData(workspace, usable.ref);
+      if (art) return { ...art, matched: true, asked };
+    }
+    return null;
   };
 
   app.get("/api/workspaces/:workspace/icons", auth, async (req, res) => {
@@ -296,14 +646,20 @@ export function installIcons(
       .slice(0, 40);
     const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
     const [{ rows }, categories] = await Promise.all([
+      // One tile per picture. Duplicates that predate the rule are collapsed
+      // here as well, so a library that already holds the same image twice
+      // stops showing it twice. Rows from before the shared store have no
+      // digest and fall back to their name, which is how they were told apart
+      // before.
       db.query(
-        `SELECT DISTINCT ON (set_name,name)
+        `SELECT * FROM (
+         SELECT DISTINCT ON (COALESCE(digest, set_name||'/'||name))
          set_name,name,mime,source,license,created_at,category,display_name
        FROM icons WHERE (workspace_id=$1 OR shared)
        AND ($2::text='' OR set_name ILIKE '%'||$2||'%' OR name ILIKE '%'||$2||'%' OR display_name ILIKE '%'||$2||'%')
        AND ($3::text='' OR category=$3)
-       ORDER BY set_name,name,(workspace_id=$1) DESC,created_at ASC
-       LIMIT $4`,
+       ORDER BY COALESCE(digest, set_name||'/'||name),(workspace_id=$1) DESC,created_at ASC
+       ) one_per_picture ORDER BY set_name,name LIMIT $4`,
         [req.params.workspace, query, category, limit],
       ),
       db.query(
@@ -336,7 +692,11 @@ export function installIcons(
       displayName,
     );
     await audit(db, req.user.id, "icons.add_from_canvas", workspace);
-    res.status(201).json({ icon });
+    // 200 rather than 201 when nothing was created: the caller asked for this
+    // picture to be in the library and it is, but it is not a new icon and
+    // should not be reported as one.
+    const existing = Boolean(icon.existing);
+    res.status(existing ? 200 : 201).json({ icon, existing });
   });
 
   app.delete(
@@ -520,5 +880,74 @@ export function installIcons(
     res.json({ imported: imported.length, failed, icons: imported });
   });
 
-  return { iconData, settings, REF };
+  // Take an icon out of a picture and keep it. The editor gives a person a
+  // mouse and a background-remove button; this is the same for an assistant
+  // copying a reference, so the icons in a drawing come from the picture it is
+  // copying rather than from somewhere else entirely.
+  const iconFromPicture = async (
+    workspace,
+    {
+      file,
+      crop,
+      name,
+      category,
+      tolerance,
+      background,
+      drop_edges,
+      keep,
+      force,
+      actor,
+    },
+  ) => {
+    const display = displayNameValue(name);
+    if (!display) fail(400, "Give the icon a name.");
+    // The library first, always. A logo somebody drew and uploaded is better
+    // than one cut out of a screenshot of it, so cutting is the last resort
+    // and not the first move. Saying force skips this on purpose.
+    if (!force) {
+      const [already] = await matchIcons(workspace, display, 1);
+      if (already && already.score >= MIN_MATCH)
+        return {
+          ref: already.ref,
+          existing: true,
+          reused: true,
+          width: 0,
+          height: 0,
+          background: "",
+          removed: 0,
+          kept: 0,
+          leftover: 0,
+        };
+    }
+    const cut = cutIcon(file, crop, {
+      tolerance,
+      background,
+      drop_edges,
+      keep,
+    });
+    const icon = await store(
+      workspace,
+      "uploads",
+      safeIconName(display),
+      cut.png,
+      "image/png",
+      { source: "cut from a picture", license: null },
+      actor || null,
+      categoryValue(category),
+      display,
+    );
+    return {
+      ref: `${icon.set_name}/${icon.name}`,
+      existing: Boolean(icon.existing),
+      reused: false,
+      width: cut.width,
+      height: cut.height,
+      background: cut.background,
+      removed: cut.removed,
+      kept: cut.kept,
+      leftover: cut.leftover,
+    };
+  };
+
+  return { iconData, findIcon, matchIcons, iconFromPicture, settings, REF };
 }

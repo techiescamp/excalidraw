@@ -256,6 +256,9 @@ const storage = {
         // and a truncated transfer looks like a complete one.
         if (Number.isFinite(obj.ContentLength))
           res.set("Content-Length", String(obj.ContentLength));
+        // The catch below only covers the request; a body that fails midway
+        // arrives as an 'error' event, which with no listener ends the process.
+        obj.Body.on("error", () => res.destroy());
         obj.Body.pipe(res);
         return true;
       } catch {
@@ -263,12 +266,23 @@ const storage = {
       }
     }
     const full = localPath(key);
-    if (!fs.existsSync(full)) {
+    // statSync, not existsSync: a directory exists too, and streaming one
+    // throws EISDIR on the stream, which used to take the process down.
+    let stat;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      return false;
+    }
+    if (!stat.isFile()) {
       return false;
     }
     res.set("Content-Type", "application/octet-stream");
-    res.set("Content-Length", String(fs.statSync(full).size));
-    fs.createReadStream(full).pipe(res);
+    res.set("Content-Length", String(stat.size));
+    const stream = fs.createReadStream(full);
+    // A read that fails midway must not become an unhandled 'error' event.
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
     return true;
   },
 };

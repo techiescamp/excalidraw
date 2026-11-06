@@ -60,3 +60,23 @@ to load. Adding an icon does not change the original image in the drawing.
 Roll back the API/editor code while retaining additive columns. Existing code
 continues to read `svg_data` and object-storage `s3_key`; do not delete icon
 bytes or drop columns during rollback.
+
+## Deleting an icon (fix)
+
+**Delete from library** in the icon panel's context menu asked for confirmation
+and then did nothing. The API refuses any non-GET request that arrives without
+the `X-Excalidraw-Request: 1` header, answering 403 "Invalid request origin.";
+the panel's `DELETE` was the one request in the app that did not send it, so
+every delete was rejected before it reached the icon.
+
+- Send the header with the delete request, as every other write in the app does.
+- Guard the class of fault, not just this one call: a test walks the app's
+  sources, finds each `fetch` that writes to our own API, and fails if one of
+  them leaves the header out.
+
+### Local verification
+
+- Prove the cause first: the same `DELETE` without the header answers 403 and
+  with it answers 200 on the disposable local instance.
+- Then delete an icon from the panel in the browser and confirm it disappears
+  from the library and does not come back on reload.
