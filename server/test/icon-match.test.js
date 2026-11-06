@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rankIcons, scoreIcon } from "../lib/icons.js";
+import { rankIcons, scoreIcon, aspectOf } from "../lib/icons.js";
 
 // What a real library looks like: logo sets named after the product, uploads
 // named by whoever added them, and categories that say what things are.
@@ -75,5 +75,30 @@ test("icon matching by meaning", async (t) => {
     assert.ok(hits[0].score >= hits[1].score, "best first");
     assert.equal(hits[0].name, "PostgreSQL");
     assert.equal(hits[0].category, "Databases");
+  });
+});
+
+test("an icon reports the shape it was drawn at", async (t) => {
+  await t.test("an SVG viewBox gives the ratio", () => {
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100"></svg>',
+    );
+    assert.equal(aspectOf(svg, "image/svg+xml"), 3);
+  });
+  await t.test("width and height attributes do when there is no viewBox", () => {
+    const svg = Buffer.from('<svg width="48" height="24"></svg>');
+    assert.equal(aspectOf(svg, "image/svg+xml"), 2);
+  });
+  await t.test("a PNG says so in its header", () => {
+    // A 1x1 PNG: the IHDR carries the size whatever the pixels are.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M/wn4ERRDAxgAAADm0CAUrpA5YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    assert.equal(aspectOf(png, "image/png"), 1);
+  });
+  await t.test("anything unreadable is drawn in its box as it was", () => {
+    assert.equal(aspectOf(Buffer.from("not an image"), "image/svg+xml"), null);
+    assert.equal(aspectOf(Buffer.from(""), "image/png"), null);
   });
 });

@@ -380,6 +380,28 @@ const rankedGroup = (own, children, sizes, context) => {
 // names a box on whichever side has room — Route 53 and the load balancer are
 // named to their left, the data stores below — and copying one means being
 // able to say so.
+// An icon keeps the shape it was drawn at. Given a box to sit in, it takes the
+// largest size with its own proportions that fits, centred: a wordmark squashed
+// into a square, or a square logo pulled into a tall slot, is the first thing
+// anyone notices in a drawing.
+const fitArt = (area, aspect) => {
+  const ratio = Number(aspect);
+  if (!Number.isFinite(ratio) || ratio <= 0)
+    return { x: area.x, y: area.y, width: area.width, height: area.height };
+  let width = area.width;
+  let height = width / ratio;
+  if (height > area.height) {
+    height = area.height;
+    width = height * ratio;
+  }
+  return {
+    x: snap(area.x + (area.width - width) / 2),
+    y: snap(area.y + (area.height - height) / 2),
+    width: Math.max(GRID, Math.round(width)),
+    height: Math.max(GRID, Math.round(height)),
+  };
+};
+
 const besideBox = (area, measured, place) => {
   const middleY = snap(area.y + (area.height - measured.height) / 2);
   const middleX = snap(area.x + (area.width - measured.width) / 2);
@@ -1029,10 +1051,15 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       elements.push(
         element("image", {
           fileId: stash(rect.zone.badgeArt),
-          x: snap(side - BADGE_ART / 4),
-          y: snap(rect.y - BADGE_ART / 2),
-          width: BADGE_ART,
-          height: BADGE_ART,
+          ...fitArt(
+            {
+              x: snap(side - BADGE_ART / 4),
+              y: snap(rect.y - BADGE_ART / 2),
+              width: BADGE_ART,
+              height: BADGE_ART,
+            },
+            rect.zone.badgeArt.aspect,
+          ),
           status: "saved",
           scale: [1, 1],
           crop: null,
@@ -1164,10 +1191,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           element("image", {
             fileId: stash(size.art),
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height,
+            ...fitArt(area, size.art.aspect),
             status: "saved",
             scale: [1, 1],
             crop: null,
@@ -1223,10 +1247,15 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       elements.push(
         element("image", {
           fileId,
-          x: box.x + ICON_GAP,
-          y: snap(box.y + (box.height - ICON) / 2),
-          width: ICON,
-          height: ICON,
+          ...fitArt(
+            {
+              x: box.x + ICON_GAP,
+              y: snap(box.y + (box.height - ICON) / 2),
+              width: ICON,
+              height: ICON,
+            },
+            size.art.aspect,
+          ),
           status: "saved",
           scale: [1, 1],
           crop: null,

@@ -95,6 +95,31 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: icons keep the shape they were drawn at
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The owner said the icons looked stretched, and they were. Every picture was
+drawn at whatever size its slot happened to be, so a wordmark three times as
+wide as it is tall — Terraform, Nexus, SonarQube, the AWS mark — was squashed
+into a square, and a square logo dropped into a tall slot was pulled out of
+shape.
+
+An icon's own proportions now travel with it: `aspectOf` reads the ratio from
+an SVG's viewBox (or its width and height attributes) and from a PNG's IHDR
+chunk, and the drawing fits the picture inside its slot at that shape, centred,
+instead of filling the slot. An icon whose header cannot be read is drawn as it
+was, so nothing regresses. This applies to tile icons, plain nodes and a
+boundary's corner badge alike.
+
+Checks: server suite 102 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. Five new tests: the ratio read from a viewBox, from width and height
+attributes, from a PNG header, nothing returned for anything unreadable, and a
+three-to-one wordmark placed in a square slot coming out at its own shape and
+centred.
+
+Confirmed by eye on the local fixture against the reference picture.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: square corners, solid arrowheads, and lines that go straight
 
 Same branch and PR #15. Not released; nothing on production has changed.

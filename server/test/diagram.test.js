@@ -615,6 +615,36 @@ describe("blueprint diagrams", () => {
     assert.equal(arrow.points[1][0], 0, "and no sideways step");
   });
 
+  it("keeps an icon the shape it was drawn at", () => {
+    // A wordmark is three times as wide as it is tall. Dropped into a square
+    // slot it must stay that shape and sit in the middle, not stretch.
+    const art = new Map([
+      [
+        "wide",
+        {
+          ref: "logos/wide",
+          mime: "image/svg+xml",
+          aspect: 3,
+          dataURL: "data:image/svg+xml;base64,PHN2Zy8+",
+        },
+      ],
+    ]);
+    const scene = buildDiagram(
+      {
+        layout: "manual",
+        nodes: [
+          { id: "a", label: "", shape: "plain", icon: "wide", at: { x: 100, y: 100, w: 120, h: 120 } },
+        ],
+      },
+      art,
+    );
+    const picture = scene.elements.find((e) => e.type === "image");
+    assert.equal(picture.width, 120, "as wide as the slot allows");
+    assert.equal(picture.height, 40, "and the height its own shape asks for");
+    assert.equal(picture.x, 100);
+    assert.equal(picture.y, 140, "centred in the slot it was given");
+  });
+
   it("says what it could not do rather than silently dropping it", () => {
     const warnings = [];
     buildDiagram(

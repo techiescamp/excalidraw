@@ -32,6 +32,39 @@ const WORKSPACE_ICON_MIMES = new Set([
   "image/jfif",
 ]);
 const REF = /^[a-z0-9][a-z0-9_-]{0,59}\/[a-z0-9][a-z0-9._-]{0,79}$/i;
+
+// How wide an icon is for its height. A drawing that stretches a logo to fill
+// whatever box it was given is the first thing anyone notices, so the shape the
+// icon was drawn at travels with it and the drawing fits inside the box
+// instead of filling it.
+export function aspectOf(body, mime) {
+  try {
+    if (mime === "image/svg+xml") {
+      const head = body.toString("utf8").slice(0, 2000);
+      const box = head.match(
+        /viewBox\s*=\s*["']\s*[-\d.]+[,\s]+[-\d.]+[,\s]+([\d.]+)[,\s]+([\d.]+)/i,
+      );
+      if (box) {
+        const [, w, h] = box.map(Number);
+        if (w > 0 && h > 0) return w / h;
+      }
+      const width = head.match(/\swidth\s*=\s*["']([\d.]+)/i);
+      const height = head.match(/\sheight\s*=\s*["']([\d.]+)/i);
+      if (width && height && Number(height[1]) > 0)
+        return Number(width[1]) / Number(height[1]);
+      return null;
+    }
+    // A PNG says its size in the IHDR chunk, which is always the first one.
+    if (mime === "image/png" && body.length > 24) {
+      const w = body.readUInt32BE(16);
+      const h = body.readUInt32BE(20);
+      if (w > 0 && h > 0) return w / h;
+    }
+  } catch {
+    // an icon whose header cannot be read is simply drawn in its box
+  }
+  return null;
+}
 const TIMEOUT_MS = 8000;
 // Sets that draw a product the way the product draws itself. When the source
 // offers the same picture from several sets, one of these is taken first, so a
@@ -475,6 +508,7 @@ export function installIcons(
     return {
       ref: `${icon.set_name}/${icon.name}`,
       mime: icon.mime,
+      aspect: aspectOf(body, icon.mime),
       dataURL: `data:${icon.mime};base64,${body.toString("base64")}`,
     };
   };
