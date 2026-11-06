@@ -95,6 +95,47 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: a picture can now be copied exactly, because the engine can be told to stop deciding
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The owner sent a reference architecture and said the drawing that came back was
+not it. They were right, and the reason was structural rather than cosmetic: a
+reference picture is not the output of a layout algorithm, so an engine that
+only ever lays out can get close to one and never reach it.
+
+- **`layout: "manual"`.** Every node and boundary carries `at: {x, y, w, h}` in
+  pixels, snapped to the grid. Nothing is placed for the caller, so what is
+  sent is what is drawn. A node or boundary left unplaced is drawn at the
+  origin or left out, and the drawing says which.
+- **`label_at` on a node** puts its name left, right, above, below or inside
+  the picture, and an arrow then lands on the picture rather than on the words.
+- **An empty label draws nothing**, for nodes and for boundaries. Most product
+  logos carry their own wordmark and repeating it underneath is exactly what
+  made the first attempt look wrong.
+- **`label_style: "plain"` on a boundary** centres its name in words over the
+  region instead of putting it in a pill, and **`badge`** puts a provider's
+  mark on its corner.
+- **An arrow can join two boundaries.** The line from a build account to a
+  production one leaves the region itself, not a box inside it.
+- **`route: "straight"` on an edge** draws a direct line instead of elbows,
+  which is what a fan-out from one box to a row of them looks like.
+
+Checks: server suite 94 pass / 0 fail. `yarn test:typecheck` clean. `yarn fix`
+run. Three new engine tests: a hand-placed drawing landing on its coordinates
+at the sizes it was given with the empty labels drawn as nothing and the badge
+on the corner, an arrow between two regions leaving and landing on their edges,
+and the warnings for anything left unplaced.
+
+By hand on the local fixture: the owner's reference architecture redrawn as a
+copy and read back from the exported scene — every element inside the page
+frame, no two pieces of text overlapping, no picture overlapping another, and
+no text sitting on a picture.
+
+Left undone: the first auto-laid-out attempt at that picture is what the owner
+rejected, and nothing here makes the automatic layouts reproduce a reference —
+copying one is now a separate mode, chosen deliberately.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the engine draws in this workspace's own house style
 
 Same branch and PR #15. Not released; nothing on production has changed.

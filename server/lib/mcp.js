@@ -77,6 +77,23 @@ const nodeSchema = z.object({
     ),
   fill: z.string().optional().describe("Exact background colour, e.g. #a5d8ff"),
   stroke: z.string().optional().describe("Exact outline colour, e.g. #1971c2"),
+  at: z
+    .object({
+      x: z.number().describe("Pixels from the left of the drawing"),
+      y: z.number().describe("Pixels from the top of the drawing"),
+      w: z.number().optional().describe("Width; left out, it fits the label"),
+      h: z.number().optional().describe("Height; left out, it fits the label"),
+    })
+    .optional()
+    .describe(
+      "Where to put this, for layout: manual only. Use it to copy a picture exactly; leave it out and the engine places everything.",
+    ),
+  label_at: z
+    .enum(["inside", "left", "right", "above", "below"])
+    .optional()
+    .describe(
+      "Which side of the picture the name goes, for shape: plain. Below unless you say.",
+    ),
   icon: z
     .string()
     .optional()
@@ -85,8 +102,8 @@ const nodeSchema = z.object({
     ),
 });
 const edgeSchema = z.object({
-  from: z.string(),
-  to: z.string(),
+  from: z.string().describe("A node id, or a boundary id to leave the region itself"),
+  to: z.string().describe("A node id, or a boundary id to enter the region itself"),
   label: z.string().optional().describe("Words shown on the arrow"),
   kind: z
     .enum(["sync", "async", "primary", "bidirectional"])
@@ -103,6 +120,12 @@ const edgeSchema = z.object({
     .describe("Step number in a request flow; drawn as a badge on the arrow"),
   style: z.enum(["solid", "dashed"]).optional(),
   color: z.string().optional(),
+  route: z
+    .enum(["orthogonal", "straight"])
+    .optional()
+    .describe(
+      "straight draws a direct line instead of right angles — what a fan-out from one box to a row of them looks like",
+    ),
 });
 const zoneSchema = z.object({
   id: z.string().describe("Short name used by nodes and by nested boundaries"),
@@ -130,6 +153,28 @@ const zoneSchema = z.object({
     .describe(
       "Dashed or dotted for something logical rather than physical — a Deployment, a namespace scope",
     ),
+  label_style: z
+    .enum(["pill", "plain"])
+    .optional()
+    .describe(
+      "pill puts the name in a tag on the top edge; plain centres it in words over the region",
+    ),
+  badge: z
+    .string()
+    .optional()
+    .describe(
+      "A mark on the boundary's corner, named the same way a node's icon is, e.g. aws",
+    ),
+  badge_at: z.enum(["top-left", "top-right"]).optional(),
+  at: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number().optional(),
+      h: z.number().optional(),
+    })
+    .optional()
+    .describe("Where this boundary goes, for layout: manual only"),
   parent: z.string().optional().describe("Id of the boundary this sits inside"),
   level: z
     .number()
@@ -150,10 +195,10 @@ const zoneSchema = z.object({
 const specSchema = {
   title: z.string().optional().describe("Heading drawn above the diagram"),
   layout: z
-    .enum(["right", "down", "lanes", "bands"])
+    .enum(["right", "down", "lanes", "bands", "manual"])
     .optional()
     .describe(
-      "The shape of the whole drawing: right or down for a flow, lanes for full-height columns side by side (one per tier, arrows crossing between them), bands for full-width rows stacked down the page (one per topic, each with its own small flow)",
+      "The shape of the whole drawing: right or down for a flow, lanes for full-height columns side by side (one per tier, arrows crossing between them), bands for full-width rows stacked down the page (one per topic, each with its own small flow), manual when you are copying a picture and every node and boundary carries its own at: {x, y}",
     ),
   style: z
     .object({
@@ -245,7 +290,21 @@ export function installMcp(
     const swapped = [];
     const fetched = [];
     if (!icons) return found;
-    for (const node of spec?.nodes || []) {
+    // A boundary's corner badge is looked up exactly like a node's icon.
+    const wanted = [
+      ...(spec?.nodes || []).map((node) => ({
+        name: node?.icon,
+        hint: node?.label,
+      })),
+      ...(spec?.zones || []).map((zone) => ({
+        name: zone?.badge,
+        hint: zone?.label,
+      })),
+    ];
+    for (const node of wanted.map((item) => ({
+      icon: item.name,
+      label: item.hint,
+    }))) {
       if (!node?.icon || found.has(node.icon) || missing.has(node.icon))
         continue;
       try {

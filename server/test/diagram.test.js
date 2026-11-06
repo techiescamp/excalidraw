@@ -462,6 +462,111 @@ describe("blueprint diagrams", () => {
     );
   });
 
+  it("puts everything exactly where it was told to, when placed by hand", () => {
+    const art = new Map([
+      [
+        "aws",
+        {
+          ref: "logos/aws",
+          mime: "image/svg+xml",
+          dataURL: "data:image/svg+xml;base64,PHN2Zy8+",
+        },
+      ],
+    ]);
+    const scene = buildDiagram(
+      {
+        layout: "manual",
+        zones: [
+          {
+            id: "cloud",
+            label: "www.example.com",
+            label_style: "plain",
+            color: "grey",
+            badge: "aws",
+            badge_at: "top-right",
+            at: { x: 100, y: 60, w: 600, h: 400 },
+          },
+          { id: "inner", parent: "cloud", label: "", at: { x: 160, y: 140, w: 300, h: 200 } },
+        ],
+        nodes: [
+          { id: "a", label: "Route 53", shape: "plain", icon: "aws", label_at: "left", at: { x: 200, y: 180, w: 60, h: 60 } },
+          { id: "b", label: "", shape: "plain", icon: "aws", at: { x: 360, y: 180, w: 60, h: 60 } },
+        ],
+        edges: [{ from: "a", to: "b", route: "straight" }],
+      },
+      art,
+    );
+    const inner = scene.elements.find(
+      (e) => e.type === "rectangle" && e.x === 160 && e.y === 140,
+    );
+    assert.ok(inner, "a boundary lands on the coordinates it was given");
+    assert.equal(inner.width, 300);
+    assert.equal(inner.height, 200);
+    const picture = scene.elements.find(
+      (e) => e.type === "image" && e.x === 200 && e.y === 180,
+    );
+    assert.ok(picture, "and so does a node's picture");
+    assert.equal(picture.width, 60, "at the size it was given, not a default");
+    // The name sits to the left of the picture, clear of it.
+    const name = scene.elements.find(
+      (e) => e.type === "text" && e.text === "Route 53",
+    );
+    assert.ok(name.x + name.width <= picture.x, "named on the left, as asked");
+    // An empty label draws nothing: many logos carry their own name.
+    assert.equal(
+      scene.elements.filter((e) => e.type === "text").length,
+      2,
+      "the named node and the boundary, and nothing for the empty labels",
+    );
+    // The provider's mark sits on the boundary's top-right corner.
+    const badge = scene.elements.find(
+      (e) => e.type === "image" && e.x > 600 && e.y < 60,
+    );
+    assert.ok(badge, "the badge straddles the corner it was put on");
+    // A straight edge is two points, not an elbow.
+    const arrow = scene.elements.find((e) => e.type === "arrow");
+    assert.equal(arrow.points.length, 2);
+  });
+
+  it("draws an arrow between two regions, not between boxes inside them", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      zones: [
+        { id: "left", label: "Build", at: { x: 0, y: 0, w: 200, h: 200 } },
+        { id: "right", label: "Run", at: { x: 400, y: 0, w: 200, h: 200 } },
+      ],
+      nodes: [
+        { id: "a", label: "A", zone: "left", at: { x: 40, y: 60 } },
+        { id: "b", label: "B", zone: "right", at: { x: 440, y: 60 } },
+      ],
+      edges: [{ from: "left", to: "right" }],
+    });
+    const arrow = scene.elements.find((e) => e.type === "arrow");
+    assert.ok(arrow, "the regions themselves are joined");
+    assert.equal(arrow.x, 200, "it leaves the left region's edge");
+    assert.equal(
+      arrow.x + arrow.points[arrow.points.length - 1][0],
+      400,
+      "and lands on the right region's edge",
+    );
+  });
+
+  it("says so when a hand-placed drawing leaves something unplaced", () => {
+    const warnings = [];
+    buildDiagram(
+      {
+        layout: "manual",
+        zones: [{ id: "z", label: "Nowhere" }],
+        nodes: [{ id: "a", label: "A" }],
+      },
+      new Map(),
+      warnings,
+    );
+    assert.equal(warnings.length, 2);
+    assert.match(warnings.join("\n"), /Node "a" has no at/);
+    assert.match(warnings.join("\n"), /Boundary "z" has no at/);
+  });
+
   it("says what it could not do rather than silently dropping it", () => {
     const warnings = [];
     buildDiagram(

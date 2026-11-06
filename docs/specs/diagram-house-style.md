@@ -125,6 +125,29 @@ All of it, in the engine and in the drawing tools:
 8. **`theme: "dark"`** — dark page, light lettering, tiles drawn as outlines in
    their own colour.
 
+## Placing a copy by hand
+
+A reference picture is not the output of a layout algorithm, and an engine
+asked to guess its way back to one never arrives at the picture. So the engine
+can be told to stop deciding:
+
+- `layout: "manual"` — every node and boundary carries `at: {x, y, w, h}` in
+  pixels, read straight off the reference, snapped to the grid. Nothing is
+  moved.
+- A node's name goes on any side with `label_at`: left, right, above, below or
+  inside. A reference diagram names Route 53 and the load balancer to their
+  left and the data stores below them.
+- **An empty label draws nothing.** Most product logos carry their own
+  wordmark; repeating it underneath is what makes a copy look wrong.
+- A boundary's name can be set `label_style: "plain"` — centred words over the
+  region instead of a pill — and it can carry a `badge`, a provider's mark
+  straddling its corner.
+- An arrow can join two boundaries, not just two boxes: the line from a build
+  account to a production one leaves the region itself.
+- `route: "straight"` on an edge draws a direct line. A fan-out from one box to
+  a row of them is straight in every reference diagram there is, and forcing
+  those into elbows is what makes a copy look nothing like the original.
+
 ## What is not being built
 
 - The isometric 3D illustrations. Those are drawn by hand, or are stock art;
