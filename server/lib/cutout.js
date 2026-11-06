@@ -49,7 +49,7 @@ const crop = ({ width, height, pixels }, box) => {
 };
 
 /** Clear every background-coloured pixel joined to an edge. */
-const clearBackground = ({ width, height, pixels }, colour, tolerance) => {
+const clearEdgeBackground = ({ width, height, pixels }, colour, tolerance) => {
   const out = Buffer.from(pixels);
   const seen = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
@@ -84,6 +84,80 @@ const clearBackground = ({ width, height, pixels }, colour, tolerance) => {
   return { picture: { width, height, pixels: out }, cleared };
 };
 
+/**
+ * Clear what the flood fill could not reach.
+ *
+ * A flood fill from the edges only takes background that is joined to an edge.
+ * The page showing through a gap in the artwork — between a brain and the rays
+ * around it, inside the bowl of a letter — is walled in, so it survives, and
+ * the icon comes back with patches of the old page still in it. Those patches
+ * are cleared too, at a tighter tolerance than the fill used: close enough to
+ * the page colour and it is the page, further away and it is artwork that
+ * merely resembles it.
+ */
+const clearTrappedBackground = (
+  { width, height, pixels },
+  colour,
+  tolerance,
+) => {
+  const out = Buffer.from(pixels);
+  const limit = Math.max(0, Math.min(100, tolerance)) * 4.42 * 0.6;
+  let cleared = 0;
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    if (out[pixel * 4 + 3] === 0) continue;
+    if (apart(at(pixels, pixel), colour) <= limit) {
+      out[pixel * 4 + 3] = 0;
+      cleared += 1;
+    }
+  }
+  return { picture: { width, height, pixels: out }, cleared };
+};
+
+/**
+ * Drop whatever runs off the edge of the crop.
+ *
+ * A rectangle drawn roughly around an icon catches the neighbours: a line of
+ * the caption above, the border of the panel below. Those pieces run off the
+ * edge of the crop; the icon itself, and the rays or dots around it, sit
+ * wholly inside. So anything that touches the rim goes, and what is left is
+ * the icon. Only worth asking for when the crop has room around the icon —
+ * with a tight crop the artwork touches the rim itself.
+ */
+const dropWhatLeavesTheFrame = ({ width, height, pixels }) => {
+  const out = Buffer.from(pixels);
+  const seen = new Uint8Array(width * height);
+  const queue = new Int32Array(width * height);
+  for (let start = 0; start < width * height; start += 1) {
+    if (seen[start] || out[start * 4 + 3] === 0) continue;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    seen[start] = 1;
+    let touches = false;
+    const piece = [];
+    while (head < tail) {
+      const pixel = queue[head++];
+      piece.push(pixel);
+      const x = pixel % width;
+      const y = (pixel - x) / width;
+      if (x === 0 || y === 0 || x === width - 1 || y === height - 1)
+        touches = true;
+      for (const next of [
+        x > 0 ? pixel - 1 : -1,
+        x + 1 < width ? pixel + 1 : -1,
+        y > 0 ? pixel - width : -1,
+        y + 1 < height ? pixel + width : -1,
+      ]) {
+        if (next < 0 || seen[next] || out[next * 4 + 3] === 0) continue;
+        seen[next] = 1;
+        queue[tail++] = next;
+      }
+    }
+    if (touches) for (const pixel of piece) out[pixel * 4 + 3] = 0;
+  }
+  return { width, height, pixels: out };
+};
+
 /** Cut away fully transparent margins so the icon sits tight in its box. */
 const trim = ({ width, height, pixels }) => {
   let left = width;
@@ -114,45 +188,47 @@ const trim = ({ width, height, pixels }) => {
  */
 export function cutIcon(
   file,
-  { x, y, w, h },
-  { tolerance = 12, background = null } = {},
+  box,
+  { tolerance = 12, background = null, drop_edges = false } = {},
 ) {
   const picture = readPng(file);
-  const cut = crop(picture, { x, y, w, h });
+  // No rectangle means the picture is already cropped to the icon, which is
+  // how a person does it: crop first, then take the background off that.
+  const cut = box ? crop(picture, box) : picture;
   if (cut.width > MAX_SIDE || cut.height > MAX_SIDE)
     throw new Error(`Cut a region no larger than ${MAX_SIDE}px on a side.`);
-  const colour = background || backgroundOf(cut);
-  const { picture: cleaned, cleared } = clearBackground(
-    cut,
-    colour,
-    tolerance,
-  );
-  const tight = trim(cleaned);
+  // What the corners say the page is, worked out whatever the caller passed.
+  // The check at the end measures against this rather than against the colour
+  // used for the removal: told the wrong colour, the removal does nothing and
+  // a check against that same wrong colour would cheerfully report success.
+  const page = backgroundOf(cut);
+  const colour = background || page;
+  const edged = clearEdgeBackground(cut, colour, tolerance);
+  const trapped = clearTrappedBackground(edged.picture, colour, tolerance);
+  const cleared = edged.cleared + trapped.cleared;
+  const kept_picture = drop_edges
+    ? dropWhatLeavesTheFrame(trapped.picture)
+    : trapped.picture;
+  const tight = trim(kept_picture);
   if (!tight)
     throw new Error(
-      "Everything in that region was background; nothing was left to keep.",
+      drop_edges
+        ? "Nothing was left: every piece in that region ran off the edge of it. Give the icon more room around it, or turn drop_edges off."
+        : "Everything in that region was background; nothing was left to keep.",
     );
 
-  // Did it actually work? The border of what is kept should be transparent all
-  // the way round, and something should be left in the middle.
+  // Did it actually work? Not "is the rim clear" — a tight crop is meant to
+  // have artwork at its rim, and judging it that way called a good cut bad.
+  // The honest question is whether any of the old page is still in the icon.
   const { width, height, pixels } = tight;
-  let edge = 0;
-  let solidEdge = 0;
-  const check = (pixel) => {
-    edge += 1;
-    if (pixels[pixel * 4 + 3] !== 0) solidEdge += 1;
-  };
-  for (let px = 0; px < width; px += 1) {
-    check(px);
-    check((height - 1) * width + px);
-  }
-  for (let py = 0; py < height; py += 1) {
-    check(py * width);
-    check(py * width + width - 1);
-  }
+  const limit = Math.max(0, Math.min(100, tolerance)) * 4.42;
   let kept = 0;
-  for (let i = 0; i < width * height; i += 1)
-    if (pixels[i * 4 + 3] !== 0) kept += 1;
+  let stillPage = 0;
+  for (let i = 0; i < width * height; i += 1) {
+    if (pixels[i * 4 + 3] === 0) continue;
+    kept += 1;
+    if (apart(at(pixels, i), page) <= limit) stillPage += 1;
+  }
 
   return {
     png: writePng(tight),
@@ -165,9 +241,10 @@ export function cutIcon(
     removed: Math.round((cleared / (cut.width * cut.height)) * 100),
     // Share of the trimmed icon that is actual artwork.
     kept: Math.round((kept / (width * height)) * 100),
-    // A clean cut leaves nothing solid around the rim. Corners of a round icon
-    // can brush it, so a little is allowed and the number is reported either
-    // way rather than hidden behind a yes or no.
-    edge_solid: Math.round((solidEdge / Math.max(1, edge)) * 100),
+    // Share of what was kept that is still the old page colour. A clean cut is
+    // zero. Anything above a per cent or two means the page is still showing
+    // through the icon somewhere, and the number is reported either way rather
+    // than hidden behind a yes or no.
+    leftover: Math.round((stillPage / Math.max(1, kept)) * 100),
   };
 }

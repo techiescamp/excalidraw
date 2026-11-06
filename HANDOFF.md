@@ -95,6 +95,43 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the cut-out was leaving the page inside the icon
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The first cut-out was not good enough and the reader said so. Three faults,
+all real:
+
+- **The page was still inside the icon.** A flood fill from the edges only
+  takes background joined to an edge. The page showing through a gap in the
+  artwork — between a brain and the rays around it, inside the bowl of a
+  letter — is walled in and survived. Those patches are now cleared as well,
+  at a tighter tolerance than the fill uses: close enough to the page colour
+  and it is the page, further away and it is artwork that merely resembles it.
+- **The check measured the wrong thing.** It asked whether the rim was clear,
+  but a tight crop is *meant* to have artwork at its rim, so it called good
+  cuts bad and sent me hunting for looser crops that caught the neighbouring
+  caption. It now reports `leftover`: how much of the kept icon is still the
+  page colour. Zero is clean. It is measured against what the corners say the
+  page is, not against the colour used for the removal — told the wrong
+  colour, the removal does nothing, and a check against that same wrong colour
+  would cheerfully report success.
+- **The crop caught the neighbours.** `drop_edges` throws away any piece that
+  runs off the edge of the rectangle: the caption above the icon, the panel
+  border below it. The icon and the rays around it sit wholly inside and stay.
+  Off by default, because with a tight crop the artwork touches the rim itself.
+
+The rectangle is optional now. A picture already cropped to the icon needs no
+box, which is how a person does it: crop first, then take the page off that.
+
+Proven on the reader's own picture: the brain comes out at 251x154 with 2%
+leftover, rays and all, and no caption or border with it.
+
+Checks: server suite 119 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. Two new tests: a ring with the page trapped in the middle of it comes back
+with a transparent middle, and a shape with a caption crossing the crop comes
+back as the shape alone.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: an icon can be cut out of the picture being copied
 
 Same branch and PR #15. Not released; nothing on production has changed.

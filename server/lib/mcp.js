@@ -676,7 +676,7 @@ export function installMcp(
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
                 "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
                 "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know, or build your own with an extras panel.",
-                "6b. Copying a picture somebody sent, and its icons are not in the library? Cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and can be used by name from then on. Check the answer: a rim still solid above a few per cent means the background did not come away, so cut again with a different rectangle or tolerance before you draw with it.",
+                "6b. Copying a picture somebody sent, and its icons are not in the library? Cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and used by name from then on. Leave room around the icon and pass drop_edges so the caption above it and the border below it are thrown away. Then check the answer: leftover above a per cent or two means the page did not come away, so cut again before you draw with it.",
                 "7b. A workflow or an explainer is rarely boxes alone. extras carries the rest: a code window with one line picked out, a note hung off a dashed arrow, a key panel down the side, a strip along the foot of the page, a rule between two halves, a measured span. Each takes its own at: {x, y}, and one with an id can have an arrow pointed at it.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
@@ -698,7 +698,7 @@ export function installMcp(
         {
           title: "Take an icon out of a picture",
           description:
-            "Cut one icon out of a picture somebody sent and keep it in this workspace's icon library, so a copy of their diagram uses the icons the diagram itself used. Give the picture, the rectangle the icon sits in, and a name. The flat background behind it is removed and the result is trimmed to the artwork. The answer says how much was removed and how much of the rim is still solid: a rim above a few per cent means the background did not come away cleanly, so look at it and cut again with a different tolerance rather than drawing with it.",
+            "Cut one icon out of a picture somebody sent and keep it in this workspace's icon library, so a copy of their diagram uses the icons the diagram itself used. Give the picture and a name; give a rectangle too, or leave it out if the picture is already cropped to the icon. The flat page behind the icon is removed — including the page showing through gaps in the artwork — and the result is trimmed. The answer says how much of the old page is still left in the icon: anything above a per cent or two means it did not come away, so look at it and cut again rather than drawing with it.",
           inputSchema: {
             image: z
               .string()
@@ -710,7 +710,10 @@ export function installMcp(
                 w: z.number().describe("Width of the rectangle"),
                 h: z.number().describe("Height of the rectangle"),
               })
-              .describe("The rectangle the icon sits in"),
+              .optional()
+              .describe(
+                "The rectangle the icon sits in. Leave it out when the picture is already cropped to the icon.",
+              ),
             name: z.string().describe("What to call it in the library"),
             category: z
               .string()
@@ -722,13 +725,19 @@ export function installMcp(
               .max(100)
               .optional()
               .describe(
-                "How far from the background colour still counts as background. 12 unless you say; raise it when a rim is left, lower it when the artwork loses its own edges.",
+                "How far from the page colour still counts as page. 12 unless you say; raise it when some is left behind, lower it when the artwork loses its own edges.",
               ),
             background: z
               .string()
               .optional()
               .describe(
                 "The background colour, e.g. #ffffff. Worked out from the corners unless you say.",
+              ),
+            drop_edges: z
+              .boolean()
+              .optional()
+              .describe(
+                "Throw away anything that runs off the edge of the rectangle — the caption above the icon, the panel border below it. Use it when the rectangle has room around the icon; leave it off when the crop is tight, or the artwork goes with them.",
               ),
           },
           outputSchema: {
@@ -739,10 +748,18 @@ export function installMcp(
             background: z.string(),
             removed: z.number(),
             kept: z.number(),
-            edge_solid: z.number(),
+            leftover: z.number(),
           },
         },
-        async ({ image, crop, name, category, tolerance, background }) => {
+        async ({
+          image,
+          crop,
+          name,
+          category,
+          tolerance,
+          background,
+          drop_edges,
+        }) => {
           if (!icons)
             throw new Error("This workspace has no icon library.");
           const workspace = await workspaceFor(context);
@@ -761,14 +778,15 @@ export function installMcp(
             category,
             tolerance,
             background,
+            drop_edges,
             actor: context.user.id,
           });
           const notes = [
             `Kept ${cut.ref} at ${cut.width}x${cut.height}.`,
-            `${cut.removed}% of the rectangle was background (${cut.background}); ${cut.kept}% of what is left is artwork.`,
-            cut.edge_solid > 3
-              ? `${cut.edge_solid}% of the rim is still solid, so the background did not come away cleanly. Look at it before drawing with it, and try again with a different tolerance.`
-              : "The rim came away clean.",
+            `${cut.removed}% of it was page (${cut.background}); ${cut.kept}% of what is left is artwork.`,
+            cut.leftover > 2
+              ? `${cut.leftover}% of the icon is still the old page colour, so it did not come away cleanly. Look at it before drawing with it: raise the tolerance, or crop closer.`
+              : "The page came away clean.",
           ];
           return {
             content: [{ type: "text", text: notes.join("\n") }],

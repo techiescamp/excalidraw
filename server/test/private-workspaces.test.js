@@ -2570,6 +2570,10 @@ test("private workspace backend", async (t) => {
         name: "Cut Out Shape",
         category: "Cutouts",
       });
+      assert.ok(
+        cut.result?.structuredContent,
+        `the cut came back: ${JSON.stringify(cut).slice(0, 400)}`,
+      );
       const made = cut.result.structuredContent;
       assert.equal(made.width, 20, "trimmed to the shape, not the rectangle");
       assert.equal(made.height, 20);

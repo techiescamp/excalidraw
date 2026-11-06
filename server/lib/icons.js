@@ -886,9 +886,9 @@ export function installIcons(
   // copying rather than from somewhere else entirely.
   const iconFromPicture = async (
     workspace,
-    { file, crop, name, category, tolerance, background, actor },
+    { file, crop, name, category, tolerance, background, drop_edges, actor },
   ) => {
-    const cut = cutIcon(file, crop, { tolerance, background });
+    const cut = cutIcon(file, crop, { tolerance, background, drop_edges });
     const display = displayNameValue(name);
     if (!display) fail(400, "Give the icon a name.");
     const icon = await store(
@@ -910,7 +910,7 @@ export function installIcons(
       background: cut.background,
       removed: cut.removed,
       kept: cut.kept,
-      edge_solid: cut.edge_solid,
+      leftover: cut.leftover,
     };
   };
 

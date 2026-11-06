@@ -53,7 +53,7 @@ test("cutting an icon out of a picture", async (t) => {
     assert.equal(cut.height, 40);
     assert.equal(cut.background, "#f0f0f0");
     assert.equal(cut.kept, 100, "what is left is all artwork");
-    assert.equal(cut.edge_solid, 100, "a square icon fills its own rim");
+    assert.equal(cut.leftover, 0, "none of the page is still in it");
     // The page around it is gone.
     assert.ok(cut.removed > 50, `most of the rectangle was page: ${cut.removed}`);
     const art = readPng(cut.png);
@@ -75,8 +75,12 @@ test("cutting an icon out of a picture", async (t) => {
       { background: [10, 200, 10] },
     );
     assert.equal(cut.removed, 0, "none of the page came away");
-    assert.equal(cut.edge_solid, 100, "the caller is told the rim is solid");
-    assert.equal(cut.width, 120, "and nothing could be trimmed");
+    assert.equal(
+      cut.leftover,
+      89,
+      "and the caller is told the page is still in it",
+    );
+    assert.equal(cut.width, 120, "nothing could be trimmed");
   });
 
   await t.test("the background colour can be given rather than guessed", () => {
@@ -94,6 +98,62 @@ test("cutting an icon out of a picture", async (t) => {
       () => cutIcon(picture(), { x: 0, y: 0, w: 20, h: 20 }),
       /nothing was left/,
     );
+  });
+
+  await t.test("the page showing through a gap is cleared too", () => {
+    // A ring: artwork with the page trapped in the middle of it. A flood fill
+    // from the edges cannot reach that middle, and the icon used to come back
+    // with a disc of the old page inside it.
+    const width = 60;
+    const height = 60;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y += 1)
+      for (let x = 0; x < width; x += 1) {
+        const away = Math.hypot(x - 30, y - 30);
+        const ring = away >= 12 && away < 22;
+        const at = (y * width + x) * 4;
+        pixels[at] = ring ? 20 : 250;
+        pixels[at + 1] = ring ? 20 : 250;
+        pixels[at + 2] = ring ? 200 : 250;
+        pixels[at + 3] = 255;
+      }
+    const cut = cutIcon(writePng({ width, height, pixels }), null, {
+      tolerance: 12,
+    });
+    assert.equal(cut.leftover, 0, "the middle of the ring came away as well");
+    const art = readPng(cut.png);
+    assert.equal(
+      art.pixels[(Math.floor(art.height / 2) * art.width +
+        Math.floor(art.width / 2)) *
+        4 +
+        3],
+      0,
+      "the middle of the icon is transparent",
+    );
+  });
+
+  await t.test("what runs off the edge of the crop can be thrown away", () => {
+    // A shape in the middle with a caption line crossing the top of the crop.
+    const width = 100;
+    const height = 100;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y += 1)
+      for (let x = 0; x < width; x += 1) {
+        const shape = x >= 35 && x < 65 && y >= 40 && y < 70;
+        const caption = y >= 5 && y < 12;
+        const at = (y * width + x) * 4;
+        const ink = shape || caption;
+        pixels[at] = ink ? 30 : 250;
+        pixels[at + 1] = ink ? 30 : 250;
+        pixels[at + 2] = ink ? 30 : 250;
+        pixels[at + 3] = 255;
+      }
+    const file = writePng({ width, height, pixels });
+    const loose = cutIcon(file, null, { tolerance: 12 });
+    assert.equal(loose.height, 65, "the caption is kept and stretches it");
+    const clean = cutIcon(file, null, { tolerance: 12, drop_edges: true });
+    assert.equal(clean.width, 30, "only the shape is left");
+    assert.equal(clean.height, 30);
   });
 
   await t.test("a crop outside the picture is pulled back inside it", () => {
