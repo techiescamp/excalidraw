@@ -95,6 +95,50 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: defaults measured off the production drawings, plus the callout curve and the chip grid
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+**Production was read, and only read.** The owner asked for the drawings on
+`draw.devopsproject.dev` to be studied and set a read-only rule. The browser was
+already signed in, so no credentials were entered. No scene was opened in the
+editor — the editor joins a room and saves, which would be a write — so the
+listing and the per-scene `export` endpoint were used instead, both plain GETs.
+Nothing was created, changed or deleted.
+
+Twenty published drawings were read and their elements counted. The defaults
+here were guesses from exported pictures; now they are measurements, written up
+in `docs/specs/diagram-house-style.md`:
+
+- **Body text is 20, not 16.** This is the one that mattered: everything this
+  engine drew came out small beside the real set. Small is 16, titles 28 — the
+  editor's own steps.
+- **The default font is Comic Shanns**, which is what the drawings use most
+  (283 against Virgil's 177 and Excalifont's 168). Virgil, Shantell Sans,
+  Patrick Hand and Proxima Nova were added to the font list as well.
+- **The outermost boundary is `#ced4da`**, the single most used fill in the
+  published set.
+- Confirmed already correct: solid triangle arrowheads (266 against 24), sharp
+  corners (385 against 72), line weight 1 with 4 for emphasis, roughness 0, a
+  white canvas.
+
+The two pieces left undone last round are in:
+
+- **`route: "curved"`** on an edge sweeps a callout line from a note to the
+  thing it is talking about — three points with the middle one pushed off the
+  run, drawn with the editor's curve.
+- **`extras` kind `grid`** lays small coloured chips out in a box, in however
+  many columns are asked for, with a heading over them. That is how a
+  comparison lists what belongs to each side.
+
+Also fixed: a note's heading and its words overlapped by a few pixels, because
+each line's position was worked out and snapped separately instead of being
+measured from where the line above actually landed.
+
+Checks: server suite 104 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. One new test covers the curve's three points and the chip grid's rows and
+columns.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the pieces that are not boxes, for the workflow and explainer pictures
 
 Same branch and PR #15. Not released; nothing on production has changed.

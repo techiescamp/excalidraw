@@ -7,8 +7,16 @@ import { fail } from "./core.js";
 
 // Font ids come from packages/common/src/constants.ts and must match the editor.
 export const FONTS = {
+  "comic shanns": 8,
+  comic: 8,
   "hand-drawn": 5,
   excalifont: 5,
+  virgil: 1,
+  "virgil classic": 1,
+  "proxima nova": 24,
+  "proxima nova bold": 25,
+  "shantell sans": 14,
+  "patrick hand": 12,
   inter: 15,
   roboto: 16,
   "ibm plex sans": 17,
@@ -39,7 +47,11 @@ export const COLORS = {
   yellow: { stroke: "#f08c00", fill: "#ffec99" },
 };
 const SHAPES = ["rectangle", "ellipse", "diamond"];
-const FONT_SIZE = 16;
+// Measured off twenty of this workspace's own published drawings: the body
+// size is 20, not the 16 this engine used, which is why everything it drew
+// came out small beside them. These are the editor's own steps — S 16, M 20,
+// L 28, XL 36 — and M is what the drawings use.
+const FONT_SIZE = 20;
 const LINE_HEIGHT = 1.25;
 const PADDING = 24;
 const MIN_WIDTH = 160;
@@ -68,9 +80,9 @@ const ZONE_PADDING = 40; // between a boundary and anything inside it
 const SIBLING_GAP = 40; // between tiles in the same boundary
 const ZONE_GAP = 60; // between boundaries
 const BADGE = 36; // numbered step
-const TITLE_SIZE = 30;
-const ZONE_LABEL_SIZE = 16;
-const SMALL_SIZE = 14; // arrow labels, legend rows, the brand mark
+const TITLE_SIZE = 28;
+const ZONE_LABEL_SIZE = 20;
+const SMALL_SIZE = 16; // arrow labels, legend rows, the brand mark
 const LEGEND_WIDTH = 280;
 const LEGEND_ROW = 32;
 const MAX_FILLS = 6; // more than this and two roles are really one role
@@ -96,11 +108,13 @@ export const ROLES = {
 // levels is the practical ceiling; past that a diagram reads as one blob.
 const LEVELS = [
   {
-    fill: "transparent",
-    opacity: 100,
-    stroke: "#757575",
+    // The grey these drawings put a cloud or an account in, measured off them:
+    // it is the single most used fill in the published set.
+    fill: "#ced4da",
+    opacity: 40,
+    stroke: "#495057",
     strokeWidth: 1,
-    tag: "#f1f3f5",
+    tag: "#e9ecef",
   },
   {
     fill: "#dbe4ff",
@@ -569,6 +583,31 @@ const tidy = (points) =>
       point[1] !== points[index - 1][1],
   );
 
+// A hand-drawn callout curve: the line these diagrams sweep from a note to the
+// thing it is talking about. Three points with the middle one pushed off to
+// the side, and the editor's own curve setting does the rest.
+const curvedRoute = (from, to) => {
+  const straight = straightRoute(from, to);
+  const [, last] = straight.points;
+  const [dx, dy] = last;
+  // Pushed perpendicular to the run, a quarter of its length, which is about
+  // how far these curves bow.
+  const length = Math.hypot(dx, dy) || 1;
+  const bow = Math.min(120, Math.max(GRID * 2, length / 4));
+  return {
+    ...straight,
+    curved: true,
+    points: [
+      [0, 0],
+      [
+        snap(dx / 2 + (-dy / length) * bow),
+        snap(dy / 2 + (dx / length) * bow),
+      ],
+      [dx, dy],
+    ],
+  };
+};
+
 const route = (from, to, obstacles = []) => {
   const sideways = to.x >= from.x + from.width || from.x >= to.x + to.width;
   const forward = sideways
@@ -760,7 +799,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       String(style.font || "")
         .toLowerCase()
         .trim()
-    ] || FONTS.inter;
+    ] || FONTS["comic shanns"];
   const palette =
     COLORS[String(style.color || "").toLowerCase()] || COLORS.blue;
   const sketchy = style.sketchy === true;
@@ -1485,6 +1524,77 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       continue;
     }
 
+    if (kind === "grid") {
+      // A block of small coloured chips inside a box: how these diagrams list
+      // what belongs to one side of a comparison.
+      const chips = (Array.isArray(extra.chips) ? extra.chips : []).slice(0, 24);
+      const across = Math.max(1, Math.min(6, Number(extra.columns) || 2));
+      const down = Math.ceil(chips.length / across) || 1;
+      const width = snap(spot.w ?? 440);
+      const cellWidth = snap((width - GRID * (across + 1)) / across);
+      const cellHeight = snap(Number(extra.row_height) || 60);
+      const header = extra.heading ? ZONE_LABEL_SIZE + 16 : 0;
+      const height = snap(
+        spot.h ?? header + GRID + down * (cellHeight + GRID),
+      );
+      const holder = element("rectangle", {
+        x: area.x,
+        y: area.y,
+        width,
+        height,
+        backgroundColor: named?.fill || (dark ? "#1e1e1e" : "#ffffff"),
+        fillStyle: "solid",
+        strokeColor: named?.stroke || muted,
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: corners,
+      });
+      elements.push(holder);
+      remember(holder);
+      if (extra.heading) {
+        const words = String(extra.heading).slice(0, MAX_LABEL);
+        const size = measure(words, ZONE_LABEL_SIZE);
+        elements.push(
+          plainText(
+            words,
+            snap(area.x + (width - size.width) / 2),
+            snap(area.y + 12),
+            fontFamily,
+            ZONE_LABEL_SIZE,
+            ink,
+          ),
+        );
+      }
+      chips.forEach((chip, index) => {
+        const paint =
+          COLORS[String(chip?.color || "").toLowerCase()] || COLORS.blue;
+        const column = index % across;
+        const row = Math.floor(index / across);
+        const cell = element("rectangle", {
+          x: snap(area.x + GRID + column * (cellWidth + GRID)),
+          y: snap(area.y + header + GRID + row * (cellHeight + GRID)),
+          width: cellWidth,
+          height: cellHeight,
+          backgroundColor: paint.fill,
+          fillStyle: "solid",
+          strokeColor: paint.stroke,
+          strokeWidth: 1,
+          roughness: 0,
+          roundness: corners,
+        });
+        const words = label(
+          wrap(String(chip?.label || "").slice(0, MAX_LABEL), 18),
+          cell,
+          fontFamily,
+          ink,
+          SMALL_SIZE,
+        );
+        cell.boundElements = [{ id: words.id, type: "text" }];
+        elements.push(cell, words);
+      });
+      continue;
+    }
+
     if (kind === "band") {
       // A strip across the foot of the page, which is where these diagrams put
       // the one line everybody is meant to leave with.
@@ -1621,7 +1731,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       spot.w ?? Math.max(200, Math.max(headSize.width || 0, bodySize.width) + 32),
     );
     const height = snap(
-      spot.h ?? headSize.height + bodySize.height + (heading ? 28 : 20),
+      spot.h ?? headSize.height + bodySize.height + (heading ? 44 : 24),
     );
     const card = element("rectangle", {
       x: area.x,
@@ -1638,26 +1748,29 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     });
     elements.push(card);
     remember(card);
-    let line = area.y + 10;
+    // Each line is placed from where the one above actually landed. Working out
+    // the next position and snapping it separately is how a heading and the
+    // words under it ended up overlapping by a few pixels.
+    let line = snap(area.y + 10);
     if (heading) {
       elements.push(
         plainText(
           heading,
           snap(area.x + (width - headSize.width) / 2),
-          snap(line),
+          line,
           fontFamily,
           FONT_SIZE,
           named?.stroke || ink,
         ),
       );
-      line += headSize.height + 8;
+      line = snap(line + headSize.height + 12);
     }
     if (words.trim())
       elements.push(
         plainText(
           words,
           snap(area.x + (width - bodySize.width) / 2),
-          snap(line),
+          line,
           fontFamily,
           FONT_SIZE,
           ink,
@@ -1709,7 +1822,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       );
     // Every other box is something this arrow must go around.
     const path =
-      edge.route === "straight"
+      edge.route === "curved"
+        ? curvedRoute(from, to)
+        : edge.route === "straight"
         ? straightRoute(from, to)
         : route(
             from,
@@ -1752,8 +1867,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       roughness: sketchy ? 1 : 0,
       // Square corners and a solid head. The open V and the rounded elbow are
       // the editor's defaults, not this house's: every diagram in the set
-      // turns a line at a right angle and ends it in a filled triangle.
-      roundness: null,
+      // turns a line at a right angle and ends it in a filled triangle. A
+      // callout curve is the exception, and asks for the curve back.
+      roundness: path.curved ? { type: 2 } : null,
       startArrowhead: edge.kind === "bidirectional" ? "triangle" : null,
       endArrowhead: "triangle",
       elbowed: false,
@@ -2121,11 +2237,12 @@ export const styleGuide = () => ({
       "nothing is placed for you: every node and boundary carries at: {x, y, w, h} in pixels. Use this to copy a picture exactly.",
   },
   node_label_places: LABEL_PLACES,
-  edge_routes: ["orthogonal", "straight"],
+  edge_routes: ["orthogonal", "straight", "curved"],
   extras: {
     note: "a card saying what something is, with an optional tick or cross",
     code: "a terminal window with lines, and highlight to pick one out",
     panel: "a key down the side: a heading and rows of chip plus words",
+    grid: "a block of small coloured chips in a box, for one side of a comparison",
     band: "a strip across the foot of the page",
     divider: "a plain rule between two halves of a page",
     measure: "a span with a head at each end and its size written above",

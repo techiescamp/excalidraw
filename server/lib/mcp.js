@@ -128,10 +128,10 @@ const edgeSchema = z.object({
     .optional()
     .describe("Line thickness. 1 is the default; use 3 or 4 for the main path of a workflow."),
   route: z
-    .enum(["orthogonal", "straight"])
+    .enum(["orthogonal", "straight", "curved"])
     .optional()
     .describe(
-      "straight draws a direct line instead of right angles — what a fan-out from one box to a row of them looks like",
+      "straight draws a direct line instead of right angles — what a fan-out from one box to a row of them looks like. curved sweeps a callout line from a note to the thing it talks about.",
     ),
 });
 const zoneSchema = z.object({
@@ -255,9 +255,18 @@ const specSchema = {
     .array(
       z.object({
         kind: z
-          .enum(["note", "code", "panel", "band", "divider", "measure", "text"])
+          .enum([
+            "note",
+            "code",
+            "panel",
+            "grid",
+            "band",
+            "divider",
+            "measure",
+            "text",
+          ])
           .describe(
-            "note: a card saying what something is. code: a terminal window with lines, and highlight to pick one out. panel: a key down the side, heading plus rows. band: a strip across the foot of the page. divider: a plain rule between two halves. measure: a span with a head at each end and its size above. text: words on their own.",
+            "note: a card saying what something is. code: a terminal window with lines, and highlight to pick one out. panel: a key down the side, heading plus rows. grid: a block of small coloured chips in a box, for listing what belongs to one side of a comparison. band: a strip across the foot of the page. divider: a plain rule between two halves. measure: a span with a head at each end and its size above. text: words on their own.",
           ),
         id: z
           .string()
@@ -282,6 +291,18 @@ const specSchema = {
           .array(z.object({ chip: z.string().optional(), label: z.string() }))
           .optional()
           .describe("For panel"),
+        chips: z
+          .array(z.object({ color: z.string().optional(), label: z.string() }))
+          .optional()
+          .describe("For grid: the small coloured boxes inside it"),
+        columns: z
+          .number()
+          .int()
+          .min(1)
+          .max(6)
+          .optional()
+          .describe("For grid: how many chips across. Two unless you say."),
+        row_height: z.number().optional().describe("For grid"),
         color: z.string().optional(),
         style: z.enum(["solid", "dashed"]).optional(),
         status: z

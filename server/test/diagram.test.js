@@ -666,6 +666,11 @@ describe("blueprint diagrams", () => {
           status: "ok",
         },
         {
+          kind: "note",
+          at: { x: 1200, y: 400, w: 900 },
+          text: "A card the drawing hangs off a dashed line.",
+        },
+        {
           kind: "panel",
           at: { x: 700, y: 700, w: 300 },
           heading: "Key",
@@ -704,14 +709,70 @@ describe("blueprint diagrams", () => {
       (e) => e.type === "arrow" && e.strokeStyle === "dashed",
     );
     assert.ok(arrow, "an arrow can be pointed at a note by its id");
-    // A card given a width wraps to it rather than to a fixed count.
-    const body = scene.elements.find(
-      (e) => e.type === "text" && e.text.startsWith("A card"),
-    );
-    const lines = body.text.split("\n");
+    // A card wraps to the width it was given: the same words in a wider card
+    // come out on longer lines.
+    const cards = scene.elements
+      .filter((e) => e.type === "text" && e.text.startsWith("A card"))
+      .map((e) =>
+        e.text.split("\n").reduce((long, line) => Math.max(long, line.length), 0),
+      );
+    assert.equal(cards.length, 2);
     assert.ok(
-      lines.some((line) => line.length > 28),
-      "it wrapped to the width it was given, not to a fixed count",
+      Math.max(...cards) > Math.min(...cards),
+      "the wider card wraps to longer lines",
+    );
+  });
+
+  it("sweeps a callout curve and lays out a grid of chips", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        { id: "a", label: "A", color: "grey", at: { x: 200, y: 600, w: 160, h: 80 } },
+        { id: "b", label: "B", color: "grey", at: { x: 900, y: 200, w: 160, h: 80 } },
+      ],
+      edges: [{ from: "b", to: "a", route: "curved", color: "#f08c00" }],
+      extras: [
+        {
+          kind: "grid",
+          at: { x: 200, y: 900, w: 460 },
+          heading: "What you version",
+          columns: 2,
+          chips: [
+            { color: "blue", label: "Git" },
+            { color: "green", label: "DVC / S3" },
+            { color: "orange", label: "MLflow" },
+            { color: "yellow", label: "Eval metrics" },
+          ],
+        },
+      ],
+    });
+    const arrow = scene.elements.find((e) => e.type === "arrow");
+    assert.equal(arrow.points.length, 3, "three points make the bow");
+    assert.deepEqual(arrow.roundness, { type: 2 }, "and it is drawn curved");
+    const middle = arrow.points[1];
+    const end = arrow.points[2];
+    assert.notEqual(
+      middle[0] * 2,
+      end[0],
+      "the middle point is pushed off the straight line",
+    );
+    // Four chips, two across, inside one holder.
+    const chips = scene.elements.filter(
+      (e) =>
+        e.type === "rectangle" &&
+        [COLORS.blue.fill, COLORS.green.fill, COLORS.orange.fill, COLORS.yellow.fill].includes(
+          e.backgroundColor,
+        ),
+    );
+    assert.equal(chips.length, 4);
+    const rows = new Set(chips.map((chip) => chip.y));
+    assert.equal(rows.size, 2, "two rows of two");
+    const columns = new Set(chips.map((chip) => chip.x));
+    assert.equal(columns.size, 2);
+    assert.ok(
+      scene.elements.some(
+        (e) => e.type === "text" && e.text === "What you version",
+      ),
     );
   });
 

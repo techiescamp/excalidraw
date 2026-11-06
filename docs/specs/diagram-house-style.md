@@ -186,12 +186,31 @@ All of these are now in the drawing tool as `extras`, each with its own
 `at: {x, y}`, and one given an `id` can have an arrow pointed at it. An edge
 takes a `width` from 1 to 4 for the main path.
 
+## Measured, not guessed
+
+Everything above was read off exported pictures. The defaults below were
+measured instead, from twenty of this workspace's own published drawings on the
+production site, read through its API without opening or changing any of them.
+
+| Setting | What the drawings use | What the engine now does |
+|---|---|---|
+| Arrowhead | solid triangle 266, open V 24 | triangle |
+| Box corners | sharp 385, rounded 72 | sharp |
+| Line weight | 1 → 1111, 2 → 450, 4 → 76 | 1, with `width` up to 4 |
+| Roughness | 0 in 85% of elements | 0 |
+| Canvas | `#ffffff` in 17 of 20 | `#ffffff` |
+| Body text size | 20 (190), then 16 (183) | **20**, which is the editor's M |
+| Title size | 28 | 28 |
+| Font | Comic Shanns 283, Virgil 177, Excalifont 168 | **Comic Shanns** by default |
+| Most used fill | `#ced4da`, a mid grey | the outermost boundary's fill |
+
+The body size is the one that mattered most: this engine was drawing at 16 and
+everything it produced came out small beside the real set.
+
 ## What is not being built
 
 - The isometric 3D illustrations. Those are drawn by hand, or are stock art;
   the engine places icons, not artwork.
-- The code panel with the three traffic-light dots. Worth doing, not yet.
-- Free-floating hand-drawn callout arrows.
 - Mixed reading directions in one drawing — a diagram that reads left to right
   between two clouds and top to bottom inside one of them. The engine has one
   direction per drawing.
