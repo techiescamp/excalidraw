@@ -2610,6 +2610,30 @@ test("private workspace backend", async (t) => {
         "and it travels with the drawing as a PNG",
       );
 
+      // The library comes first. Asked for the same thing again, it hands back
+      // what is already there instead of cutting a second copy.
+      const again = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 10, y: 10, w: 60, h: 60 },
+          name: "Cut Out Shape",
+          category: "Cutouts",
+        },
+        10,
+      );
+      assert.equal(
+        again.result.structuredContent.reused,
+        true,
+        "it reused the library's icon rather than cutting again",
+      );
+      assert.equal(again.result.structuredContent.ref, made.ref);
+      assert.match(
+        again.result.content[0].text,
+        /already has/,
+        "and says so plainly",
+      );
+
       // A rectangle with nothing but page in it is refused rather than stored.
       const empty = await rpc(
         "add_icon_from_image",

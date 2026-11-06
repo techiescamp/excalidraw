@@ -886,11 +886,45 @@ export function installIcons(
   // copying rather than from somewhere else entirely.
   const iconFromPicture = async (
     workspace,
-    { file, crop, name, category, tolerance, background, drop_edges, actor },
+    {
+      file,
+      crop,
+      name,
+      category,
+      tolerance,
+      background,
+      drop_edges,
+      keep,
+      force,
+      actor,
+    },
   ) => {
-    const cut = cutIcon(file, crop, { tolerance, background, drop_edges });
     const display = displayNameValue(name);
     if (!display) fail(400, "Give the icon a name.");
+    // The library first, always. A logo somebody drew and uploaded is better
+    // than one cut out of a screenshot of it, so cutting is the last resort
+    // and not the first move. Saying force skips this on purpose.
+    if (!force) {
+      const [already] = await matchIcons(workspace, display, 1);
+      if (already && already.score >= MIN_MATCH)
+        return {
+          ref: already.ref,
+          existing: true,
+          reused: true,
+          width: 0,
+          height: 0,
+          background: "",
+          removed: 0,
+          kept: 0,
+          leftover: 0,
+        };
+    }
+    const cut = cutIcon(file, crop, {
+      tolerance,
+      background,
+      drop_edges,
+      keep,
+    });
     const icon = await store(
       workspace,
       "uploads",
@@ -905,6 +939,7 @@ export function installIcons(
     return {
       ref: `${icon.set_name}/${icon.name}`,
       existing: Boolean(icon.existing),
+      reused: false,
       width: cut.width,
       height: cut.height,
       background: cut.background,

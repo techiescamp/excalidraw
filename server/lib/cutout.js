@@ -158,6 +158,51 @@ const dropWhatLeavesTheFrame = ({ width, height, pixels }) => {
   return { width, height, pixels: out };
 };
 
+/**
+ * Keep the main piece and drop the rest.
+ *
+ * Asked for a logo, a logo is what should come back — not the logo and the
+ * stray tick beside it and the end of a line. The largest joined piece is the
+ * logo; anything that is not joined to it goes. A logo genuinely made of
+ * separate parts loses them this way, which is why it is a choice and not the
+ * rule.
+ */
+const keepMainPiece = ({ width, height, pixels }) => {
+  const seen = new Uint8Array(width * height);
+  const queue = new Int32Array(width * height);
+  let best = null;
+  for (let start = 0; start < width * height; start += 1) {
+    if (seen[start] || pixels[start * 4 + 3] === 0) continue;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    seen[start] = 1;
+    const piece = [];
+    while (head < tail) {
+      const pixel = queue[head++];
+      piece.push(pixel);
+      const x = pixel % width;
+      const y = (pixel - x) / width;
+      for (const next of [
+        x > 0 ? pixel - 1 : -1,
+        x + 1 < width ? pixel + 1 : -1,
+        y > 0 ? pixel - width : -1,
+        y + 1 < height ? pixel + width : -1,
+      ]) {
+        if (next < 0 || seen[next] || pixels[next * 4 + 3] === 0) continue;
+        seen[next] = 1;
+        queue[tail++] = next;
+      }
+    }
+    if (!best || piece.length > best.length) best = piece;
+  }
+  if (!best) return { width, height, pixels };
+  const out = Buffer.alloc(width * height * 4);
+  for (const pixel of best)
+    pixels.copy(out, pixel * 4, pixel * 4, pixel * 4 + 4);
+  return { width, height, pixels: out };
+};
+
 /** Cut away fully transparent margins so the icon sits tight in its box. */
 const trim = ({ width, height, pixels }) => {
   let left = width;
@@ -189,7 +234,12 @@ const trim = ({ width, height, pixels }) => {
 export function cutIcon(
   file,
   box,
-  { tolerance = 12, background = null, drop_edges = false } = {},
+  {
+    tolerance = 12,
+    background = null,
+    drop_edges = false,
+    keep = "all",
+  } = {},
 ) {
   const picture = readPng(file);
   // No rectangle means the picture is already cropped to the icon, which is
@@ -206,10 +256,10 @@ export function cutIcon(
   const edged = clearEdgeBackground(cut, colour, tolerance);
   const trapped = clearTrappedBackground(edged.picture, colour, tolerance);
   const cleared = edged.cleared + trapped.cleared;
-  const kept_picture = drop_edges
-    ? dropWhatLeavesTheFrame(trapped.picture)
-    : trapped.picture;
-  const tight = trim(kept_picture);
+  let standing = trapped.picture;
+  if (drop_edges) standing = dropWhatLeavesTheFrame(standing);
+  if (keep === "main") standing = keepMainPiece(standing);
+  const tight = trim(standing);
   if (!tight)
     throw new Error(
       drop_edges

@@ -676,7 +676,7 @@ export function installMcp(
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
                 "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
                 "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know, or build your own with an extras panel.",
-                "6b. Copying a picture somebody sent, and its icons are not in the library? Cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and used by name from then on. Leave room around the icon and pass drop_edges so the caption above it and the border below it are thrown away. Then check the answer: leftover above a per cent or two means the page did not come away, so cut again before you draw with it.",
+                "6b. Icons come from the library first. Search it with list_icons for every icon the picture needs, and only for the ones it truly has none of, cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and used by name from then on. Leave room around the icon, pass drop_edges so the caption above it and the border below it go, and keep: main so you get the logo and nothing else. Then check the answer: leftover above a per cent or two means the page did not come away, so cut again before you draw with it.",
                 "7b. A workflow or an explainer is rarely boxes alone. extras carries the rest: a code window with one line picked out, a note hung off a dashed arrow, a key panel down the side, a strip along the foot of the page, a rule between two halves, a measured span. Each takes its own at: {x, y}, and one with an id can have an arrow pointed at it.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
@@ -698,7 +698,7 @@ export function installMcp(
         {
           title: "Take an icon out of a picture",
           description:
-            "Cut one icon out of a picture somebody sent and keep it in this workspace's icon library, so a copy of their diagram uses the icons the diagram itself used. Give the picture and a name; give a rectangle too, or leave it out if the picture is already cropped to the icon. The flat page behind the icon is removed — including the page showing through gaps in the artwork — and the result is trimmed. The answer says how much of the old page is still left in the icon: anything above a per cent or two means it did not come away, so look at it and cut again rather than drawing with it.",
+            "A last resort, not a first move. Look in the library first with list_icons: a logo somebody drew and uploaded is better than one cut out of a screenshot of it, and this tool checks again and hands back the library's own icon rather than cutting when it finds one. Only when the library really has nothing, cut the icon out of the picture being copied. Give the picture and a name; give a rectangle too, or leave it out if the picture is already cropped to the icon. The flat page behind the icon is removed — including the page showing through gaps in the artwork — and the result is trimmed. The answer says how much of the old page is still left in the icon: anything above a per cent or two means it did not come away, so look at it and cut again rather than drawing with it.",
           inputSchema: {
             image: z
               .string()
@@ -739,10 +739,23 @@ export function installMcp(
               .describe(
                 "Throw away anything that runs off the edge of the rectangle — the caption above the icon, the panel border below it. Use it when the rectangle has room around the icon; leave it off when the crop is tight, or the artwork goes with them.",
               ),
+            keep: z
+              .enum(["all", "main"])
+              .optional()
+              .describe(
+                "main keeps only the logo itself and drops whatever is not joined to it — a stray tick, the end of a line. Use it when you want the logo and nothing else. all is the default, for a logo genuinely made of separate parts.",
+              ),
+            force: z
+              .boolean()
+              .optional()
+              .describe(
+                "Cut even when the library already has something by this name. Only when you have looked and the library's one is worse.",
+              ),
           },
           outputSchema: {
             ref: z.string(),
             existing: z.boolean(),
+            reused: z.boolean(),
             width: z.number(),
             height: z.number(),
             background: z.string(),
@@ -759,6 +772,8 @@ export function installMcp(
           tolerance,
           background,
           drop_edges,
+          keep,
+          force,
         }) => {
           if (!icons)
             throw new Error("This workspace has no icon library.");
@@ -779,8 +794,20 @@ export function installMcp(
             tolerance,
             background,
             drop_edges,
+            keep,
+            force,
             actor: context.user.id,
           });
+          if (cut.reused)
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `The library already has ${cut.ref} for that. Nothing was cut; use that one. Pass force only if you have looked at it and it is worse than what is in the picture.`,
+                },
+              ],
+              structuredContent: cut,
+            };
           const notes = [
             `Kept ${cut.ref} at ${cut.width}x${cut.height}.`,
             `${cut.removed}% of it was page (${cut.background}); ${cut.kept}% of what is left is artwork.`,

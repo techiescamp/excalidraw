@@ -156,6 +156,31 @@ test("cutting an icon out of a picture", async (t) => {
     assert.equal(clean.height, 30);
   });
 
+  await t.test("only the logo is kept when that is what was asked", () => {
+    // A shape with a stray mark beside it, not joined to it.
+    const width = 100;
+    const height = 60;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y += 1)
+      for (let x = 0; x < width; x += 1) {
+        const logo = x >= 10 && x < 50 && y >= 15 && y < 45;
+        const speck = x >= 70 && x < 78 && y >= 28 && y < 32;
+        const at = (y * width + x) * 4;
+        const ink = logo || speck;
+        pixels[at] = ink ? 30 : 250;
+        pixels[at + 1] = ink ? 30 : 250;
+        pixels[at + 2] = ink ? 30 : 250;
+        pixels[at + 3] = 255;
+      }
+    const file = writePng({ width, height, pixels });
+    const both = cutIcon(file, null, { tolerance: 12 });
+    assert.equal(both.width, 68, "the stray mark stretches the box");
+    const logo = cutIcon(file, null, { tolerance: 12, keep: "main" });
+    assert.equal(logo.width, 40, "only the logo is left");
+    assert.equal(logo.height, 30);
+    assert.equal(logo.kept, 100);
+  });
+
   await t.test("a crop outside the picture is pulled back inside it", () => {
     const cut = cutIcon(picture(), { x: -50, y: -50, w: 400, h: 400 });
     assert.equal(cut.width, 40, "it still finds the shape");

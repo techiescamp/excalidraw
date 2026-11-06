@@ -95,6 +95,32 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the library first, and the logo on its own
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+Two rules the reader set, now built in rather than left to whoever is driving:
+
+- **The library comes first.** A logo somebody drew and uploaded is better than
+  one cut out of a screenshot of it, so cutting is a last resort. The tool now
+  looks in the workspace library before it cuts anything, and when it finds a
+  match it hands that icon back and says so instead of cutting a second,
+  poorer copy. `force` skips the check, for when the library's one has been
+  looked at and is genuinely worse. The rule is in the tool's own description
+  and in the drawing rules, so it holds wherever the tool is called from.
+- **The logo, and nothing else.** `keep: "main"` keeps the largest joined piece
+  and drops whatever is not attached to it — a stray tick, the end of a line,
+  the rays around a mark. `all` stays the default, because a logo genuinely
+  made of separate parts would lose them.
+
+On the reader's picture the brain comes out at 170x154, the mark alone, 2%
+leftover, where before it came with its rays and a slice of the caption.
+
+Checks: server suite 120 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. Two new tests: a shape with a stray mark beside it comes back as the shape
+alone, and asking twice for the same icon reuses the library's copy instead of
+cutting again.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the cut-out was leaving the page inside the icon
 
 Same branch and PR #15. Not released; nothing on production has changed.
