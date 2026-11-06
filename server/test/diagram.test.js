@@ -567,6 +567,54 @@ describe("blueprint diagrams", () => {
     assert.match(warnings.join("\n"), /Boundary "z" has no at/);
   });
 
+  it("draws boxes with corners and arrows with solid heads", () => {
+    const scene = buildDiagram({
+      nodes: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const boxes = scene.elements.filter(
+      (e) => e.type === "rectangle" && e.backgroundColor !== "transparent",
+    );
+    assert.ok(boxes.length >= 2);
+    for (const box of boxes)
+      assert.equal(box.roundness, null, "square corners, not the editor's round ones");
+    const arrow = scene.elements.find((e) => e.type === "arrow");
+    assert.equal(arrow.endArrowhead, "triangle", "a filled head, not an open V");
+    assert.equal(arrow.roundness, null, "and square corners where it turns");
+    // Asking for round corners still gets them.
+    const round = buildDiagram({
+      style: { corners: "round" },
+      nodes: [{ id: "a", label: "A" }],
+    });
+    assert.ok(
+      round.elements.some(
+        (e) =>
+          e.type === "rectangle" &&
+          e.backgroundColor !== "transparent" &&
+          e.roundness,
+      ),
+    );
+  });
+
+  it("runs a line straight between boxes that are nearly in line", () => {
+    // Two boxes a few pixels out of line are meant to be in line. Stepping
+    // sideways to join them draws a wiggle nobody asked for.
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        { id: "a", label: "A", at: { x: 100, y: 100, w: 100, h: 60 } },
+        { id: "b", label: "B", at: { x: 110, y: 300, w: 100, h: 60 } },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const arrow = scene.elements.find((e) => e.type === "arrow");
+    assert.equal(arrow.points.length, 2, "one straight run, not an elbow");
+    assert.equal(arrow.points[1][0], 0, "and no sideways step");
+  });
+
   it("says what it could not do rather than silently dropping it", () => {
     const warnings = [];
     buildDiagram(

@@ -217,6 +217,12 @@ const specSchema = {
         .describe(
           "How the title is set: underline (the default), plain, highlight for the words in a marker block, bar for a coloured bar beside them, banner for a filled box",
         ),
+      corners: z
+        .enum(["sharp", "round"])
+        .optional()
+        .describe(
+          "Box corners. Sharp unless you ask for round — these diagrams draw boxes with corners.",
+        ),
       frame: z
         .boolean()
         .optional()

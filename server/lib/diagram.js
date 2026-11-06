@@ -531,6 +531,15 @@ const straightRoute = (from, to) => {
   };
 };
 
+// Points that repeat add nothing and draw as a kink in the editor.
+const tidy = (points) =>
+  points.filter(
+    (point, index) =>
+      index === 0 ||
+      point[0] !== points[index - 1][0] ||
+      point[1] !== points[index - 1][1],
+  );
+
 const route = (from, to, obstacles = []) => {
   const sideways = to.x >= from.x + from.width || from.x >= to.x + to.width;
   const forward = sideways
@@ -555,7 +564,11 @@ const route = (from, to, obstacles = []) => {
   const at = (alongU, acrossV) =>
     sideways ? [alongU, acrossV] : [acrossV, alongU];
   const du = u(end) - u(start);
-  const dv = v(end) - v(start);
+  // Two boxes a few pixels out of line are meant to be in line. Stepping
+  // sideways by less than one grid square to join them draws a wiggle nobody
+  // asked for, so anything that close is treated as straight.
+  const drift = v(end) - v(start);
+  const dv = Math.abs(drift) <= GRID ? 0 : drift;
   const walls = obstacles.map((box) =>
     sideways
       ? { u: box.x, uSize: box.width, v: box.y, vSize: box.height }
@@ -581,7 +594,7 @@ const route = (from, to, obstacles = []) => {
   const built = (path) => ({
     start,
     end,
-    points: path.map(([a, b]) => at(a, b)),
+    points: tidy(path.map(([a, b]) => at(a, b))),
   });
 
   const straight = [
@@ -732,6 +745,10 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   // what a lane is.
   const down = archetype === "flow" ? asked.startsWith("down") : false;
   const manual = archetype === "manual";
+  // Square corners unless asked otherwise. The rounded rectangle is the
+  // editor's default; the diagrams this follows draw boxes with corners.
+  const corners =
+    String(style.corners || "").toLowerCase() === "round" ? { type: 3 } : null;
   const dark = String(style.theme || "").toLowerCase() === "dark";
   // In the dark diagrams a tile is an outline in its own colour, not a pastel
   // block: a pale fill on a dark canvas reads as a hole punched in the page.
@@ -999,7 +1016,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       strokeWidth: level.strokeWidth,
       strokeStyle: rect.zone.strokeStyle || level.strokeStyle || "solid",
       roughness: 0,
-      roundness: { type: 3 },
+      roundness: corners,
     });
     elements.push(container);
     // The name is a pill sitting on the top edge, tucked into whichever corner
@@ -1043,7 +1060,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         snap(rect.y + 12),
         fontFamily,
         ZONE_LABEL_SIZE,
-        ink,
+        // In its own colour when the boundary has one, the way these diagrams
+        // letter a region's name: the words and the border say the same thing.
+        rect.zone.colors ? paint.stroke : ink,
       );
       keepClear.push(name);
       elements.push(name);
@@ -1192,7 +1211,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       backgroundColor: fill,
       strokeWidth: 1,
       roughness: sketchy ? 1 : 0,
-      roundness: shape === "rectangle" ? { type: 3 } : null,
+      roundness: shape === "rectangle" ? corners : null,
     });
     boxes.set(node.id, box);
     keepClear.push(box);
@@ -1257,8 +1276,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
             from,
             to,
             // A line between two regions is allowed over the boxes inside
-            // them; it is the regions it must not cut through.
-            zoneBoxes.has(edge.from) || zoneBoxes.has(edge.to)
+            // them; it is the regions it must not cut through. And when the
+            // drawing was placed by hand, nothing is dodged at all: whoever
+            // set the coordinates already decided what goes where, and an
+            // engine taking a line the long way round to avoid a box is
+            // exactly what makes a copy stop looking like the original.
+            manual || zoneBoxes.has(edge.from) || zoneBoxes.has(edge.to)
               ? []
               : [...boxes.values()].filter(
                   (box) => box !== from && box !== to,
@@ -1286,9 +1309,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       strokeStyle:
         edge.style === "dashed" ? "dashed" : kind?.strokeStyle || "solid",
       roughness: sketchy ? 1 : 0,
-      roundness: { type: 2 },
-      startArrowhead: edge.kind === "bidirectional" ? "arrow" : null,
-      endArrowhead: "arrow",
+      // Square corners and a solid head. The open V and the rounded elbow are
+      // the editor's defaults, not this house's: every diagram in the set
+      // turns a line at a right angle and ends it in a filled triangle.
+      roundness: null,
+      startArrowhead: edge.kind === "bidirectional" ? "triangle" : null,
+      endArrowhead: "triangle",
       elbowed: false,
       // A straight run can stay bound to its boxes; a routed one cannot, because
       // the editor would recompute it into a diagonal and undo the routing.

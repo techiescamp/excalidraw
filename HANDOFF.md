@@ -95,6 +95,31 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: square corners, solid arrowheads, and lines that go straight
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+Three defaults were the editor's rather than this workspace's, and all three
+were wrong in every drawing the engine has produced so far. Checked against the
+reference set again before changing them.
+
+- **Boxes have square corners.** The rounded rectangle is the editor's default.
+  `style.corners: "round"` brings it back for anyone who wants it.
+- **Arrows end in a solid filled triangle**, not the open V, and turn at square
+  corners rather than rounded ones.
+- **A line goes straight.** In a hand-placed drawing nothing is dodged at all —
+  whoever set the coordinates already decided what goes where, and a line taking
+  the long way round to avoid a box is what stopped the copy looking like the
+  original. Everywhere, two boxes within one grid square of being in line are
+  treated as in line instead of being joined with a wiggle, and repeated points
+  in a path are dropped.
+- A boundary named in plain words is lettered in its own colour, the way the
+  reference set letters a region's name.
+
+Checks: server suite 96 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. Two new engine tests: the corners and the arrowhead with the round opt-out,
+and a near-aligned pair joined by one straight run with no sideways step.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: a picture can now be copied exactly, because the engine can be told to stop deciding
 
 Same branch and PR #15. Not released; nothing on production has changed.

@@ -72,6 +72,12 @@ Nearly every diagram is one of three shapes:
    with its own small flow inside and a one-line caption under it.
    (CRI vs CNI vs CSI vs CDI.)
 
+## Boxes
+
+Square corners. The rounded rectangle is the editor's default and it is not
+what these diagrams use, so the engine draws corners unless asked for
+`corners: "round"`.
+
 ## Nodes
 
 Two kinds, and the one that was missing matters more:
@@ -84,7 +90,12 @@ Two kinds, and the one that was missing matters more:
 
 ## Arrows
 
-- Hairline, black, right angles with rounded corners, a plain arrowhead.
+- Hairline, black, right angles with **square** corners, and a **solid filled
+  triangle** head. The rounded elbow and the open V are the editor's defaults,
+  not this house's; no diagram in the set uses either.
+- A line goes **straight from one box to the other**. It does not take a detour
+  around something in the way, and two boxes a few pixels out of line are
+  treated as in line rather than joined with a wiggle.
 - Dashed grey or black for a watch or a background flow.
 - Dashed orange for a trigger or a webhook.
 - A coloured solid line for the one path the diagram is about.
