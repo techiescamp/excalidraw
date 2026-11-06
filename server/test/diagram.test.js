@@ -776,6 +776,40 @@ describe("blueprint diagrams", () => {
     );
   });
 
+  it("joins boxes that share a band with a level line, not a slope", () => {
+    // A note beside a picture points at it straight. A slope between their
+    // middles reads as a mistake, and it is what a copy gets wrong first.
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        { id: "icon", label: "", at: { x: 220, y: 80, w: 180, h: 180 } },
+        { id: "below", label: "", at: { x: 240, y: 600, w: 140, h: 140 } },
+      ],
+      edges: [
+        { from: "note", to: "icon", route: "straight" },
+        { from: "icon", to: "below", route: "straight" },
+      ],
+      extras: [
+        {
+          kind: "note",
+          id: "note",
+          at: { x: 600, y: 190, w: 400, h: 100 },
+          text: "SSH into the server",
+        },
+      ],
+    });
+    const [across, down] = scene.elements.filter((e) => e.type === "arrow");
+    assert.equal(across.points.length, 2);
+    assert.equal(across.points[1][1], 0, "the line across is level");
+    assert.equal(across.x, 600, "it leaves the note's left edge");
+    assert.equal(
+      across.x + across.points[1][0],
+      400,
+      "and lands on the picture's right edge",
+    );
+    assert.equal(down.points[1][0], 0, "the line down is plumb");
+  });
+
   it("never lets one piece of writing land on another", () => {
     // Every heading, row and caption is placed from where the line above
     // actually landed. Working the next position out and snapping it

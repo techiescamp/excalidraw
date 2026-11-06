@@ -548,6 +548,45 @@ const straightRoute = (from, to) => {
     x: box.x + box.width / 2,
     y: box.y + box.height / 2,
   });
+  // Two boxes that share a band of height are joined by a level line across
+  // that band, not by a slope between their middles. A note beside a picture
+  // points at it straight, and a slope there reads as a mistake.
+  const overlap = (lowA, highA, lowB, highB) => {
+    const low = Math.max(lowA, lowB);
+    const high = Math.min(highA, highB);
+    return high - low >= GRID ? snap((low + high) / 2) : null;
+  };
+  const level = overlap(
+    from.y,
+    from.y + from.height,
+    to.y,
+    to.y + to.height,
+  );
+  if (level !== null && (to.x >= from.x + from.width || from.x >= to.x + to.width)) {
+    const forward = to.x >= from.x + from.width;
+    const startX = snap(forward ? from.x + from.width : from.x);
+    const endX = snap(forward ? to.x : to.x + to.width);
+    return {
+      start: { x: startX, y: level },
+      points: [
+        [0, 0],
+        [endX - startX, 0],
+      ],
+    };
+  }
+  const plumb = overlap(from.x, from.x + from.width, to.x, to.x + to.width);
+  if (plumb !== null && (to.y >= from.y + from.height || from.y >= to.y + to.height)) {
+    const forward = to.y >= from.y + from.height;
+    const startY = snap(forward ? from.y + from.height : from.y);
+    const endY = snap(forward ? to.y : to.y + to.height);
+    return {
+      start: { x: plumb, y: startY },
+      points: [
+        [0, 0],
+        [0, endY - startY],
+      ],
+    };
+  }
   const a = centre(from);
   const b = centre(to);
   const clip = (box, towards, away) => {
@@ -1346,7 +1385,14 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       continue;
     }
     const kind = String(extra.kind || "").toLowerCase();
-    const named = COLORS[String(extra.color || "").toLowerCase()];
+    // A named colour, or an exact one. A reference picture's cream is not any
+    // of the editor's nine names, and matching it is the whole job.
+    const named = extra.fill || extra.stroke
+      ? {
+          fill: extra.fill || COLORS[String(extra.color || "").toLowerCase()]?.fill || "#ffffff",
+          stroke: extra.stroke || COLORS[String(extra.color || "").toLowerCase()]?.stroke || ink,
+        }
+      : COLORS[String(extra.color || "").toLowerCase()];
     const area = {
       x: spot.x,
       y: spot.y,

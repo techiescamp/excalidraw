@@ -304,6 +304,8 @@ const specSchema = {
           .describe("For grid: how many chips across. Two unless you say."),
         row_height: z.number().optional().describe("For grid"),
         color: z.string().optional(),
+        fill: z.string().optional().describe("Exact background colour, e.g. #fff9db"),
+        stroke: z.string().optional().describe("Exact outline colour, e.g. #1e1e1e"),
         style: z.enum(["solid", "dashed"]).optional(),
         status: z
           .enum(["ok", "bad"])

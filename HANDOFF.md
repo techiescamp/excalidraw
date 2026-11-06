@@ -95,6 +95,29 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: a straight line between two boxes is level, not sloped
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+Copying a reader's tcpdump picture showed it: every arrow in it runs level or
+plumb, and every one this engine drew ran at a slope, because a straight route
+joined the two boxes' middles. Two boxes that share a band of height are now
+joined by a level line across that band, and two that share a band of width by
+a plumb line down it; only boxes that share neither fall back to a slope
+between their middles.
+
+A note, a panel or any other piece can also be given an exact `fill` and
+`stroke` now, the way a node can. A reference picture's cream is not one of the
+editor's nine colour names, and matching it is the whole job.
+
+Checks: server suite 106 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. One new test asserts the level line and the plumb one, and which edges
+they leave and land on.
+
+Drawn on the local instance from the reader's picture: Proxima Nova as asked, a
+grey canvas as asked, three icons found online, cream notes at an exact colour,
+all five arrows level or plumb, no overlapping text.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: a local instance to look at, and the last of the overlapping text
 
 Same branch and PR #15. Not released; nothing on production has changed.
