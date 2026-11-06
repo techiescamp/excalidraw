@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { ROLES, buildDiagram, styleGuide } from "../lib/diagram.js";
+import { COLORS, ROLES, buildDiagram, styleGuide } from "../lib/diagram.js";
 
 // The engine is what decides whether a drawing reads as a blueprint or as a
 // flowchart, so these check the rules that make the difference, not the shapes.
@@ -123,15 +123,29 @@ describe("blueprint diagrams", () => {
       (e) =>
         e.type === "rectangle" &&
         e.x <= cluster.x &&
-        e.y <= cluster.y &&
         e.width >= 200 &&
         e.backgroundColor === "#dbe4ff",
     );
     assert.ok(boundary, "a level 2 boundary is drawn");
+    // The name is a filled pill straddling the boundary's top edge, not text
+    // dropped inside its corner: that is the house style this engine follows.
+    const tag = scene.elements.find(
+      (e) => e.id === cluster.containerId && e.type === "rectangle",
+    );
+    assert.ok(tag, "the name sits in a pill of its own");
+    assert.ok(
+      tag.y < boundary.y && tag.y + tag.height > boundary.y,
+      "and the pill straddles the boundary's top edge",
+    );
+    assert.equal(tag.strokeColor, boundary.strokeColor);
+    // A name pill is part of its boundary rather than something placed inside
+    // it, and it is recognisable by starting above the boundary's top edge, so
+    // the padding rule does not apply to it.
     const inside = scene.elements.filter(
       (e) =>
         e.type === "rectangle" &&
         e !== boundary &&
+        e.y >= boundary.y &&
         e.x > boundary.x &&
         e.x + e.width < boundary.x + boundary.width,
     );
@@ -214,10 +228,237 @@ describe("blueprint diagrams", () => {
       edges: [{ from: "a", to: "b" }],
     });
     assert.equal(scene.elements.filter((e) => e.type === "ellipse").length, 0);
+    const rectangles = scene.elements.filter((e) => e.type === "rectangle");
+    assert.equal(
+      rectangles.length,
+      3,
+      "two boxes, no boundary, and the page frame",
+    );
+    // The frame is drawn behind everything and holds the rest inside it.
+    const [frame, ...boxes] = rectangles;
+    assert.equal(frame.backgroundColor, "transparent");
+    for (const box of boxes)
+      assert.ok(
+        frame.x < box.x &&
+          frame.y < box.y &&
+          frame.x + frame.width > box.x + box.width &&
+          frame.y + frame.height > box.y + box.height,
+        "every box is inside the page frame",
+      );
+  });
+
+  it("sets lanes side by side and makes them all the same height", () => {
+    const scene = buildDiagram({
+      layout: "lanes",
+      zones: [
+        { id: "edge", label: "External", color: "red" },
+        { id: "gw", label: "Gateway", color: "green" },
+        { id: "data", label: "Data Layer", color: "violet" },
+      ],
+      nodes: [
+        { id: "u", label: "Web Users", zone: "edge" },
+        { id: "n", label: "Nginx", zone: "gw" },
+        { id: "app", label: "App", zone: "gw" },
+        { id: "db", label: "Postgres", zone: "data" },
+      ],
+      edges: [
+        { from: "u", to: "n" },
+        { from: "u", to: "app" },
+        { from: "n", to: "db" },
+      ],
+    });
+    const lanes = ["#ffc9c9", "#b2f2bb", "#d0bfff"].map((fill) =>
+      scene.elements.find(
+        (e) => e.type === "rectangle" && e.backgroundColor === fill,
+      ),
+    );
+    assert.ok(lanes.every(Boolean), "one boundary per named colour");
+    const heights = new Set(lanes.map((lane) => lane.height));
+    assert.equal(heights.size, 1, "every lane is the height of the tallest");
+    for (let at = 1; at < lanes.length; at += 1)
+      assert.ok(
+        lanes[at].x >= lanes[at - 1].x + lanes[at - 1].width,
+        "lanes stand side by side in the order they were written",
+      );
+    // The middle lane holds two nodes with no arrow between them, and they
+    // stack down it rather than across it: that is the point of a lane.
+    const inside = scene.elements.filter(
+      (e) =>
+        e.type === "rectangle" &&
+        e.backgroundColor !== "transparent" &&
+        e.y > lanes[1].y &&
+        e.x > lanes[1].x &&
+        e.x + e.width < lanes[1].x + lanes[1].width,
+    );
+    assert.equal(inside.length, 2);
+    assert.notEqual(inside[0].y, inside[1].y, "stacked down the lane");
+  });
+
+  it("stacks bands down the page at one width", () => {
+    const scene = buildDiagram({
+      layout: "bands",
+      zones: [
+        { id: "cri", label: "CRI", color: "blue", caption: "1. Pull  2. Run" },
+        { id: "cni", label: "CNI", color: "green" },
+      ],
+      nodes: [
+        { id: "k", label: "kubelet", zone: "cri" },
+        { id: "r", label: "containerd", zone: "cri" },
+        { id: "p", label: "CNI Plugin", zone: "cni" },
+      ],
+      edges: [{ from: "k", to: "r" }],
+    });
+    const bands = ["#a5d8ff", "#b2f2bb"].map((fill) =>
+      scene.elements.find(
+        (e) => e.type === "rectangle" && e.backgroundColor === fill,
+      ),
+    );
+    assert.ok(bands.every(Boolean));
+    assert.equal(bands[0].width, bands[1].width, "one width for every band");
+    assert.ok(bands[1].y >= bands[0].y + bands[0].height, "stacked downwards");
+    assert.ok(
+      scene.elements.some(
+        (e) => e.type === "text" && e.text === "1. Pull  2. Run",
+      ),
+      "a band carries its caption",
+    );
+  });
+
+  it("draws a plain node as a picture with its name under it", () => {
+    const art = new Map([
+      [
+        "k8s",
+        { ref: "logos/k8s", mime: "image/svg+xml", dataURL: "data:image/svg+xml;base64,PHN2Zy8+" },
+      ],
+    ]);
+    const scene = buildDiagram(
+      {
+        nodes: [
+          { id: "a", label: "Kubernetes", shape: "plain", icon: "k8s", role: "control-plane" },
+          { id: "b", label: "Boxed" },
+        ],
+        edges: [{ from: "a", to: "b" }],
+      },
+      art,
+    );
+    const image = scene.elements.find((e) => e.type === "image");
+    assert.ok(image, "the picture is placed");
+    const name = scene.elements.find(
+      (e) => e.type === "text" && e.text === "Kubernetes",
+    );
+    assert.ok(name, "and the name with it");
+    assert.equal(name.containerId, null, "the name is not bound to a box");
+    assert.ok(name.y >= image.y + image.height, "the name sits under it");
+    assert.equal(
+      name.strokeColor,
+      ROLES["control-plane"].stroke,
+      "a product is lettered in the colour of what it is",
+    );
+    // No box: the only rectangles are the other node and the page frame.
     assert.equal(
       scene.elements.filter((e) => e.type === "rectangle").length,
       2,
-      "two boxes and no boundary",
+    );
+  });
+
+  it("sets the title four ways and underlines it by default", () => {
+    const underlined = buildDiagram({ title: "Hello", nodes: [{ id: "a" }] });
+    assert.ok(
+      underlined.elements.some((e) => e.type === "line"),
+      "underlined unless told otherwise",
+    );
+    const highlight = buildDiagram({
+      title: "Hello",
+      style: { title_style: "highlight" },
+      nodes: [{ id: "a" }],
+    });
+    assert.ok(
+      highlight.elements.some(
+        (e) => e.type === "rectangle" && e.backgroundColor === "#fff3bf",
+      ),
+      "a marker block behind the words",
+    );
+    const bar = buildDiagram({
+      title: "Hello",
+      style: { title_style: "bar" },
+      nodes: [{ id: "a" }],
+    });
+    assert.ok(
+      bar.elements.some(
+        (e) =>
+          e.type === "rectangle" &&
+          e.backgroundColor === "#f08c00" &&
+          e.width === 12,
+      ),
+      "a coloured bar beside the words",
+    );
+    const plain = buildDiagram({
+      title: "Hello",
+      style: { title_style: "plain" },
+      nodes: [{ id: "a" }],
+    });
+    assert.equal(
+      plain.elements.filter((e) => e.type === "line").length,
+      0,
+      "plain means plain",
+    );
+  });
+
+  it("draws a dark page as outlines rather than pale blocks", () => {
+    const scene = buildDiagram({
+      style: { theme: "dark" },
+      nodes: [{ id: "a", label: "API", role: "gateway" }],
+    });
+    assert.equal(scene.appState.viewBackgroundColor, "#121212");
+    const box = scene.elements.find(
+      (e) => e.type === "rectangle" && e.strokeColor === ROLES.gateway.stroke,
+    );
+    assert.ok(box, "the tile keeps its own colour");
+    assert.equal(box.backgroundColor, "transparent", "drawn as an outline");
+    const text = scene.elements.find((e) => e.type === "text");
+    assert.equal(text.strokeColor, "#e9ecef", "lettered light on dark");
+  });
+
+  it("names a boundary in the corner that was asked for", () => {
+    const scene = buildDiagram({
+      zones: [
+        {
+          id: "k",
+          label: "Kubernetes",
+          label_at: "top-right",
+          style: "dashed",
+          color: "teal",
+        },
+      ],
+      nodes: [
+        { id: "a", label: "Pod", zone: "k" },
+        { id: "b", label: "Another pod", zone: "k" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+    const name = scene.elements.find(
+      (e) => e.type === "text" && e.text === "Kubernetes",
+    );
+    const pill = scene.elements.find((e) => e.id === name.containerId);
+    const boundary = scene.elements.find(
+      (e) =>
+        e.type === "rectangle" &&
+        e.backgroundColor === COLORS.teal.fill &&
+        e.height > pill.height * 2,
+    );
+    assert.equal(
+      pill.backgroundColor,
+      COLORS.teal.fill,
+      "the pill is tinted with the boundary",
+    );
+    assert.equal(boundary.strokeStyle, "dashed");
+    assert.ok(
+      pill.x + pill.width <= boundary.x + boundary.width,
+      "the pill stays inside the boundary's width",
+    );
+    assert.ok(
+      pill.x > boundary.x + boundary.width / 2,
+      "and sits in the right-hand corner, as asked",
     );
   });
 

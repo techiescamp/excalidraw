@@ -2202,13 +2202,18 @@ test("private workspace backend", async (t) => {
       const kinds = saved.elements.map((e) => e.type);
       assert.equal(kinds.filter((k) => k === "arrow").length, 2);
       assert.ok(kinds.filter((k) => k === "text").length >= 5);
-      // A title is drawn as a banner, so the node boxes are the rest.
-      const banner = saved.elements.find(
-        (e) => e.type === "rectangle" && e.backgroundColor === "#ffc9c9",
+      // The title is set in plain words with a hand-drawn rule under them, so
+      // the page frame and the node boxes are the rectangles.
+      assert.ok(
+        saved.elements.some((e) => e.type === "line"),
+        "the title is underlined",
       );
-      assert.ok(banner, "the title is drawn as a banner");
+      const frame = saved.elements.find(
+        (e) => e.type === "rectangle" && e.backgroundColor === "transparent",
+      );
+      assert.ok(frame, "the page has a frame around it");
       const boxes = saved.elements.filter(
-        (e) => e.type === "rectangle" && e !== banner,
+        (e) => e.type === "rectangle" && e !== frame,
       );
       assert.equal(boxes.length, 3);
       assert.ok(
@@ -2259,7 +2264,8 @@ test("private workspace backend", async (t) => {
         .body.scene;
       assert.equal(
         after.elements.filter((e) => e.type === "rectangle").length,
-        1,
+        2,
+        "the one box, and the page frame around it",
       );
       // a read-only key cannot draw
       const refused = await rpc(readOnly, "create_drawing", {

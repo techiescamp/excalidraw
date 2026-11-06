@@ -50,6 +50,10 @@ const MAX_NODES = 120;
 const MAX_LABEL = 160;
 const ICON = 40;
 const ICON_GAP = 20;
+// A node drawn without a box: a large picture with its name underneath. More of
+// the diagrams in the house set are drawn this way than with tiles.
+const ICON_PLAIN = 64;
+const PLAIN_GAP = 8;
 
 // Everything below exists to make a drawing read as a blueprint rather than a
 // flowchart: one grid, one colour per role, boundaries that nest, and arrows
@@ -91,17 +95,45 @@ export const ROLES = {
 // Each nesting level is drawn differently so the eye can separate them. Four
 // levels is the practical ceiling; past that a diagram reads as one blob.
 const LEVELS = [
-  { fill: "transparent", opacity: 100, stroke: "#757575", strokeWidth: 1 },
-  { fill: "#dbe4ff", opacity: 25, stroke: "#4a9eed", strokeWidth: 1 },
-  { fill: "#fff3bf", opacity: 40, stroke: "#f59e0b", strokeWidth: 1 },
+  {
+    fill: "transparent",
+    opacity: 100,
+    stroke: "#757575",
+    strokeWidth: 1,
+    tag: "#f1f3f5",
+  },
+  {
+    fill: "#dbe4ff",
+    opacity: 25,
+    stroke: "#4a9eed",
+    strokeWidth: 1,
+    tag: "#d0ebff",
+  },
+  {
+    fill: "#fff3bf",
+    opacity: 40,
+    stroke: "#f59e0b",
+    strokeWidth: 1,
+    tag: "#ffec99",
+  },
   {
     fill: "#e5dbff",
     opacity: 45,
     stroke: "#8b5cf6",
     strokeWidth: 1,
     strokeStyle: "dashed",
+    tag: "#e5dbff",
   },
 ];
+// A boundary is named by a small filled pill straddling its top edge rather
+// than by text dropped inside its corner. Every finished diagram in the set
+// this style is read from does it this way, and it is what makes a boundary
+// read as a labelled region instead of a rectangle with a caption in it.
+const TAG_HEIGHT = 32;
+const TAG_PADDING = 14;
+const TAG_INSET = 20; // from the corner it is tucked into
+const TAG_PLACES = ["top-left", "top-center", "top-right"];
+const TITLE_STYLES = ["underline", "plain", "highlight", "bar", "banner"];
 
 // An edge says what kind of connection it is; the drawing follows from that.
 // Every weight here is the editor's own thin default except the primary path,
@@ -267,6 +299,26 @@ const layoutNodes = (nodes, edges, down, sizes) => {
   return { boxes, ...bounds(boxes.values()) };
 };
 
+const PAGE_MARGIN = 40;
+
+// Where everything drawn so far actually reaches, in all four directions. The
+// bounds helper only measures right and down, because a block starts at the
+// origin; a finished page does not.
+const extent = (elements) => {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const item of elements) {
+    if (!Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
+    left = Math.min(left, item.x);
+    top = Math.min(top, item.y);
+    right = Math.max(right, item.x + (item.width || 0));
+    bottom = Math.max(bottom, item.y + (item.height || 0));
+  }
+  return Number.isFinite(left) ? { left, top, right, bottom } : null;
+};
+
 const bounds = (boxes) => {
   let width = 0;
   let height = 0;
@@ -284,6 +336,41 @@ const bounds = (boxes) => {
 // the top of a diagram and the servers that write to it underneath.
 const ZONE_MARGIN = Math.max(0, ZONE_GAP - SIBLING_GAP);
 const zoneItem = (id) => `\u0000zone:${id}`;
+
+// Lanes side by side, or bands stacked: spec order along the page, every one
+// stretched to the same measure across, so the set reads as a single rack.
+const rankedGroup = (own, children, sizes, context) => {
+  const across = context.archetype === "lanes";
+  const boxes = new Map();
+  let along = 0;
+  let thickest = 0;
+  // Nodes that are in no boundary at all sit ahead of the rack, in a block of
+  // their own: in these diagrams that is the user, or the internet.
+  if (own.length) {
+    const block = layoutNodes(own, context.edges, context.down, sizes);
+    for (const [id, box] of block.boxes) boxes.set(id, box);
+    along = (across ? block.width : block.height) + ZONE_GAP;
+    thickest = across ? block.height : block.width;
+  }
+  for (const child of children) {
+    const size = sizes.get(zoneItem(child.id));
+    boxes.set(zoneItem(child.id), {
+      x: snap(across ? along : 0),
+      y: snap(across ? 0 : along),
+      width: size.width,
+      height: size.height,
+    });
+    along += (across ? size.width : size.height) + ZONE_GAP;
+    thickest = Math.max(thickest, across ? size.height : size.width);
+  }
+  // Every lane the height of the tallest, every band the width of the widest.
+  for (const child of children) {
+    const box = boxes.get(zoneItem(child.id));
+    if (across) box.height = snap(thickest);
+    else box.width = snap(thickest);
+  }
+  return { boxes, ...bounds(boxes.values()) };
+};
 
 const layoutGroup = (zoneId, context) => {
   const own = context.nodesByZone.get(zoneId) || [];
@@ -321,7 +408,14 @@ const layoutGroup = (zoneId, context) => {
     if (from && to && from !== to) edges.push({ from, to });
   }
 
-  const block = layoutNodes(items, edges, context.down, sizes);
+  // Lanes and bands are not laid out by the flow: they are a row of columns,
+  // or a column of rows, in the order they were written, each stretched to the
+  // same size across. The arrows cross between them, which is the shape.
+  const ranked =
+    zoneId === null && context.archetype !== "flow"
+      ? rankedGroup(own, children, sizes, context)
+      : null;
+  const block = ranked || layoutNodes(items, edges, context.down, sizes);
   const boxes = new Map();
   const rects = [];
   for (const node of own) boxes.set(node.id, block.boxes.get(node.id));
@@ -338,8 +432,10 @@ const layoutGroup = (zoneId, context) => {
       zone: child,
       x: dx,
       y: dy,
-      width: inner.width,
-      height: inner.height,
+      // A lane stretched to the tallest draws at that height, not at the
+      // height of what happens to be inside it.
+      width: Math.max(inner.width, slot.width - ZONE_MARGIN),
+      height: Math.max(inner.height, slot.height - ZONE_MARGIN),
     });
   }
   const { width, height } = bounds([
@@ -556,7 +652,23 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   const palette =
     COLORS[String(style.color || "").toLowerCase()] || COLORS.blue;
   const sketchy = style.sketchy === true;
-  const down = String(spec.layout || "right").startsWith("down");
+  // Three structures cover nearly every diagram in the set this style follows:
+  // a flow along one direction, full-height lanes side by side, or full-width
+  // bands stacked down the page. Lanes and bands fix the direction inside a
+  // boundary, because that is the whole point of the shape.
+  const asked = String(spec.layout || "right").toLowerCase();
+  const archetype = asked === "lanes" || asked === "bands" ? asked : "flow";
+  // Inside a lane or a band the flow runs across the page; it is the rack of
+  // lanes or bands itself that runs the other way. A lane's own nodes have no
+  // arrows between them as a rule, so they come out as one column, which is
+  // what a lane is.
+  const down = archetype === "flow" ? asked.startsWith("down") : false;
+  const dark = String(style.theme || "").toLowerCase() === "dark";
+  // In the dark diagrams a tile is an outline in its own colour, not a pastel
+  // block: a pale fill on a dark canvas reads as a hole punched in the page.
+  const ink = dark ? "#e9ecef" : "#1e1e1e";
+  const muted = dark ? "#adb5bd" : "#757575";
+  const paper = style.background || (dark ? "#121212" : "#ffffff");
 
   // ── boundaries ─────────────────────────────────────────────────────────────
   const zones = new Map();
@@ -567,12 +679,39 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       );
       continue;
     }
+    const named = COLORS[String(zone.color || "").toLowerCase()];
+    if (zone.color && !named)
+      warnings.push(
+        `Boundary "${zone.id}" asks for colour "${
+          zone.color
+        }", which is not one of: ${Object.keys(COLORS).join(
+          ", ",
+        )}. Drawn in its level's colour.`,
+      );
+    if (zone.label_at && !TAG_PLACES.includes(String(zone.label_at)))
+      warnings.push(
+        `Boundary "${zone.id}" asks for its name at "${
+          zone.label_at
+        }", which is not one of: ${TAG_PLACES.join(", ")}. Drawn top-left.`,
+      );
     zones.set(zone.id, {
       id: zone.id,
       label: zone.label || zone.id,
       parent: zone.parent || null,
       level: Math.min(Math.max(Number(zone.level) || 0, 1), LEVELS.length) - 1,
       members: new Set((zone.nodes || []).map(String)),
+      labelAt: String(zone.label_at || "top-left"),
+      caption: zone.caption ? String(zone.caption) : null,
+      strokeStyle: ["solid", "dashed", "dotted"].includes(
+        String(zone.style || ""),
+      )
+        ? String(zone.style)
+        : null,
+      // A named colour tints the boundary and its pill together, so the two
+      // never drift apart.
+      colors: named
+        ? { fill: named.fill, stroke: named.stroke, tag: named.fill, opacity: 30 }
+        : null,
     });
   }
   for (const zone of zones.values())
@@ -613,8 +752,22 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   const sizes = new Map(
     nodes.map((node) => {
       const art = node.icon ? icons.get(String(node.icon)) : null;
-      const text = wrap(node.label || node.id, art ? 18 : 24);
+      const plain = String(node.shape || "") === "plain";
+      const text = wrap(node.label || node.id, plain ? 20 : art ? 18 : 24);
       const size = measure(text, FONT_SIZE);
+      if (plain)
+        return [
+          node.id,
+          {
+            text,
+            art,
+            plain: true,
+            width: snap(Math.max(size.width, art ? ICON_PLAIN : 0) + PADDING),
+            height: snap(
+              (art ? ICON_PLAIN + PLAIN_GAP : 0) + size.height + PLAIN_GAP,
+            ),
+          },
+        ];
       const width = art
         ? ICON_GAP + ICON + 16 + size.width + ICON_GAP
         : size.width + PADDING * 2;
@@ -637,6 +790,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     nodesByZone: new Map(),
     zonesByParent: new Map(),
     nodesUnder: new Map(),
+    archetype,
   };
   for (const node of nodes) {
     const key = zoneOf.get(node.id) || null;
@@ -671,31 +825,68 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   // Boundaries are drawn first so every tile sits on top of the one holding it.
   for (const rect of layout.rects) {
     const level = LEVELS[rect.zone.level] || LEVELS[0];
+    const paint = rect.zone.colors || level;
     const container = element("rectangle", {
       x: rect.x,
       y: rect.y,
       width: rect.width,
       height: rect.height,
-      backgroundColor: level.fill,
+      backgroundColor: paint.fill,
       fillStyle: "solid",
-      opacity: level.opacity,
-      strokeColor: level.stroke,
+      opacity: paint.opacity ?? level.opacity,
+      strokeColor: paint.stroke,
       strokeWidth: level.strokeWidth,
-      strokeStyle: level.strokeStyle || "solid",
+      strokeStyle: rect.zone.strokeStyle || level.strokeStyle || "solid",
       roughness: 0,
       roundness: { type: 3 },
     });
-    const name = plainText(
-      rect.zone.label,
-      rect.x + 16,
-      rect.y + 12,
-      fontFamily,
-      ZONE_LABEL_SIZE,
-      level.stroke,
-    );
-    // A boundary's own name is as unwelcome under a step badge as a tile is.
-    keepClear.push(name);
-    elements.push(container, name);
+    elements.push(container);
+    // The name is a pill sitting on the top edge, tucked into whichever corner
+    // was asked for. It straddles the line on purpose: that is what makes the
+    // boundary read as a named region rather than a box with a caption in it.
+    const text = String(rect.zone.label || "").slice(0, MAX_LABEL);
+    if (text) {
+      const measured = measure(text, ZONE_LABEL_SIZE);
+      const width = snap(measured.width + TAG_PADDING * 2);
+      const place = TAG_PLACES.includes(rect.zone.labelAt)
+        ? rect.zone.labelAt
+        : "top-left";
+      const left =
+        place === "top-center"
+          ? snap(rect.x + (rect.width - width) / 2)
+          : place === "top-right"
+          ? snap(rect.x + rect.width - TAG_INSET - width)
+          : snap(rect.x + TAG_INSET);
+      const tag = element("rectangle", {
+        x: left,
+        y: snap(rect.y - TAG_HEIGHT / 2),
+        width,
+        height: TAG_HEIGHT,
+        backgroundColor: paint.tag || level.tag,
+        fillStyle: "solid",
+        strokeColor: paint.stroke,
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: { type: 3 },
+      });
+      const name = label(text, tag, fontFamily, ink, ZONE_LABEL_SIZE);
+      tag.boundElements = [{ id: name.id, type: "text" }];
+      // A boundary's own name is as unwelcome under a step badge as a tile is.
+      keepClear.push(tag);
+      elements.push(tag, name);
+    }
+    if (rect.zone.caption) {
+      const caption = plainText(
+        String(rect.zone.caption).slice(0, MAX_LABEL),
+        rect.x + TAG_INSET,
+        rect.y + rect.height + 12,
+        fontFamily,
+        SMALL_SIZE,
+        muted,
+      );
+      keepClear.push(caption);
+      elements.push(caption);
+    }
   }
 
   for (const node of nodes) {
@@ -714,7 +905,68 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const colors =
       role || COLORS[String(node.color || "").toLowerCase()] || palette;
     const shape = SHAPES.includes(node.shape) ? node.shape : "rectangle";
-    const fill = node.fill || colors.fill;
+    const stash = (art) => {
+      const fileId = crypto
+        .createHash("sha256")
+        .update(art.dataURL)
+        .digest("hex")
+        .slice(0, 40);
+      files[fileId] = {
+        id: fileId,
+        mimeType: art.mime,
+        dataURL: art.dataURL,
+        created: Date.now(),
+        lastRetrieved: Date.now(),
+      };
+      return fileId;
+    };
+    // No box at all: the picture is the node and its name sits underneath.
+    // Nothing is drawn to bind an arrow to, so the geometry alone is kept —
+    // routed arrows are already unbound, and these are routed the same way.
+    if (size.plain) {
+      const area = {
+        x: placed.x,
+        y: placed.y,
+        width: placed.width,
+        height: placed.height,
+      };
+      boxes.set(node.id, area);
+      keepClear.push(area);
+      const measured = measure(size.text, FONT_SIZE);
+      if (size.art)
+        elements.push(
+          element("image", {
+            fileId: stash(size.art),
+            x: snap(area.x + (area.width - ICON_PLAIN) / 2),
+            y: area.y,
+            width: ICON_PLAIN,
+            height: ICON_PLAIN,
+            status: "saved",
+            scale: [1, 1],
+            crop: null,
+            strokeColor: "transparent",
+            backgroundColor: "transparent",
+            roundness: null,
+          }),
+        );
+      elements.push(
+        plainText(
+          size.text,
+          area.x + (area.width - measured.width) / 2,
+          area.y + (size.art ? ICON_PLAIN + PLAIN_GAP : 0),
+          fontFamily,
+          FONT_SIZE,
+          // A product's name takes the colour of what it is, the way these
+          // diagrams letter a component in its own hue.
+          node.role || node.color ? colors.stroke : ink,
+        ),
+      );
+      continue;
+    }
+    // On a dark canvas a tile is an outline in its own colour: a pastel block
+    // there reads as a hole punched in the page, which is why the dark
+    // diagrams in the house set are drawn as outlines.
+    const fill = node.fill || (dark ? "transparent" : colors.fill);
     fills.add(fill);
     const box = element(shape, {
       x: placed.x,
@@ -733,18 +985,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     if (size.art) {
       // The icon sits in from the left edge and the label beside it, the way a
       // reference architecture names a product.
-      const fileId = crypto
-        .createHash("sha256")
-        .update(size.art.dataURL)
-        .digest("hex")
-        .slice(0, 40);
-      files[fileId] = {
-        id: fileId,
-        mimeType: size.art.mime,
-        dataURL: size.art.dataURL,
-        created: Date.now(),
-        lastRetrieved: Date.now(),
-      };
+      const fileId = stash(size.art);
       elements.push(
         element("image", {
           fileId,
@@ -768,11 +1009,11 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           box.y + (box.height - size_.height) / 2,
           fontFamily,
           FONT_SIZE,
-          "#1e1e1e",
+          ink,
         ),
       );
     } else {
-      const text = label(size.text, box, fontFamily, "#1e1e1e");
+      const text = label(size.text, box, fontFamily, ink);
       box.boundElements = [{ id: text.id, type: "text" }];
       elements.push(text);
     }
@@ -921,9 +1162,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       y: snap(y),
       width: BADGE,
       height: BADGE,
-      backgroundColor: "#1e1e1e",
+      // Amber, not the solid black of an AWS reference diagram: that is what
+      // these diagrams number their steps with, and it stays legible on a
+      // pale tile as well as on the page.
+      backgroundColor: "#ffd8a8",
       fillStyle: "solid",
-      strokeColor: "#1e1e1e",
+      strokeColor: "#f08c00",
       strokeWidth: 1,
       roundness: null,
     });
@@ -931,7 +1175,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       String(badge.step),
       circle,
       fontFamily,
-      "#ffffff",
+      "#1e1e1e",
       FONT_SIZE,
     );
     circle.boundElements = [{ id: text.id, type: "text" }];
@@ -967,9 +1211,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         y,
         width: LEGEND_WIDTH,
         height,
-        backgroundColor: "#ffffff",
+        backgroundColor: dark ? "#1e1e1e" : "#ffffff",
         fillStyle: "solid",
-        strokeColor: "#757575",
+        strokeColor: muted,
         strokeWidth: 1,
         roundness: { type: 3 },
       }),
@@ -1014,7 +1258,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           row,
           fontFamily,
           SMALL_SIZE,
-          "#1e1e1e",
+          ink,
         ),
       );
       row += LEGEND_ROW;
@@ -1022,24 +1266,104 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     legendBottom = y + height;
   }
 
+  // Four title treatments, read off the finished diagrams. Underlined is the
+  // most common of them, so a drawing that says nothing gets that one.
   if (spec.title) {
     const text = String(spec.title).slice(0, MAX_LABEL);
     const size = measure(text, TITLE_SIZE);
-    const banner = element("rectangle", {
-      x: 0,
-      y: -(ZONE_GAP + 80),
-      width: snap(Math.max(400, size.width + 80)),
-      height: 80,
-      backgroundColor: "#ffc9c9",
-      fillStyle: "solid",
-      strokeColor: "#1e1e1e",
-      strokeWidth: 1,
-      roughness: 0,
-      roundness: { type: 3 },
-    });
-    const bannerText = label(text, banner, fontFamily, "#1e1e1e", TITLE_SIZE);
-    banner.boundElements = [{ id: bannerText.id, type: "text" }];
-    elements.unshift(banner, bannerText);
+    const wanted = String(style.title_style || "").toLowerCase();
+    const treatment = TITLE_STYLES.includes(wanted) ? wanted : "underline";
+    if (style.title_style && !TITLE_STYLES.includes(wanted))
+      warnings.push(
+        `The title style "${
+          style.title_style
+        }" is not one of: ${TITLE_STYLES.join(
+          ", ",
+        )}. Drawn with an underline.`,
+      );
+    const top = -(ZONE_GAP + 80);
+    const left = snap((frame.width - size.width) / 2);
+    if (treatment === "banner") {
+      const banner = element("rectangle", {
+        x: 0,
+        y: top,
+        width: snap(Math.max(400, size.width + 80)),
+        height: 80,
+        backgroundColor: "#ffc9c9",
+        fillStyle: "solid",
+        strokeColor: "#1e1e1e",
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: { type: 3 },
+      });
+      const bannerText = label(text, banner, fontFamily, "#1e1e1e", TITLE_SIZE);
+      banner.boundElements = [{ id: bannerText.id, type: "text" }];
+      elements.unshift(banner, bannerText);
+    } else if (treatment === "highlight") {
+      // The words sit in a filled block with no outline, the way a marker pen
+      // leaves them.
+      const block = element("rectangle", {
+        x: snap(left - 16),
+        y: snap(top + 8),
+        width: snap(size.width + 32),
+        height: snap(size.height + 16),
+        backgroundColor: "#fff3bf",
+        fillStyle: "solid",
+        strokeColor: "transparent",
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: { type: 3 },
+      });
+      elements.unshift(
+        block,
+        plainText(text, left, top + 16, fontFamily, TITLE_SIZE, "#1e1e1e"),
+      );
+    } else if (treatment === "bar") {
+      elements.unshift(
+        element("rectangle", {
+          x: snap(left - 32),
+          y: snap(top + 8),
+          width: 12,
+          height: snap(size.height + 8),
+          backgroundColor: "#f08c00",
+          fillStyle: "solid",
+          strokeColor: "#f08c00",
+          strokeWidth: 1,
+          roughness: 0,
+          roundness: null,
+        }),
+        plainText(text, left, top + 12, fontFamily, TITLE_SIZE, ink),
+      );
+    } else {
+      const head = plainText(
+        text,
+        left,
+        top + 12,
+        fontFamily,
+        TITLE_SIZE,
+        ink,
+      );
+      elements.unshift(head);
+      if (treatment === "underline")
+        elements.push(
+          element("line", {
+            x: snap(left - 20),
+            y: snap(top + 16 + size.height + 10),
+            width: snap(size.width + 40),
+            height: 0,
+            points: [
+              [0, 0],
+              [snap(size.width + 40), 0],
+            ],
+            strokeColor: ink,
+            strokeWidth: 2,
+            // The one rule drawn by hand: a ruled line under a hand-lettered
+            // title reads as printed rather than drawn.
+            roughness: 1,
+            roundness: null,
+          }),
+        );
+    }
   }
 
   if (style.brand)
@@ -1050,16 +1374,39 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         legendBottom + 40,
         fontFamily,
         SMALL_SIZE,
-        "#757575",
+        muted,
       ),
     );
+
+  // A hairline rounded frame around the whole page. Every finished diagram in
+  // the house set has one; it is what makes the image read as a card rather
+  // than a photograph of somebody's canvas. Drawn last and put first, so it
+  // sits behind everything.
+  if (style.frame !== false) {
+    const edge = extent(elements);
+    if (edge) {
+      elements.unshift(
+        element("rectangle", {
+          x: snap(edge.left - PAGE_MARGIN),
+          y: snap(edge.top - PAGE_MARGIN),
+          width: snap(edge.right - edge.left + PAGE_MARGIN * 2),
+          height: snap(edge.bottom - edge.top + PAGE_MARGIN * 2),
+          backgroundColor: "transparent",
+          strokeColor: dark ? "#495057" : "#ced4da",
+          strokeWidth: 1,
+          roughness: 0,
+          roundness: { type: 3 },
+        }),
+      );
+    }
+  }
 
   return {
     type: "excalidraw",
     version: 2,
     source: "self-hosted",
     elements,
-    appState: { viewBackgroundColor: style.background || "#ffffff" },
+    appState: { viewBackgroundColor: paper },
     files,
   };
 }
@@ -1070,8 +1417,18 @@ export const styleGuide = () => ({
   roles: Object.fromEntries(
     Object.entries(ROLES).map(([key, role]) => [key, role.name]),
   ),
-  shapes: SHAPES,
-  layouts: ["right", "down"],
+  shapes: [...SHAPES, "plain"],
+  layouts: ["right", "down", "lanes", "bands"],
+  structures: {
+    flow: "right or down: boxes connected by arrows, laid out along the flow",
+    lanes:
+      "full-height columns side by side, one per tier, arrows crossing between them",
+    bands:
+      "full-width rows stacked down the page, one per topic, each with its own flow inside",
+  },
+  title_styles: TITLE_STYLES,
+  themes: ["light", "dark"],
+  boundary_label_places: TAG_PLACES,
   edge_styles: ["solid", "dashed"],
   edge_kinds: Object.keys(EDGE_KINDS),
   boundaries: {
@@ -1090,6 +1447,9 @@ export const styleGuide = () => ({
     "Say what a connection is with `kind`: sync, async, primary or bidirectional.",
     "Name a product on the nodes that are products: write what it is, and the picture is found here or fetched.",
     "Keep to six fill colours; past that the colours stop meaning anything.",
+    "Draw a node with shape plain — a big icon and its name underneath, no box — unless the thing really is a container or a region. Most diagrams here are drawn that way.",
+    "Name every boundary. The name is drawn in a pill on its top edge; label_at says which corner.",
+    "Use layout lanes when the diagram is tiers side by side, and bands when it is one topic per row.",
   ],
   limits: {
     nodes: MAX_NODES,

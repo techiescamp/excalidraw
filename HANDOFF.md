@@ -95,6 +95,56 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the engine draws in this workspace's own house style
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The owner pointed at about a hundred finished Excalidraw diagrams in their own
+folder — the ones published under the DevOpsCube name — and asked for the
+structure and the corner styles to be taken from there. Ten of them were read
+and what they have in common is written down in
+`docs/specs/diagram-house-style.md`; that document is now the reference for
+every default in the engine.
+
+What changed in the engine and in the drawing tools:
+
+- **A boundary is named by a pill straddling its top edge**, not by text
+  dropped in its corner. `label_at` picks the corner. This is the signature of
+  the style and the thing the engine was missing.
+- **Boundaries take a `color` and a `style`** — solid, dashed or dotted. The
+  colour tints the boundary and its pill together.
+- **Two new structures.** `layout: "lanes"` sets full-height columns side by
+  side, one per tier, every one the height of the tallest, with a lane's own
+  nodes in a column; `layout: "bands"` stacks full-width rows down the page,
+  each with its own flow and a `caption` under it.
+- **`shape: "plain"`** draws a node as a large icon with its name underneath
+  and no box, lettered in the colour of what the thing is. More of the
+  diagrams in the set are drawn this way than with tiles.
+- **Four title treatments**, underlined by default, which is the commonest.
+- **A hairline frame around the whole page**, on unless turned off. Every
+  finished diagram in the set has one.
+- **Step badges are amber**, not solid black.
+- **`theme: "dark"`** gives a dark page with the tiles drawn as outlines in
+  their own colour, which is what the dark diagrams actually do.
+
+Checks: server suite 91 pass / 0 fail. `yarn test:typecheck` clean. `yarn fix`
+run. Six new engine tests cover the new geometry.
+
+Three existing tests were rewritten rather than worked around, because the
+behaviour they pinned has deliberately changed: a boundary's name is now in a
+pill above the edge, and the page frame is an extra rectangle in every scene.
+
+By hand on the local fixture: the GitLab architecture redrawn as lanes and put
+beside the published diagram, and the reference architecture from the round
+below redrawn in the house style. Both read back from the exported scene —
+every element inside the page frame, no two pieces of text overlapping, every
+icon placed, and the font the one that was asked for.
+
+Left undone, and listed in the spec: the isometric illustrations (the engine
+places icons, not artwork), the dark code panel with the traffic-light dots,
+free-floating hand-drawn callouts, and a drawing whose two halves read in
+different directions.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: icons fetched when the library has none, and boundaries laid out in the flow
 
 Same branch and PR #15 as the entry below. Not released; nothing on production

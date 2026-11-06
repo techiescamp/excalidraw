@@ -63,7 +63,12 @@ const nodeSchema = z.object({
     .string()
     .optional()
     .describe("Id of the boundary this sits inside, from zones"),
-  shape: z.enum(["rectangle", "ellipse", "diamond"]).optional(),
+  shape: z
+    .enum(["rectangle", "ellipse", "diamond", "plain"])
+    .optional()
+    .describe(
+      "plain draws no box at all: a large icon with the label underneath. Most diagrams in this house style are drawn that way; use a box when the thing is a container or a region.",
+    ),
   color: z
     .string()
     .optional()
@@ -101,7 +106,30 @@ const edgeSchema = z.object({
 });
 const zoneSchema = z.object({
   id: z.string().describe("Short name used by nodes and by nested boundaries"),
-  label: z.string().optional().describe("Words shown at the boundary's corner"),
+  label: z
+    .string()
+    .optional()
+    .describe("The boundary's name, drawn in a pill on its top edge"),
+  label_at: z
+    .enum(["top-left", "top-center", "top-right"])
+    .optional()
+    .describe("Which corner of the top edge the name pill sits in"),
+  caption: z
+    .string()
+    .optional()
+    .describe("One small line under the boundary, e.g. the steps it contains"),
+  color: z
+    .string()
+    .optional()
+    .describe(
+      "Tints the boundary and its name pill together: blue, green, red, orange, violet, teal, pink, grey, yellow",
+    ),
+  style: z
+    .enum(["solid", "dashed", "dotted"])
+    .optional()
+    .describe(
+      "Dashed or dotted for something logical rather than physical — a Deployment, a namespace scope",
+    ),
   parent: z.string().optional().describe("Id of the boundary this sits inside"),
   level: z
     .number()
@@ -121,12 +149,35 @@ const zoneSchema = z.object({
 });
 const specSchema = {
   title: z.string().optional().describe("Heading drawn above the diagram"),
-  layout: z.enum(["right", "down"]).optional().describe("Flow direction"),
+  layout: z
+    .enum(["right", "down", "lanes", "bands"])
+    .optional()
+    .describe(
+      "The shape of the whole drawing: right or down for a flow, lanes for full-height columns side by side (one per tier, arrows crossing between them), bands for full-width rows stacked down the page (one per topic, each with its own small flow)",
+    ),
   style: z
     .object({
       font: z.string().optional().describe("Font name, e.g. Inter"),
       color: z.string().optional().describe("Default colour for shapes"),
       background: z.string().optional().describe("Canvas colour, e.g. #ffffff"),
+      theme: z
+        .enum(["light", "dark"])
+        .optional()
+        .describe(
+          "dark gives a dark page with the tiles drawn as outlines in their own colour",
+        ),
+      title_style: z
+        .enum(["underline", "plain", "highlight", "bar", "banner"])
+        .optional()
+        .describe(
+          "How the title is set: underline (the default), plain, highlight for the words in a marker block, bar for a coloured bar beside them, banner for a filled box",
+        ),
+      frame: z
+        .boolean()
+        .optional()
+        .describe(
+          "The hairline border around the whole page. On unless you turn it off.",
+        ),
       sketchy: z.boolean().optional().describe("Hand-drawn look"),
       brand: z
         .string()
