@@ -95,6 +95,51 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — v5.4.0 released and deployed to production
+
+`feature/diagram-blueprint` → `dev` (PR #15) → `main` (PR #16) → tag `v5.4.0` →
+release artifact → production, by the pipeline, approved by the owner.
+
+The route was the one section 2a asks for, not the shortcut: PR #15 originally
+pointed at `main` and was retargeted to `dev` first. One thing had to be fixed
+on the way — the semantic title check rejects the scope `mcp`, so the pull
+request title was changed to `feat(server)`.
+
+Deploy run: every step succeeded, the pipeline's own health check passed, the
+"put the previous release back" step was skipped because nothing failed.
+
+Checked by hand afterwards, all read-only:
+
+- `/healthz` returns `{"ok":true}`, three times, around 30 ms each.
+- The dashboard loads signed in. Every request on it returned 200 — no 4xx, no
+  5xx — and the browser console has no errors at all.
+- The new code is live and not just installed: `drawing_style_guide` on
+  production now lists `manual`, `lanes` and `bands`, the `extras`, the curved
+  route, `plain` nodes and the new fonts. The old deployment listed none of
+  these.
+- Icon search answers with ranked matches by meaning, and
+  `fetching_allowed: false` — the internet is still off there, as it should be.
+- A saved drawing reads back: 122 elements, 767 ms. Existing work is intact.
+- `/api/me`, `/api/scenes`, `/api/workspaces/.../icons` and the collections
+  endpoint all 200 in 12–110 ms.
+
+**Two things are still unchecked, and both need the owner.**
+
+1. **No drawing has been made on production.** Creating one is a write to a
+   shared resource and was refused here, so the new drawing path has not run
+   against the real icon library. Everything about it was proven locally
+   instead. Either grant the permission or make one drawing by hand to close
+   this.
+2. **An MCP client that was connected before the deploy still holds the old
+   tool list.** This session's cached `create_drawing` has no `layout: manual`,
+   no `extras`, no `at`. The server has them — the style guide proves it — but
+   a client has to reconnect to see them. Anyone using the drawing tools should
+   reconnect before expecting the new options.
+
+Server logs were not read: there is no shell access to the box from here. The
+pipeline's health check and the endpoint checks above are what stands in for
+them.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the icon path verified locally, which clears the gate's step 2
 
 Same branch and PR #15. Not released; nothing on production has changed.
