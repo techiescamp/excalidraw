@@ -95,6 +95,27 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: a local instance to look at, and the last of the overlapping text
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+A panel's heading sat on top of its first row, the same fault as the note's
+heading last round and from the same cause: the next line's position was worked
+out and then snapped to the grid separately, which pulled it back above where
+the line before it had actually landed. Every stacked piece of writing now
+advances from the snapped position of the line above it. A test asserts that no
+two pieces of writing in a drawing overlap at all, which is the invariant
+rather than the instance.
+
+The disposable instance from DEVELOPMENT.md section 4a is running on port
+55500 with all five sample drawings in it, so they can be opened and looked at
+directly rather than through a screenshot. It is disposable: its database is
+created fresh on each run and goes when the process stops.
+
+Checks: server suite 105 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. All five drawings read back from their exported scenes with no overlapping
+text and nothing outside the page border.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: defaults measured off the production drawings, plus the callout curve and the chip grid
 
 Same branch and PR #15. Not released; nothing on production has changed.

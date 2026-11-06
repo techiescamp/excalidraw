@@ -1462,7 +1462,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       // words for each entry.
       const rows = (Array.isArray(extra.rows) ? extra.rows : []).slice(0, 20);
       const width = snap(spot.w ?? LEGEND_WIDTH);
-      const height = snap(spot.h ?? 56 + LEGEND_ROW * Math.max(rows.length, 1));
+      const height = snap(
+        spot.h ??
+          32 +
+            (extra.heading ? ZONE_LABEL_SIZE * LINE_HEIGHT + 12 : 0) +
+            LEGEND_ROW * Math.max(rows.length, 1),
+      );
       const panel = element("rectangle", {
         x: area.x,
         y: area.y,
@@ -1478,19 +1483,23 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       });
       elements.push(panel);
       remember(panel);
-      let row = area.y + 16;
+      // Rows are placed from where the row above actually landed. Working out
+      // the next position and snapping it separately is how a heading and the
+      // first row under it ended up overlapping.
+      let row = snap(area.y + 16);
       if (extra.heading) {
+        const headline = String(extra.heading).slice(0, MAX_LABEL);
         elements.push(
           plainText(
-            String(extra.heading).slice(0, MAX_LABEL),
+            headline,
             snap(area.x + 16),
-            snap(row),
+            row,
             fontFamily,
             ZONE_LABEL_SIZE,
             named?.stroke || ink,
           ),
         );
-        row += LEGEND_ROW;
+        row = snap(row + measure(headline, ZONE_LABEL_SIZE).height + 12);
       }
       for (const entry of rows) {
         const chip = COLORS[String(entry?.chip || "").toLowerCase()];
@@ -1498,7 +1507,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           elements.push(
             element("rectangle", {
               x: snap(area.x + 16),
-              y: snap(row),
+              y: row,
               width: 20,
               height: 20,
               backgroundColor: chip.fill,
@@ -1513,13 +1522,13 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           plainText(
             String(entry?.label || "").slice(0, MAX_LABEL),
             snap(area.x + (chip ? 48 : 16)),
-            snap(row),
+            row,
             fontFamily,
             SMALL_SIZE,
             ink,
           ),
         );
-        row += LEGEND_ROW;
+        row = snap(row + LEGEND_ROW);
       }
       continue;
     }

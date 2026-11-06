@@ -776,6 +776,45 @@ describe("blueprint diagrams", () => {
     );
   });
 
+  it("never lets one piece of writing land on another", () => {
+    // Every heading, row and caption is placed from where the line above
+    // actually landed. Working the next position out and snapping it
+    // separately put headings on top of the first row under them.
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [{ id: "a", label: "A", at: { x: 0, y: 0 } }],
+      extras: [
+        {
+          kind: "panel",
+          at: { x: 400, y: 100, w: 480 },
+          heading: "DAG Structure",
+          rows: [
+            { chip: "green", label: "A   Starts the workflow" },
+            { chip: "blue", label: "B   Depends on A" },
+          ],
+        },
+        {
+          kind: "note",
+          at: { x: 1000, y: 100, w: 420 },
+          heading: "Why it matters",
+          text: "A model is not one thing you version, it is three moving together.",
+        },
+      ],
+    });
+    const words = scene.elements.filter((e) => e.type === "text");
+    const overlaps = (a, b) =>
+      !(
+        a.x + a.width <= b.x ||
+        b.x + b.width <= a.x ||
+        a.y + a.height <= b.y ||
+        b.y + b.height <= a.y
+      );
+    const clashes = words.flatMap((a, index) =>
+      words.slice(index + 1).filter((b) => overlaps(a, b)),
+    );
+    assert.deepEqual(clashes, []);
+  });
+
   it("says what it could not do rather than silently dropping it", () => {
     const warnings = [];
     buildDiagram(
