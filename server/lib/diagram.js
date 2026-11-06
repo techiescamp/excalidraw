@@ -136,6 +136,13 @@ const TAG_PLACES = ["top-left", "top-center", "top-right"];
 const TITLE_STYLES = ["underline", "plain", "highlight", "bar", "banner"];
 // A provider's mark on the corner of its own region.
 const BADGE_ART = 56;
+// A terminal window, as these diagrams draw one.
+const CODE_PAPER = "#272b33";
+const CODE_INK = "#e9ecef";
+const CODE_MARK = "#6b5b3e"; // the band behind the one line being pointed at
+const CODE_BAR = 56; // the strip the three lights sit in
+const CODE_PAD = 24;
+const CODE_LIGHTS = ["#ff5f56", "#ffbd2e", "#27c93f"];
 const LABEL_PLACES = ["inside", "left", "right", "above", "below"];
 const LABEL_GAP = 12;
 
@@ -713,6 +720,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
   const edges = Array.isArray(spec?.edges) ? spec.edges : [];
   const zoneList = Array.isArray(spec?.zones) ? spec.zones : [];
+  const extras = Array.isArray(spec?.extras) ? spec.extras.slice(0, 40) : [];
   if (!nodes.length) fail(400, "Describe at least one node.");
   if (nodes.length > MAX_NODES)
     fail(400, `Up to ${MAX_NODES} nodes per drawing.`);
@@ -728,11 +736,14 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   // An arrow may join two boundaries as well as two nodes: in a reference
   // diagram the line from a build account to a production one leaves the
   // region itself, not any box inside it.
-  const zoneIds = new Set(
-    (Array.isArray(spec?.zones) ? spec.zones : [])
+  const zoneIds = new Set([
+    ...(Array.isArray(spec?.zones) ? spec.zones : [])
       .filter((zone) => zone?.id)
       .map((zone) => String(zone.id)),
-  );
+    // A note or a panel can be pointed at too: that is what the dashed line
+    // from a card to a box is for.
+    ...extras.filter((extra) => extra?.id).map((extra) => String(extra.id)),
+  ]);
   for (const edge of edges)
     if (
       !(ids.has(edge?.from) || zoneIds.has(edge?.from)) ||
@@ -1282,6 +1293,405 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     }
   }
 
+  // ── the pieces that are not boxes ──────────────────────────────────────────
+  // Read off the workflow and explainer diagrams in the house set, which are
+  // not made of boxes and arrows alone: a code window with a line picked out,
+  // a note pointing at something, a key panel down the side, a coloured strip
+  // along the bottom, a rule between two halves, a measured span.
+  for (const extra of extras) {
+    const spot = placed(extra);
+    if (!spot) {
+      warnings.push(
+        `A ${extra?.kind || "piece"} has no at: {x, y} and was left out.`,
+      );
+      continue;
+    }
+    const kind = String(extra.kind || "").toLowerCase();
+    const named = COLORS[String(extra.color || "").toLowerCase()];
+    const area = {
+      x: spot.x,
+      y: spot.y,
+      width: snap(spot.w ?? 320),
+      height: snap(spot.h ?? 120),
+    };
+    const remember = (box) => {
+      if (extra.id) boxes.set(String(extra.id), box);
+      keepClear.push(box);
+    };
+
+    if (kind === "code") {
+      // A terminal window: the three lights, then the lines. The lines are
+      // drawn as one block of monospace so the indentation survives.
+      const lines = (Array.isArray(extra.lines) ? extra.lines : [])
+        .slice(0, 60)
+        .map((line) => String(line).slice(0, 200));
+      const body = lines.join("\n");
+      const measured = measure(body, FONT_SIZE);
+      const height = snap(
+        spot.h ?? CODE_BAR + CODE_PAD * 2 + Math.max(measured.height, 40),
+      );
+      const width = snap(
+        spot.w ?? Math.max(360, measured.width + CODE_PAD * 2),
+      );
+      const panel = element("rectangle", {
+        x: area.x,
+        y: area.y,
+        width,
+        height,
+        backgroundColor: CODE_PAPER,
+        fillStyle: "solid",
+        strokeColor: CODE_PAPER,
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: { type: 3 },
+      });
+      elements.push(panel);
+      remember(panel);
+      CODE_LIGHTS.forEach((colour, index) => {
+        elements.push(
+          element("ellipse", {
+            x: snap(area.x + CODE_PAD + index * 28),
+            y: snap(area.y + 16),
+            width: 16,
+            height: 16,
+            backgroundColor: colour,
+            fillStyle: "solid",
+            strokeColor: colour,
+            strokeWidth: 1,
+            roughness: 0,
+            roundness: null,
+          }),
+        );
+      });
+      let top = area.y + CODE_BAR;
+      if (extra.title) {
+        const headline = String(extra.title).slice(0, MAX_LABEL);
+        const size = measure(headline, TITLE_SIZE);
+        elements.push(
+          plainText(
+            headline,
+            snap(area.x + (width - size.width) / 2),
+            snap(top),
+            fontFamily,
+            TITLE_SIZE,
+            "#ffffff",
+          ),
+        );
+        top += size.height + CODE_PAD;
+      }
+      // A line picked out of the code, the way these diagrams point at the one
+      // setting the whole picture is about.
+      const lit = new Set(
+        (Array.isArray(extra.highlight) ? extra.highlight : []).map(Number),
+      );
+      const lineHeight = FONT_SIZE * LINE_HEIGHT;
+      for (const at of lit) {
+        if (!(at >= 1 && at <= lines.length)) continue;
+        elements.push(
+          element("rectangle", {
+            x: snap(area.x + CODE_PAD - 8),
+            y: snap(top + (at - 1) * lineHeight - 2),
+            width: snap(
+              measure(lines[at - 1], FONT_SIZE).width + 16,
+            ),
+            height: snap(lineHeight),
+            backgroundColor: CODE_MARK,
+            fillStyle: "solid",
+            strokeColor: CODE_MARK,
+            strokeWidth: 1,
+            roughness: 0,
+            roundness: null,
+          }),
+        );
+      }
+      if (body)
+        elements.push(
+          plainText(
+            body,
+            snap(area.x + CODE_PAD),
+            snap(top),
+            FONTS.monospace,
+            FONT_SIZE,
+            CODE_INK,
+          ),
+        );
+      continue;
+    }
+
+    if (kind === "panel") {
+      // A key down the side: a heading, then a coloured chip and a line of
+      // words for each entry.
+      const rows = (Array.isArray(extra.rows) ? extra.rows : []).slice(0, 20);
+      const width = snap(spot.w ?? LEGEND_WIDTH);
+      const height = snap(spot.h ?? 56 + LEGEND_ROW * Math.max(rows.length, 1));
+      const panel = element("rectangle", {
+        x: area.x,
+        y: area.y,
+        width,
+        height,
+        backgroundColor: named?.fill || (dark ? "#1e1e1e" : "#f8f9fa"),
+        fillStyle: "solid",
+        strokeColor: named?.stroke || muted,
+        strokeWidth: 1,
+        strokeStyle: extra.style === "dashed" ? "dashed" : "solid",
+        roughness: 0,
+        roundness: { type: 3 },
+      });
+      elements.push(panel);
+      remember(panel);
+      let row = area.y + 16;
+      if (extra.heading) {
+        elements.push(
+          plainText(
+            String(extra.heading).slice(0, MAX_LABEL),
+            snap(area.x + 16),
+            snap(row),
+            fontFamily,
+            ZONE_LABEL_SIZE,
+            named?.stroke || ink,
+          ),
+        );
+        row += LEGEND_ROW;
+      }
+      for (const entry of rows) {
+        const chip = COLORS[String(entry?.chip || "").toLowerCase()];
+        if (chip)
+          elements.push(
+            element("rectangle", {
+              x: snap(area.x + 16),
+              y: snap(row),
+              width: 20,
+              height: 20,
+              backgroundColor: chip.fill,
+              fillStyle: "solid",
+              strokeColor: chip.stroke,
+              strokeWidth: 1,
+              roughness: 0,
+              roundness: null,
+            }),
+          );
+        elements.push(
+          plainText(
+            String(entry?.label || "").slice(0, MAX_LABEL),
+            snap(area.x + (chip ? 48 : 16)),
+            snap(row),
+            fontFamily,
+            SMALL_SIZE,
+            ink,
+          ),
+        );
+        row += LEGEND_ROW;
+      }
+      continue;
+    }
+
+    if (kind === "band") {
+      // A strip across the foot of the page, which is where these diagrams put
+      // the one line everybody is meant to leave with.
+      const width = snap(spot.w ?? 600);
+      const height = snap(spot.h ?? 56);
+      const strip = element("rectangle", {
+        x: area.x,
+        y: area.y,
+        width,
+        height,
+        backgroundColor: named?.fill || "#ffec99",
+        fillStyle: "solid",
+        strokeColor: named?.stroke || "transparent",
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: corners,
+      });
+      const text = label(
+        String(extra.text || "").slice(0, MAX_LABEL),
+        strip,
+        fontFamily,
+        ink,
+        FONT_SIZE,
+      );
+      strip.boundElements = [{ id: text.id, type: "text" }];
+      elements.push(strip, text);
+      remember(strip);
+      continue;
+    }
+
+    if (kind === "divider") {
+      // A plain rule between two halves of a page. Two columns compared side
+      // by side are separated by one of these, not by two boxes.
+      const across = (spot.w ?? 0) >= (spot.h ?? 0);
+      const length = snap(across ? spot.w ?? 400 : spot.h ?? 400);
+      elements.push(
+        element("line", {
+          x: area.x,
+          y: area.y,
+          width: across ? length : 0,
+          height: across ? 0 : length,
+          points: across
+            ? [
+                [0, 0],
+                [length, 0],
+              ]
+            : [
+                [0, 0],
+                [0, length],
+              ],
+          strokeColor: named?.stroke || muted,
+          strokeWidth: 1,
+          roughness: 0,
+          roundness: null,
+        }),
+      );
+      continue;
+    }
+
+    if (kind === "measure") {
+      // A span with a head at each end and its size written above: how these
+      // diagrams label a stretch of time on a bar.
+      const length = snap(spot.w ?? 200);
+      const arrow = element("arrow", {
+        x: area.x,
+        y: area.y,
+        width: length,
+        height: 0,
+        points: [
+          [0, 0],
+          [length, 0],
+        ],
+        strokeColor: named?.stroke || ink,
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: null,
+        startArrowhead: "triangle",
+        endArrowhead: "triangle",
+        elbowed: false,
+        startBinding: null,
+        endBinding: null,
+      });
+      elements.push(arrow);
+      if (extra.label) {
+        const words = String(extra.label).slice(0, MAX_LABEL);
+        const size = measure(words, SMALL_SIZE);
+        elements.push(
+          plainText(
+            words,
+            snap(area.x + (length - size.width) / 2),
+            snap(area.y - size.height - 8),
+            fontFamily,
+            SMALL_SIZE,
+            named?.stroke || ink,
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (kind === "text") {
+      const words = String(extra.text || "").slice(0, MAX_LABEL);
+      const size =
+        extra.size === "large"
+          ? TITLE_SIZE
+          : extra.size === "small"
+          ? SMALL_SIZE
+          : FONT_SIZE;
+      const written = plainText(
+        words,
+        area.x,
+        area.y,
+        fontFamily,
+        size,
+        named?.stroke || ink,
+      );
+      elements.push(written);
+      remember(written);
+      continue;
+    }
+
+    // A note: the card these diagrams hang off a dashed line to say what one
+    // part of the picture is.
+    const heading = extra.heading ? String(extra.heading).slice(0, MAX_LABEL) : "";
+    // A card given a width wraps to it. Wrapping to a fixed count instead is
+    // how a wide note ends up as a narrow column of words inside a wide box.
+    const room = spot.w
+      ? Math.max(12, Math.floor((spot.w - 32) / (FONT_SIZE * WIDTH_RATIO)))
+      : 28;
+    const words = wrap(String(extra.text || "").slice(0, MAX_LABEL), room);
+    const headSize = heading ? measure(heading, FONT_SIZE) : { height: 0 };
+    const bodySize = measure(words, FONT_SIZE);
+    const width = snap(
+      spot.w ?? Math.max(200, Math.max(headSize.width || 0, bodySize.width) + 32),
+    );
+    const height = snap(
+      spot.h ?? headSize.height + bodySize.height + (heading ? 28 : 20),
+    );
+    const card = element("rectangle", {
+      x: area.x,
+      y: area.y,
+      width,
+      height,
+      backgroundColor: named?.fill || (dark ? "#1e1e1e" : "#ffffff"),
+      fillStyle: "solid",
+      strokeColor: named?.stroke || muted,
+      strokeWidth: 1,
+      strokeStyle: extra.style === "dashed" ? "dashed" : "solid",
+      roughness: 0,
+      roundness: corners,
+    });
+    elements.push(card);
+    remember(card);
+    let line = area.y + 10;
+    if (heading) {
+      elements.push(
+        plainText(
+          heading,
+          snap(area.x + (width - headSize.width) / 2),
+          snap(line),
+          fontFamily,
+          FONT_SIZE,
+          named?.stroke || ink,
+        ),
+      );
+      line += headSize.height + 8;
+    }
+    if (words.trim())
+      elements.push(
+        plainText(
+          words,
+          snap(area.x + (width - bodySize.width) / 2),
+          snap(line),
+          fontFamily,
+          FONT_SIZE,
+          ink,
+        ),
+      );
+    // A tick or a cross on the right edge, the way these cards mark the good
+    // path and the bad one.
+    const mark = String(extra.status || "").toLowerCase();
+    if (mark === "ok" || mark === "bad") {
+      const good = mark === "ok";
+      const dot = element("ellipse", {
+        x: snap(area.x + width - 44),
+        y: snap(area.y + (height - 28) / 2),
+        width: 28,
+        height: 28,
+        backgroundColor: good ? COLORS.green.fill : COLORS.red.fill,
+        fillStyle: "solid",
+        strokeColor: good ? COLORS.green.stroke : COLORS.red.stroke,
+        strokeWidth: 1,
+        roughness: 0,
+        roundness: null,
+      });
+      const glyph = label(
+        good ? "v" : "x",
+        dot,
+        fontFamily,
+        good ? COLORS.green.stroke : COLORS.red.stroke,
+        FONT_SIZE,
+      );
+      dot.boundElements = [{ id: glyph.id, type: "text" }];
+      elements.push(dot, glyph);
+    }
+  }
+
   // ── connections ────────────────────────────────────────────────────────────
   const badges = [];
   for (const edge of edges) {
@@ -1333,7 +1743,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         Math.min(...path.points.map(([, y]) => y)),
       points: path.points,
       strokeColor: stroke,
-      strokeWidth: kind?.strokeWidth || 1,
+      strokeWidth: Math.min(4, Math.max(1, Number(edge.width) || 0)) ||
+        kind?.strokeWidth ||
+        1,
       backgroundColor: "transparent",
       strokeStyle:
         edge.style === "dashed" ? "dashed" : kind?.strokeStyle || "solid",
@@ -1710,6 +2122,15 @@ export const styleGuide = () => ({
   },
   node_label_places: LABEL_PLACES,
   edge_routes: ["orthogonal", "straight"],
+  extras: {
+    note: "a card saying what something is, with an optional tick or cross",
+    code: "a terminal window with lines, and highlight to pick one out",
+    panel: "a key down the side: a heading and rows of chip plus words",
+    band: "a strip across the foot of the page",
+    divider: "a plain rule between two halves of a page",
+    measure: "a span with a head at each end and its size written above",
+    text: "words on their own",
+  },
   title_styles: TITLE_STYLES,
   themes: ["light", "dark"],
   boundary_label_places: TAG_PLACES,
@@ -1735,6 +2156,8 @@ export const styleGuide = () => ({
     "Name every boundary. The name is drawn in a pill on its top edge; label_at says which corner.",
     "Use layout lanes when the diagram is tiers side by side, and bands when it is one topic per row.",
     "Copying a picture somebody sent? Use layout manual and give every node and boundary at: {x, y, w, h} read off that picture, in pixels. Nothing is moved for you, so what you send is what is drawn.",
+    "A workflow or an explainer is rarely boxes alone. Reach for extras: a code window with the one line picked out, a note hung off a dashed line, a key panel down the side, a strip along the foot, a rule between two halves.",
+    "Give the one path the picture is about a thicker line with width 3 or 4, and leave everything else at 1.",
   ],
   limits: {
     nodes: MAX_NODES,

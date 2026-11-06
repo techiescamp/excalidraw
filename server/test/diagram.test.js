@@ -645,6 +645,76 @@ describe("blueprint diagrams", () => {
     assert.equal(picture.y, 140, "centred in the slot it was given");
   });
 
+  it("draws the pieces that are not boxes", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [{ id: "a", label: "A", at: { x: 400, y: 400 } }],
+      edges: [{ from: "why", to: "a", style: "dashed", route: "straight" }],
+      extras: [
+        {
+          kind: "code",
+          at: { x: 0, y: 0, w: 400 },
+          lines: ["kind: Pod", "spec:", "  hostUsers: false"],
+          highlight: [3],
+        },
+        {
+          kind: "note",
+          id: "why",
+          at: { x: 700, y: 400, w: 320 },
+          heading: "What this is",
+          text: "A card the drawing hangs off a dashed line.",
+          status: "ok",
+        },
+        {
+          kind: "panel",
+          at: { x: 700, y: 700, w: 300 },
+          heading: "Key",
+          rows: [{ chip: "green", label: "Starts" }, { label: "No chip" }],
+        },
+        { kind: "band", at: { x: 0, y: 1000, w: 600 }, text: "the footer line" },
+        { kind: "divider", at: { x: 650, y: 0, h: 900 } },
+        { kind: "measure", at: { x: 0, y: 900, w: 300 }, label: "30s" },
+        { kind: "text", at: { x: 0, y: 940 }, text: "loose words", size: "small" },
+      ],
+    });
+    const words = scene.elements
+      .filter((e) => e.type === "text")
+      .map((e) => e.text);
+    assert.ok(words.includes("kind: Pod\nspec:\n  hostUsers: false"));
+    assert.ok(words.includes("What this is"));
+    assert.ok(words.includes("Key"));
+    assert.ok(words.includes("the footer line"));
+    assert.ok(words.includes("30s"));
+    assert.ok(words.includes("loose words"));
+    // The window has its three lights and a band behind the line picked out.
+    assert.equal(
+      scene.elements.filter((e) => e.type === "ellipse" && e.width === 16)
+        .length,
+      3,
+    );
+    assert.ok(
+      scene.elements.some(
+        (e) => e.type === "rectangle" && e.backgroundColor === "#6b5b3e",
+      ),
+      "the highlighted line is banded",
+    );
+    // The rule is a line, and the arrow from the note found the note.
+    assert.ok(scene.elements.some((e) => e.type === "line" && e.height === 900));
+    const arrow = scene.elements.find(
+      (e) => e.type === "arrow" && e.strokeStyle === "dashed",
+    );
+    assert.ok(arrow, "an arrow can be pointed at a note by its id");
+    // A card given a width wraps to it rather than to a fixed count.
+    const body = scene.elements.find(
+      (e) => e.type === "text" && e.text.startsWith("A card"),
+    );
+    const lines = body.text.split("\n");
+    assert.ok(
+      lines.some((line) => line.length > 28),
+      "it wrapped to the width it was given, not to a fixed count",
+    );
+  });
+
   it("says what it could not do rather than silently dropping it", () => {
     const warnings = [];
     buildDiagram(

@@ -120,6 +120,13 @@ const edgeSchema = z.object({
     .describe("Step number in a request flow; drawn as a badge on the arrow"),
   style: z.enum(["solid", "dashed"]).optional(),
   color: z.string().optional(),
+  width: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .optional()
+    .describe("Line thickness. 1 is the default; use 3 or 4 for the main path of a workflow."),
   route: z
     .enum(["orthogonal", "straight"])
     .optional()
@@ -243,6 +250,50 @@ const specSchema = {
     .optional()
     .describe(
       "Boundaries that hold nodes and other boundaries: a cloud, an account, a cluster, a node",
+    ),
+  extras: z
+    .array(
+      z.object({
+        kind: z
+          .enum(["note", "code", "panel", "band", "divider", "measure", "text"])
+          .describe(
+            "note: a card saying what something is. code: a terminal window with lines, and highlight to pick one out. panel: a key down the side, heading plus rows. band: a strip across the foot of the page. divider: a plain rule between two halves. measure: a span with a head at each end and its size above. text: words on their own.",
+          ),
+        id: z
+          .string()
+          .optional()
+          .describe("Name it and an edge can point an arrow at it"),
+        at: z.object({
+          x: z.number(),
+          y: z.number(),
+          w: z.number().optional(),
+          h: z.number().optional(),
+        }),
+        heading: z.string().optional(),
+        text: z.string().optional(),
+        label: z.string().optional().describe("For measure"),
+        title: z.string().optional().describe("For code, set inside the window"),
+        lines: z.array(z.string()).optional().describe("For code"),
+        highlight: z
+          .array(z.number().int())
+          .optional()
+          .describe("For code: line numbers to pick out, counting from 1"),
+        rows: z
+          .array(z.object({ chip: z.string().optional(), label: z.string() }))
+          .optional()
+          .describe("For panel"),
+        color: z.string().optional(),
+        style: z.enum(["solid", "dashed"]).optional(),
+        status: z
+          .enum(["ok", "bad"])
+          .optional()
+          .describe("For note: a tick or a cross on the card"),
+        size: z.enum(["small", "normal", "large"]).optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "The pieces that are not boxes: notes, code windows, side panels, a footer strip, a rule, a measured span, loose words. Each carries its own at: {x, y}.",
     ),
   legend: z
     .boolean()
@@ -601,7 +652,8 @@ export function installMcp(
                 "4. Say what each connection is with kind: sync for a request, async for a watch or a background flow, primary for the main data path, bidirectional for both ways.",
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
                 "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
-                "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know.",
+                "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know, or build your own with an extras panel.",
+                "7b. A workflow or an explainer is rarely boxes alone. extras carries the rest: a code window with one line picked out, a note hung off a dashed arrow, a key panel down the side, a strip along the foot of the page, a rule between two halves, a measured span. Each takes its own at: {x, y}, and one with an id can have an arrow pointed at it.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
                 "",

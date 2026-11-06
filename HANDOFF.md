@@ -95,6 +95,45 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the pieces that are not boxes, for the workflow and explainer pictures
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The owner asked for a full pass over their folder, since not all of it is
+architecture. Ten more were read — complex_workflows, SDLC vs MDLC, pod_starts,
+Pod Graceful Shutdown, Canary vs Shadow, Image Signing, Argo DAG, Helm Chart
+Structure, User Namespaces, GPU Training — and the finding is in
+`docs/specs/diagram-house-style.md`: the workflows and explainers are built from
+the same boxes and arrows plus a small set of pieces that are not boxes.
+
+All of them are now in the tool, as `extras`, each carrying its own `at`:
+
+- **code** — a dark window with the three lights, an optional title inside, and
+  `highlight` to band one line in amber.
+- **note** — a card with a heading and words, optionally dashed, optionally
+  with a tick or a cross on it. Give it an `id` and an arrow can point at it.
+- **panel** — a key down the side: a heading and rows of coloured chip plus
+  words.
+- **band** — a strip across the foot of the page.
+- **divider** — a plain rule between two halves being compared.
+- **measure** — a span with a head at each end and its size written above.
+- **text** — loose words in a colour.
+
+An edge also takes `width` from 1 to 4, for the one path a workflow is about.
+
+A card given a width now wraps its words to that width; wrapping to a fixed
+count is how a wide note came out as a narrow column inside a wide box.
+
+Checks: server suite 103 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. One new test covers every piece, the arrow pointed at a note by its id,
+the banded line in the code window, and the wrapping.
+
+By hand on the local fixture: the Argo Workflows DAG redrawn with the new
+pieces and put beside the published one.
+
+Left undone: the curved hand-drawn callout arrow (these are straight or
+right-angled), and the chip grid inside a box that SDLC vs MDLC uses.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: icons keep the shape they were drawn at
 
 Same branch and PR #15. Not released; nothing on production has changed.

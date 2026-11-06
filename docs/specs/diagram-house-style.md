@@ -159,6 +159,33 @@ can be told to stop deciding:
   a row of them is straight in every reference diagram there is, and forcing
   those into elbows is what makes a copy look nothing like the original.
 
+## The other kinds of picture in the folder
+
+Read from a second pass over the folder: `complex_workflows`, `SDLC vs MDLC`,
+`pod_starts`, `Kubernetes Pod Graceful Shutdown`, `Canary vs Shadow
+Deployment`, `Image Signing and Attestations`, `Argo Workflows (DAG)`,
+`Helm Chart Structure`, `Secure Kubernetes With User Namespaces`, `From CPU to
+Distributed GPU Training`.
+
+Not all of these are architecture. They are workflows, comparisons and
+explainers, and what they have that an architecture diagram does not is a small
+set of pieces that are not boxes:
+
+| Piece | Where it was seen |
+|---|---|
+| **A code window** — dark, three lights, one line picked out in amber | complex_workflows, pod_starts, User Namespaces, Gateway API, HPA |
+| **A note** — a card saying what one part is, hung off a dashed or curved line, sometimes with a tick or a cross | complex_workflows, Canary vs Shadow, Argo DAG, User Namespaces |
+| **A panel** — a key down the side: a heading and rows of coloured chip plus words | Argo DAG (twice), Istio, Service Anatomy |
+| **A strip across the foot** of the page, carrying the one line to leave with | Graceful Shutdown |
+| **A rule** between two halves being compared, with no boxes around them | Canary vs Shadow |
+| **A measured span** — a line with a head at each end and its size above | Graceful Shutdown |
+| **Loose coloured words** pointing at something | Image Signing, GPU Training, User Namespaces |
+| **A thick line for the one path** the picture is about | Argo DAG |
+
+All of these are now in the drawing tool as `extras`, each with its own
+`at: {x, y}`, and one given an `id` can have an arrow pointed at it. An edge
+takes a `width` from 1 to 4 for the main path.
+
 ## What is not being built
 
 - The isometric 3D illustrations. Those are drawn by hand, or are stock art;
