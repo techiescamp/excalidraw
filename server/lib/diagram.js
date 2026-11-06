@@ -335,66 +335,128 @@ const layoutGroup = (zoneId, context) => {
 // Connections leave a box on one side and enter the next on the facing side,
 // turning at right angles. A diagonal arrow is the fastest way to make a
 // reference architecture look amateur.
-const route = (from, to) => {
-  const rightwards = to.x >= from.x + from.width;
-  const leftwards = from.x >= to.x + to.width;
-  if (rightwards || leftwards) {
-    const start = {
-      x: rightwards ? from.x + from.width : from.x,
-      y: snap(from.y + from.height / 2),
-    };
-    const end = {
-      x: rightwards ? to.x : to.x + to.width,
-      y: snap(to.y + to.height / 2),
-    };
-    const turn = snap((start.x + end.x) / 2) - start.x;
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    return {
-      start,
-      end,
-      points:
-        dy === 0
-          ? [
-              [0, 0],
-              [dx, 0],
-            ]
-          : [
-              [0, 0],
-              [turn, 0],
-              [turn, dy],
-              [dx, dy],
-            ],
-    };
-  }
-  const downwards = to.y >= from.y + from.height;
-  const start = {
-    x: snap(from.x + from.width / 2),
-    y: downwards ? from.y + from.height : from.y,
-  };
-  const end = {
-    x: snap(to.x + to.width / 2),
-    y: downwards ? to.y : to.y + to.height,
-  };
-  const turn = snap((start.y + end.y) / 2) - start.y;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  return {
+const STUB = 20;
+const LANE_GAP = 40;
+// A line is treated as running through a box if it comes this close to it, so
+// arrows do not graze a corner or crawl along an edge.
+const CLEARANCE = 8;
+
+// Right angles only, and never through a box that is not one of the two being
+// joined. A diagram where one arrow crosses an unrelated tile is read as a
+// mistake even when the structure behind it is right, so the path is chosen by
+// trying the clean shapes in order and taking the first that touches nothing.
+const route = (from, to, obstacles = []) => {
+  const sideways = to.x >= from.x + from.width || from.x >= to.x + to.width;
+  const forward = sideways
+    ? to.x >= from.x + from.width
+    : to.y >= from.y + from.height;
+  const start = sideways
+    ? {
+        x: forward ? from.x + from.width : from.x,
+        y: snap(from.y + from.height / 2),
+      }
+    : {
+        x: snap(from.x + from.width / 2),
+        y: forward ? from.y + from.height : from.y,
+      };
+  const end = sideways
+    ? { x: forward ? to.x : to.x + to.width, y: snap(to.y + to.height / 2) }
+    : { x: snap(to.x + to.width / 2), y: forward ? to.y : to.y + to.height };
+  // One piece of routing serves both directions: u runs along the flow and v
+  // across it, so a sideways diagram and a downwards one are the same problem.
+  const u = (point) => (sideways ? point.x : point.y);
+  const v = (point) => (sideways ? point.y : point.x);
+  const at = (alongU, acrossV) =>
+    sideways ? [alongU, acrossV] : [acrossV, alongU];
+  const du = u(end) - u(start);
+  const dv = v(end) - v(start);
+  const walls = obstacles.map((box) =>
+    sideways
+      ? { u: box.x, uSize: box.width, v: box.y, vSize: box.height }
+      : { u: box.y, uSize: box.height, v: box.x, vSize: box.width },
+  );
+  const touches = (a, b, wall) =>
+    Math.min(a[0], b[0]) - CLEARANCE < wall.u + wall.uSize &&
+    Math.max(a[0], b[0]) + CLEARANCE > wall.u &&
+    Math.min(a[1], b[1]) - CLEARANCE < wall.v + wall.vSize &&
+    Math.max(a[1], b[1]) + CLEARANCE > wall.v;
+  // Offsets are measured from the start, walls in absolute terms.
+  const origin = [u(start), v(start)];
+  const clean = (path) =>
+    path.every((point, index) => {
+      if (!index) return true;
+      const a = [
+        origin[0] + path[index - 1][0],
+        origin[1] + path[index - 1][1],
+      ];
+      const b = [origin[0] + point[0], origin[1] + point[1]];
+      return walls.every((wall) => !touches(a, b, wall));
+    });
+  const built = (path) => ({
     start,
     end,
-    points:
-      dx === 0
-        ? [
-            [0, 0],
-            [0, dy],
-          ]
-        : [
-            [0, 0],
-            [0, turn],
-            [dx, turn],
-            [dx, dy],
-          ],
-  };
+    points: path.map(([a, b]) => at(a, b)),
+  });
+
+  const straight = [
+    [0, 0],
+    [du, 0],
+  ];
+  if (dv === 0 && clean(straight)) return built(straight);
+
+  // A single sideways step, taken wherever it fits: the middle first, because
+  // that is what a person would draw, then anywhere else along the run.
+  const middle = snap(du / 2);
+  const steps = [middle];
+  for (
+    let turn = Math.sign(du) * STUB;
+    Math.abs(turn) < Math.abs(du) - STUB;
+    turn += Math.sign(du) * GRID
+  )
+    if (snap(turn) !== middle) steps.push(snap(turn));
+  for (const turn of steps) {
+    const path = [
+      [0, 0],
+      [turn, 0],
+      [turn, dv],
+      [du, dv],
+    ];
+    if (clean(path)) return built(path);
+  }
+
+  // Nothing fits between the boxes, so the line leaves its box, runs in a lane
+  // clear of everything in the way, and comes back in.
+  const spanLow = Math.min(u(start), u(end));
+  const spanHigh = Math.max(u(start), u(end));
+  const inTheWay = walls.filter(
+    (wall) => wall.u < spanHigh && wall.u + wall.uSize > spanLow,
+  );
+  const across = [
+    v(start),
+    v(end),
+    ...inTheWay.flatMap((wall) => [wall.v, wall.v + wall.vSize]),
+  ];
+  const outU = du > 0 ? STUB : -STUB;
+  for (const lane of [
+    snap(Math.max(...across) + LANE_GAP),
+    snap(Math.min(...across) - LANE_GAP),
+  ].sort((a, b) => Math.abs(a - v(start)) - Math.abs(b - v(start)))) {
+    const path = [
+      [0, 0],
+      [outU, 0],
+      [outU, lane - v(start)],
+      [du - outU, lane - v(start)],
+      [du - outU, dv],
+      [du, dv],
+    ];
+    if (clean(path)) return built(path);
+  }
+  return built([
+    [0, 0],
+    [middle, 0],
+    [middle, dv],
+    [du, dv],
+  ]);
 };
 
 const plainText = (
@@ -555,6 +617,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   const boxes = new Map();
   const elements = [];
   const files = {};
+  // Things a step badge must not cover: tiles and the names of boundaries.
+  const keepClear = [];
 
   // Boundaries are drawn first so every tile sits on top of the one holding it.
   for (const rect of layout.rects) {
@@ -573,17 +637,17 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       roughness: 0,
       roundness: { type: 3 },
     });
-    elements.push(
-      container,
-      plainText(
-        rect.zone.label,
-        rect.x + 16,
-        rect.y + 12,
-        fontFamily,
-        ZONE_LABEL_SIZE,
-        level.stroke,
-      ),
+    const name = plainText(
+      rect.zone.label,
+      rect.x + 16,
+      rect.y + 12,
+      fontFamily,
+      ZONE_LABEL_SIZE,
+      level.stroke,
     );
+    // A boundary's own name is as unwelcome under a step badge as a tile is.
+    keepClear.push(name);
+    elements.push(container, name);
   }
 
   for (const node of nodes) {
@@ -616,6 +680,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       roundness: shape === "rectangle" ? { type: 3 } : null,
     });
     boxes.set(node.id, box);
+    keepClear.push(box);
     elements.push(box);
     if (size.art) {
       // The icon sits in from the left edge and the label beside it, the way a
@@ -679,7 +744,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           ", ",
         )}. Drawn as a plain arrow.`,
       );
-    const path = route(from, to);
+    // Every other box is something this arrow must go around.
+    const path = route(
+      from,
+      to,
+      [...boxes.values()].filter((box) => box !== from && box !== to),
+    );
     const stroke =
       edge.color ||
       (kind?.color ?? null) ||
@@ -687,8 +757,14 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const arrow = element("arrow", {
       x: path.start.x,
       y: path.start.y,
-      width: Math.abs(path.end.x - path.start.x),
-      height: Math.abs(path.end.y - path.start.y),
+      // The shape a routed line actually covers, not the gap between its ends:
+      // a label bound to the arrow is placed inside this.
+      width:
+        Math.max(...path.points.map(([x]) => x)) -
+        Math.min(...path.points.map(([x]) => x)),
+      height:
+        Math.max(...path.points.map(([, y]) => y)) -
+        Math.min(...path.points.map(([, y]) => y)),
       points: path.points,
       strokeColor: stroke,
       strokeWidth: kind?.strokeWidth || 2,
@@ -740,26 +816,58 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       elements.push(text);
     }
     if (edge.step !== undefined && edge.step !== null)
-      badges.push({ step: edge.step, at: path.start, heading: path.points[1] });
+      badges.push({
+        step: edge.step,
+        // The whole line, so a number crowded out at one end can move along it.
+        corners: path.points.map(([x, y]) => ({
+          x: path.start.x + x,
+          y: path.start.y + y,
+        })),
+      });
   }
 
   // Numbered steps, drawn clear of the line they belong to.
   badges.sort((a, b) => Number(a.step) - Number(b.step));
+  // Text is measured by an average letter width, so a name can render a little
+  // wider than it was counted. The gap a badge keeps covers that difference.
+  const BADGE_GAP = 12;
+  const unoccupied = (x, y) =>
+    keepClear.every(
+      (other) =>
+        x >= other.x + other.width + BADGE_GAP ||
+        x + BADGE + BADGE_GAP <= other.x ||
+        y >= other.y + other.height + BADGE_GAP ||
+        y + BADGE + BADGE_GAP <= other.y,
+    );
   for (const badge of badges) {
-    // Beside the line it belongs to and clear of the box it leaves, so a badge
-    // never sits on top of either.
-    const [headX, headY] = badge.heading || [0, 0];
-    const sideways = headX !== 0;
-    const x = sideways
-      ? headX > 0
-        ? badge.at.x + 12
-        : badge.at.x - BADGE - 12
-      : badge.at.x + 12;
-    const y = sideways
-      ? badge.at.y - BADGE - 12
-      : headY > 0
-      ? badge.at.y + 12
-      : badge.at.y - BADGE - 12;
+    // Beside the line it belongs to, never on top of a tile or a boundary's
+    // name. The places are tried from the start of the line outwards, because a
+    // number that has drifted down the line no longer says which step it is.
+    const spots = [];
+    for (let at = 0; at < badge.corners.length - 1; at += 1) {
+      const from = badge.corners[at];
+      const to = badge.corners[at + 1];
+      const sideways = from.y === to.y;
+      for (const along of [0.15, 0.5, 0.85]) {
+        const point = {
+          x: from.x + (to.x - from.x) * along,
+          y: from.y + (to.y - from.y) * along,
+        };
+        const sides = sideways
+          ? [point.y - BADGE - 12, point.y + 12]
+          : [point.x + 12, point.x - BADGE - 12];
+        for (const across of sides)
+          spots.push(
+            sideways
+              ? [point.x - BADGE / 2, across]
+              : [across, point.y - BADGE / 2],
+          );
+      }
+    }
+    const [x, y] = spots.find(([across, down]) =>
+      unoccupied(snap(across), snap(down)),
+    ) ||
+      spots[0] || [badge.corners[0].x, badge.corners[0].y];
     const circle = element("ellipse", {
       x: snap(x),
       y: snap(y),

@@ -75,7 +75,9 @@ const nodeSchema = z.object({
   icon: z
     .string()
     .optional()
-    .describe("Icon drawn inside the box, as set/name, e.g. logos/kubernetes"),
+    .describe(
+      "Picture drawn inside the box. An exact name like logos/kubernetes, or plain words for what it is — database, message queue, load balancer — and the closest icon in the library is used.",
+    ),
 });
 const edgeSchema = z.object({
   from: z.string(),
@@ -189,14 +191,19 @@ export function installMcp(
   const artwork = async (workspace, spec, warnings = []) => {
     const found = new Map();
     const missing = new Set();
+    const swapped = [];
     if (!icons) return found;
     for (const node of spec?.nodes || []) {
       if (!node?.icon || found.has(node.icon) || missing.has(node.icon))
         continue;
       try {
-        const art = await icons.iconData(workspace, node.icon);
-        if (art) found.set(node.icon, art);
-        else missing.add(node.icon);
+        // Plain words are accepted, not only exact names: a description asking
+        // for "the queue" gets whichever picture in the library means that.
+        const art = await icons.findIcon(workspace, node.icon, node.label);
+        if (art) {
+          found.set(node.icon, art);
+          if (art.matched) swapped.push([node.icon, art.ref]);
+        } else missing.add(node.icon);
       } catch {
         // a missing icon never fails the drawing; the box is simply drawn plain
         missing.add(node.icon);
@@ -206,8 +213,12 @@ export function installMcp(
     // can fix on its next call, but only if it is told.
     for (const name of missing)
       warnings.push(
-        `No icon named "${name}" in this workspace. The box was drawn without one; list_icons shows what is there.`,
+        `Nothing in this workspace's icon library means "${name}". That box was drawn without an icon; list_icons searches the library by meaning.`,
       );
+    // A substitution is not a fault, but the caller asked for one picture and
+    // got another, so it is told which — it may know a better word to use.
+    for (const [asked, used] of swapped)
+      warnings.push(`Used ${used} for "${asked}".`);
     return found;
   };
 
@@ -364,26 +375,58 @@ export function installMcp(
     server.registerTool(
       "list_icons",
       {
-        title: "List available icons",
+        title: "Find icons",
         description:
-          "Icons this workspace can draw with, named set/name. Use one in a node's icon field.",
+          "Icons this workspace can draw with. Search in plain words — what the thing is, not what the file is called — and the closest icons come back best first: \"database\" finds postgresql, \"queue\" finds kafka. Put the answer in a node's icon field, or put the plain words there and the same search runs while drawing.",
         inputSchema: {
-          search: z.string().optional().describe("Filter by words in the name"),
+          search: z
+            .string()
+            .optional()
+            .describe(
+              "What you want a picture of, e.g. database, message queue, load balancer, user",
+            ),
         },
         outputSchema: {
           icons: z.array(z.string()),
+          matches: z
+            .array(
+              z.object({
+                ref: z.string(),
+                name: z.string(),
+                category: z.string(),
+              }),
+            )
+            .optional(),
           fetching_allowed: z.boolean(),
         },
       },
       async ({ search }) => {
         const workspace = await workspaceFor(context);
+        const allowed = icons ? (await icons.settings()).fetch_enabled : false;
+        // Without words, the library itself; with words, what they mean.
+        const matches =
+          search && icons ? await icons.matchIcons(workspace, search, 20) : [];
+        if (search && icons) {
+          const result = {
+            icons: matches.map((match) => match.ref),
+            matches: matches.map(({ ref, name, category }) => ({
+              ref,
+              name,
+              category,
+            })),
+            fetching_allowed: Boolean(allowed),
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+            structuredContent: result,
+          };
+        }
         const { rows } = await db.query(
           `SELECT set_name||'/'||name AS ref FROM icons
-           WHERE workspace_id=$1 AND ($2::text IS NULL OR name ILIKE '%'||$2||'%')
+           WHERE workspace_id=$1 OR shared
            ORDER BY set_name,name LIMIT 200`,
-          [workspace, search || null],
+          [workspace],
         );
-        const allowed = icons ? (await icons.settings()).fetch_enabled : false;
         const result = {
           icons: rows.map((row) => row.ref),
           fetching_allowed: Boolean(allowed),
@@ -433,12 +476,14 @@ export function installMcp(
                 "3. Give every node a role rather than a colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. One role always looks the same, which is what lets a reader learn the drawing in two seconds.",
                 "4. Say what each connection is with kind: sync for a request, async for a watch or a background flow, primary for the main data path, bidirectional for both ways.",
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
-                "6. Put an icon from this workspace's library on the nodes that are named products. list_icons shows what is there.",
+                "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; list_icons searches the same way if you want to see the choices first.",
                 "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
                 "",
-                "When somebody gives you a picture and asks for one like it: read the picture and write down what it contains, then send that as the description. List the boundaries you can see, what sits inside each one, which way the arrows point, and what the numbers on them say. Name the roles from what each box is, not from the colour it happens to have in the picture. The result will be a clean redrawing of the same structure, not a copy of the image.",
+                "When somebody gives you a picture and asks for one like it: read the picture and write down what it contains, then send that as the description. List the boundaries you can see, what sits inside each one, which way the arrows point, and what the numbers on them say. Name the roles from what each box is, not from the colour it happens to have in the picture. Name an icon for every box that is a product, using the words on the box. The result will be a clean redrawing of the same structure, not a copy of the image.",
+                "",
+                "Whoever asked may want a particular look. Pass it in style: font for the lettering (drawing_style_guide lists the fonts), background for the canvas, sketchy for the hand-drawn look, brand for a small mark in the corner. Leave these out and the workspace default is used; set them when you have been told what to use, and keep them the same across a set of drawings that belong together.",
                 "",
                 "Every create_drawing and update_drawing answers with any warnings. Read them: they say what could not be done, such as an icon this workspace does not have. Fix the description and call update_drawing on the same drawing rather than making a second one.",
               ].join("\n"),

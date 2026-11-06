@@ -95,6 +95,47 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the MCP draws blueprints, and finds its own icons
+
+Branch off `main`, PR #15. Not released; nothing on production has changed.
+
+- **The drawing engine draws reference architectures, not flowcharts.** Grid of
+  20px, boundaries nested four levels with their own fill and padding, colour
+  decided by a node's *role* rather than named per box, right-angled arrows,
+  numbered step badges, a legend, a title banner, a brand mark, and the icon
+  inset on the left of a tile with the label beside it.
+- **Arrows go around boxes they do not belong to.** The router tries straight,
+  then one turn in the gap, then a turn anywhere else along the run, and failing
+  all of those takes the line out into a clear lane and back in. Before this, a
+  long arrow cut straight through whatever tile happened to be in the way, which
+  is what the first drawing on the local instance showed.
+- **Step badges move until they are clear.** A badge is offered every place
+  along its own line and takes the first that covers no tile and no boundary
+  name.
+- **Icons are found by meaning.** A node asks for "database", "message queue",
+  "load balancer", "k8s" and the closest icon in the workspace library is used.
+  Words that mean the same thing are grouped; a shared set or category is *not*
+  enough to substitute, so unrelated words leave the box plain instead of
+  reaching for whatever is nearest. The box's own label settles a tie, so a tile
+  labelled Prometheus asking for "metrics" does not come back with Grafana.
+  `list_icons` searches the same way, and every substitution is reported back in
+  the drawing's warnings.
+- **`diagram_rules` prompt** carries the house rules, including how to turn a
+  picture somebody sends into a description this server can draw, and how to
+  pass a font, background or brand when the asker wants a particular look.
+
+Checked: `server` suite 85 pass / 0 fail with `TEST_DATABASE_URL` set
+(`excalidraw-ghostfix/server`, `npm test`), `yarn test:typecheck`, `yarn fix`.
+Red-before-green proved for the meaning matching (the sibling-word bonus
+disabled → 4 subtests fail) and for the router (obstacles withheld → the
+crossing test fails). Then by hand on the local fixture instance: a twelve-box
+Kubernetes request path drawn through the MCP with **every icon asked for in
+plain words**, all twelve resolved, and the result read in the editor — nested
+boundaries, no arrow through a tile, no badge on a tile.
+
+Left: `create_drawing` still cannot show the assistant what it drew, so it
+cannot judge its own work. That is the next step and it is not started.
+
 ### 2026-10-30/31 — Claude — v5.1.0, v5.2.0, v5.3.0: snap, icon scrolling, icon delete
 
 Three small releases, each one file of behaviour, all built and deployed through

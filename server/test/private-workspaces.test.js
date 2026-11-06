@@ -2355,6 +2355,58 @@ test("private workspace backend", async (t) => {
         ).body.scene.elements.filter((e) => e.type === "image").length,
         0,
       );
+      // The point of matching by meaning: an assistant describing a diagram
+      // writes what a box is, not what this library happens to call the
+      // picture. Nothing here is named "virtual machine".
+      const found = await rpc("list_icons", { search: "virtual machine" }, 4);
+      assert.deepEqual(
+        found.result.structuredContent.icons,
+        ["testpack/server"],
+        "searching by meaning finds the icon under its own name",
+      );
+      const matched = await rpc(
+        "create_drawing",
+        {
+          name: "Icon by meaning",
+          nodes: [{ id: "a", label: "Host", icon: "compute instance" }],
+        },
+        5,
+      );
+      const drawnByMeaning = (
+        await call(`/scenes/${matched.result.structuredContent.id}/export`, {
+          cookie: admin,
+        })
+      ).body;
+      assert.equal(
+        drawnByMeaning.elements.filter((e) => e.type === "image").length,
+        1,
+        "plain words still put an icon in the box",
+      );
+      assert.ok(
+        matched.result.structuredContent.warnings.some((line) =>
+          line.includes("Used testpack/server"),
+        ),
+        "and the drawing says which picture it used",
+      );
+      // Words with nothing to do with the library leave the box plain rather
+      // than reaching for whatever is nearest.
+      const unrelated = await rpc(
+        "create_drawing",
+        {
+          name: "Nothing like it",
+          nodes: [{ id: "a", label: "Payroll", icon: "quarterly revenue" }],
+        },
+        6,
+      );
+      assert.equal(
+        (
+          await call(
+            `/scenes/${unrelated.result.structuredContent.id}/export`,
+            { cookie: admin },
+          )
+        ).body.elements.filter((e) => e.type === "image").length,
+        0,
+      );
     },
   );
   await t.test(

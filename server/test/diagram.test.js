@@ -48,6 +48,61 @@ describe("blueprint diagrams", () => {
       });
   });
 
+  it("never runs an arrow through a box it does not belong to", () => {
+    // A row of boxes with a line that has to get from one end to the other:
+    // the straight path across is exactly the one that would cut through the
+    // three boxes in between.
+    const scene = buildDiagram({
+      title: "Long hop",
+      nodes: [
+        { id: "a", label: "Ingress", role: "gateway" },
+        { id: "b", label: "Event Bus", role: "data-plane" },
+        { id: "c", label: "Order API", role: "data-plane" },
+        { id: "d", label: "Orders DB", role: "storage" },
+      ],
+      edges: [
+        { from: "a", to: "b" },
+        { from: "b", to: "c" },
+        { from: "c", to: "d" },
+        { from: "a", to: "d", label: "health check" },
+      ],
+    });
+    const boxes = scene.elements.filter(
+      (element) => element.type === "rectangle" && element.width <= 400,
+    );
+    const arrows = scene.elements.filter((e) => e.type === "arrow");
+    assert.equal(arrows.length, 4);
+    for (const arrow of arrows) {
+      // The two boxes this arrow joins are the ones it starts and ends on.
+      const ends = arrow.points.map(([x, y]) => [arrow.x + x, arrow.y + y]);
+      const joined = boxes.filter((box) =>
+        ends.some(
+          ([x, y]) =>
+            x >= box.x - 1 &&
+            x <= box.x + box.width + 1 &&
+            y >= box.y - 1 &&
+            y <= box.y + box.height + 1,
+        ),
+      );
+      for (let at = 1; at < ends.length; at += 1) {
+        const [ax, ay] = ends[at - 1];
+        const [bx, by] = ends[at];
+        for (const box of boxes) {
+          if (joined.includes(box)) continue;
+          const crosses =
+            Math.min(ax, bx) < box.x + box.width &&
+            Math.max(ax, bx) > box.x &&
+            Math.min(ay, by) < box.y + box.height &&
+            Math.max(ay, by) > box.y;
+          assert.ok(
+            !crosses,
+            `an arrow runs through the box at ${box.x},${box.y}`,
+          );
+        }
+      }
+    }
+  });
+
   it("colours a node by its role, the same way every time", () => {
     const scene = buildDiagram(spec());
     const boxes = scene.elements.filter((e) => e.type === "rectangle");
@@ -99,6 +154,46 @@ describe("blueprint diagrams", () => {
       .map((text) => text.text)
       .sort();
     assert.deepEqual(numbers, ["1", "2"]);
+  });
+
+  it("keeps a step number off the tiles and the boundary names", () => {
+    // Boxes packed inside a boundary, so the first place a badge would like to
+    // sit is already taken.
+    const scene = buildDiagram({
+      title: "Crowded",
+      zones: [{ id: "cluster", label: "Kubernetes Cluster", level: 2 }],
+      nodes: [
+        { id: "lb", label: "Ingress", role: "gateway" },
+        { id: "bus", label: "Event Bus", role: "data-plane", zone: "cluster" },
+        { id: "api", label: "Order API", role: "data-plane", zone: "cluster" },
+        { id: "db", label: "Orders DB", role: "storage", zone: "cluster" },
+      ],
+      edges: [
+        { from: "lb", to: "api", step: 1 },
+        { from: "api", to: "bus", step: 2 },
+        { from: "api", to: "db", step: 3 },
+        { from: "bus", to: "db", step: 4 },
+      ],
+    });
+    const badges = scene.elements.filter((e) => e.type === "ellipse");
+    assert.equal(badges.length, 4);
+    const tiles = scene.elements.filter(
+      (e) => e.type === "rectangle" && e.width <= 400 && e.strokeWidth === 2,
+    );
+    const names = scene.elements.filter(
+      (e) => e.type === "text" && e.text === "Kubernetes Cluster",
+    );
+    for (const badge of badges)
+      for (const other of [...tiles, ...names])
+        assert.ok(
+          badge.x >= other.x + other.width ||
+            badge.x + badge.width <= other.x ||
+            badge.y >= other.y + other.height ||
+            badge.y + badge.height <= other.y,
+          `step ${
+            scene.elements.find((e) => e.containerId === badge.id)?.text
+          } sits on top of something`,
+        );
   });
 
   it("draws a key when the drawing is asked for one", () => {

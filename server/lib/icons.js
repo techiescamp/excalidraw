@@ -31,6 +31,151 @@ const WORKSPACE_ICON_MIMES = new Set([
 ]);
 const REF = /^[a-z0-9][a-z0-9_-]{0,59}\/[a-z0-9][a-z0-9._-]{0,79}$/i;
 const TIMEOUT_MS = 8000;
+
+// Matching an icon by meaning rather than by name. An assistant describing a
+// diagram knows it wants "a database" or "the queue"; it does not know that this
+// library calls that picture logos/postgresql. Asking it to list every icon and
+// guess is how boxes end up with no icon at all, so the words it used are
+// matched against every name, label and category in the library, and words that
+// mean the same thing are treated as the same word.
+//
+// Each group is one idea. A word from a group matches any other word in it, at
+// a lower score than a direct hit, so "database" finds postgresql but an icon
+// actually called "database" still wins.
+const MEANINGS = [
+  ["database", "db", "postgres", "postgresql", "mysql", "mariadb", "sqlite", "oracle", "mssql", "rds", "sql"],
+  ["nosql", "mongodb", "mongo", "dynamodb", "cassandra", "couchdb", "firestore"],
+  ["cache", "caching", "redis", "memcached", "varnish", "valkey"],
+  ["queue", "messaging", "broker", "kafka", "rabbitmq", "sqs", "nats", "pubsub", "activemq", "events"],
+  ["kubernetes", "k8s", "eks", "gke", "aks", "openshift", "rancher", "cluster"],
+  ["container", "containers", "docker", "podman", "containerd", "image", "registry"],
+  ["gateway", "ingress", "loadbalancer", "balancer", "lb", "nginx", "haproxy", "traefik", "envoy", "elb", "alb", "apigateway", "kong"],
+  ["cdn", "edge", "cloudflare", "fastly", "akamai", "cloudfront"],
+  ["storage", "object", "bucket", "blob", "s3", "minio", "spaces", "disk", "volume", "efs", "nfs"],
+  ["cicd", "ci", "cd", "pipeline", "build", "jenkins", "argocd", "argo", "gitlab", "circleci", "travis", "tekton", "spinnaker", "actions"],
+  ["git", "repo", "repository", "source", "github", "bitbucket", "gitea"],
+  ["monitoring", "metrics", "observability", "prometheus", "grafana", "datadog", "newrelic", "thanos", "cloudwatch"],
+  ["logs", "logging", "elasticsearch", "opensearch", "loki", "kibana", "splunk", "fluentd", "fluentbit"],
+  ["tracing", "trace", "jaeger", "zipkin", "opentelemetry", "otel"],
+  ["alerting", "alert", "pagerduty", "opsgenie", "alertmanager", "bell", "notification"],
+  ["auth", "authentication", "identity", "sso", "oauth", "oidc", "keycloak", "auth0", "okta", "ldap", "iam", "login"],
+  ["secrets", "secret", "vault", "credentials", "key", "lock", "certificate", "tls", "ssl"],
+  ["security", "firewall", "waf", "shield", "guard", "protection"],
+  ["cloud", "aws", "amazon", "gcp", "google", "azure", "digitalocean", "oracle", "linode", "hetzner"],
+  ["dns", "domain", "route53", "coredns", "bind", "nameserver"],
+  ["server", "vm", "instance", "ec2", "droplet", "host", "machine", "compute", "node"],
+  ["serverless", "lambda", "function", "functions", "cloudrun", "fargate"],
+  ["user", "users", "person", "people", "client", "customer", "browser", "chrome", "firefox", "laptop", "desktop", "visitor", "developer"],
+  ["mobile", "phone", "android", "ios", "apple", "app"],
+  ["api", "rest", "graphql", "grpc", "endpoint", "service", "backend", "openapi", "swagger"],
+  ["frontend", "web", "website", "ui", "react", "vue", "angular", "svelte", "nextjs"],
+  ["mail", "email", "smtp", "ses", "sendgrid", "mailgun", "postfix"],
+  ["chat", "slack", "discord", "teams", "telegram", "whatsapp"],
+  ["terraform", "infrastructure", "iac", "ansible", "pulumi", "cloudformation", "puppet", "chef", "helm"],
+  ["linux", "ubuntu", "debian", "centos", "rhel", "redhat", "alpine", "fedora", "suse"],
+  ["language", "node", "nodejs", "python", "java", "golang", "go", "rust", "ruby", "php", "dotnet", "typescript", "javascript"],
+  ["ai", "llm", "model", "claude", "anthropic", "openai", "gpt", "gemini", "ollama"],
+  ["payment", "billing", "stripe", "paypal", "invoice", "card"],
+  ["analytics", "report", "dashboard", "chart", "bigquery", "snowflake", "warehouse", "etl", "airflow", "spark"],
+  ["mesh", "istio", "linkerd", "consul", "sidecar", "proxy"],
+  ["test", "testing", "qa", "jest", "cypress", "playwright", "selenium"],
+];
+const MEANING_OF = (() => {
+  const index = new Map();
+  MEANINGS.forEach((group, id) => {
+    for (const word of group) {
+      const groups = index.get(word) || [];
+      groups.push(id);
+      index.set(word, groups);
+    }
+  });
+  return index;
+})();
+const words = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+// "k8s" and "s3" carry meaning; one-letter fragments do not.
+const meaningful = (list) => list.filter((word) => word.length > 1);
+
+// How well one icon answers the words asked for, and how much else its own name
+// says besides. Strength is the match; the penalty only separates two icons that
+// match equally, so it is kept apart rather than folded in.
+function weigh(query, icon) {
+  const none = { strength: 0, penalty: 0 };
+  const asked = meaningful(words(query));
+  if (!asked.length) return none;
+  const ref = `${icon.set_name}/${icon.name}`.toLowerCase();
+  if (query.trim().toLowerCase().replace(":", "/") === ref)
+    return { strength: 100, penalty: 0 };
+  const name = words(icon.name);
+  const shown = words(icon.display_name);
+  const own = new Set([...name, ...shown]);
+  const near = new Set();
+  for (const word of own)
+    for (const group of MEANING_OF.get(word) || [])
+      for (const sibling of MEANINGS[group]) near.add(sibling);
+  const set = words(icon.set_name);
+  const category = words(icon.category);
+  let strength = 0;
+  for (const word of asked) {
+    if (own.has(word)) strength += 300;
+    else if (near.has(word)) strength += 120;
+    else if ([...own].some((had) => had.includes(word) || word.includes(had)))
+      strength += 90;
+    // A set or category is matched loosely on purpose: a library files things
+    // under "Databases" and nobody asks for a "databases".
+    else if (set.some((had) => had.includes(word) || word.includes(had)))
+      strength += 40;
+    else if (category.some((had) => had.includes(word) || word.includes(had)))
+      strength += 30;
+  }
+  if (!strength) return none;
+  // Of two icons that answer equally well, the one whose own name says less
+  // besides is the closer match: "redis" over "redis-cluster-failover".
+  return { strength, penalty: Math.min(99, own.size * 2 + ref.length) };
+}
+
+// One number for how well an icon answers the words. Higher is better; 0 means
+// the words have nothing to do with this icon and it must not be offered.
+export function scoreIcon(query, icon) {
+  const { strength, penalty } = weigh(query, icon);
+  return strength ? strength * 100 - penalty : 0;
+}
+
+// Below this, the words and the icon have nothing in common but a set or a
+// category. Scores are built in hundreds, so this is one loose word hit.
+export const MIN_MATCH = 9000;
+
+// Icons that answer the words, best first. Rows are whatever the library holds.
+// A hint is the words around the request — the label on the box the icon is
+// going into. It never makes a match; it only settles which of two equally good
+// matches to use, so a box labelled Prometheus asking for "metrics" does not
+// come back with Grafana.
+export function rankIcons(query, rows, limit = 8, hint = "") {
+  return rows
+    .map((icon) => ({ icon, ...weigh(query, icon) }))
+    .filter((candidate) => candidate.strength > 0)
+    .map((candidate) => ({
+      ...candidate,
+      hint: hint ? weigh(hint, candidate.icon).strength : 0,
+    }))
+    // Match first, then what the surrounding words prefer, and only then the
+    // shorter name: a hint must be able to settle a tie the name length would
+    // otherwise decide.
+    .sort(
+      (a, b) =>
+        b.strength - a.strength || b.hint - a.hint || a.penalty - b.penalty,
+    )
+    .slice(0, limit)
+    .map((hit) => ({
+      ref: `${hit.icon.set_name}/${hit.icon.name}`,
+      name: hit.icon.display_name || hit.icon.name,
+      category: hit.icon.category,
+      score: hit.strength * 100 - hit.penalty,
+    }));
+}
 // The icon source names things "set:name"; this library uses "set/name".
 const normal = (value) =>
   String(value || "")
@@ -302,6 +447,48 @@ export function installIcons(
     };
   };
 
+  // The library this workspace can draw with, for matching by meaning.
+  const libraryFor = async (workspace) => {
+    const { rows } = await db.query(
+      `SELECT DISTINCT ON (COALESCE(digest, set_name||'/'||name))
+              set_name,name,display_name,category
+         FROM icons WHERE workspace_id=$1 OR shared
+        ORDER BY COALESCE(digest, set_name||'/'||name),
+                 (workspace_id=$1) DESC, created_at ASC`,
+      [workspace],
+    );
+    return rows;
+  };
+
+  // Plain words in, icons out, best first. Used by the drawing tools so a
+  // description can ask for "the queue" and still get a picture of Kafka.
+  const matchIcons = async (workspace, query, limit = 8, hint = "") =>
+    rankIcons(String(query || ""), await libraryFor(workspace), limit, hint);
+
+  // One icon ready to embed, found by exact name or, failing that, by meaning.
+  // The reference actually used is reported back, because a diagram that
+  // quietly swapped one picture for another is worse than one that says so.
+  const findIcon = async (workspace, wanted, hint = "") => {
+    const asked = String(wanted || "").trim();
+    if (!asked) return null;
+    let words = asked;
+    if (REF.test(normal(asked))) {
+      const exact = await iconData(workspace, asked);
+      if (exact) return { ...exact, matched: false };
+      // An exact name that is not here: only the name part says what was
+      // wanted. The set it named is no reason to reach for a different picture
+      // out of the same set.
+      words = normal(asked).split("/")[1].replace(/[._-]+/g, " ");
+    }
+    const [best] = await matchIcons(workspace, words, 1, hint);
+    // A weak match is worse than no icon. Standing in for what was asked for
+    // takes a real hit on the icon's own name or on a word that means the same;
+    // sharing a set or a category is not enough.
+    if (!best || best.score < MIN_MATCH) return null;
+    const art = await iconData(workspace, best.ref);
+    return art ? { ...art, matched: true, asked } : null;
+  };
+
   app.get("/api/workspaces/:workspace/icons", auth, async (req, res) => {
     await permit(req.user, req.params.workspace, "drawing.read");
     const query = String(req.query.q || "")
@@ -546,5 +733,5 @@ export function installIcons(
     res.json({ imported: imported.length, failed, icons: imported });
   });
 
-  return { iconData, settings, REF };
+  return { iconData, findIcon, matchIcons, settings, REF };
 }
