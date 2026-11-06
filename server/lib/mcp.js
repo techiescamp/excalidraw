@@ -676,6 +676,7 @@ export function installMcp(
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
                 "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
                 "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know, or build your own with an extras panel.",
+                "6b. Copying a picture somebody sent, and its icons are not in the library? Cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and can be used by name from then on. Check the answer: a rim still solid above a few per cent means the background did not come away, so cut again with a different rectangle or tolerance before you draw with it.",
                 "7b. A workflow or an explainer is rarely boxes alone. extras carries the rest: a code window with one line picked out, a note hung off a dashed arrow, a key panel down the side, a strip along the foot of the page, a rule between two halves, a measured span. Each takes its own at: {x, y}, and one with an id can have an arrow pointed at it.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
@@ -692,6 +693,89 @@ export function installMcp(
       }),
     );
     if (context.scope === "write") {
+      server.registerTool(
+        "add_icon_from_image",
+        {
+          title: "Take an icon out of a picture",
+          description:
+            "Cut one icon out of a picture somebody sent and keep it in this workspace's icon library, so a copy of their diagram uses the icons the diagram itself used. Give the picture, the rectangle the icon sits in, and a name. The flat background behind it is removed and the result is trimmed to the artwork. The answer says how much was removed and how much of the rim is still solid: a rim above a few per cent means the background did not come away cleanly, so look at it and cut again with a different tolerance rather than drawing with it.",
+          inputSchema: {
+            image: z
+              .string()
+              .describe("The whole picture, as a data URL (PNG)"),
+            crop: z
+              .object({
+                x: z.number().describe("Pixels from the left of the picture"),
+                y: z.number().describe("Pixels from the top of the picture"),
+                w: z.number().describe("Width of the rectangle"),
+                h: z.number().describe("Height of the rectangle"),
+              })
+              .describe("The rectangle the icon sits in"),
+            name: z.string().describe("What to call it in the library"),
+            category: z
+              .string()
+              .optional()
+              .describe("Which shelf of the library it goes on"),
+            tolerance: z
+              .number()
+              .min(0)
+              .max(100)
+              .optional()
+              .describe(
+                "How far from the background colour still counts as background. 12 unless you say; raise it when a rim is left, lower it when the artwork loses its own edges.",
+              ),
+            background: z
+              .string()
+              .optional()
+              .describe(
+                "The background colour, e.g. #ffffff. Worked out from the corners unless you say.",
+              ),
+          },
+          outputSchema: {
+            ref: z.string(),
+            existing: z.boolean(),
+            width: z.number(),
+            height: z.number(),
+            background: z.string(),
+            removed: z.number(),
+            kept: z.number(),
+            edge_solid: z.number(),
+          },
+        },
+        async ({ image, crop, name, category, tolerance, background }) => {
+          if (!icons)
+            throw new Error("This workspace has no icon library.");
+          const workspace = await workspaceFor(context);
+          const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(
+            String(image || "").trim(),
+          );
+          if (!match)
+            throw new Error("Send the picture as a PNG data URL.");
+          const file = Buffer.from(match[1], "base64");
+          if (file.length > 12 * 1024 * 1024)
+            throw new Error("That picture is larger than 12 MB.");
+          const cut = await icons.iconFromPicture(workspace, {
+            file,
+            crop,
+            name,
+            category,
+            tolerance,
+            background,
+            actor: context.user.id,
+          });
+          const notes = [
+            `Kept ${cut.ref} at ${cut.width}x${cut.height}.`,
+            `${cut.removed}% of the rectangle was background (${cut.background}); ${cut.kept}% of what is left is artwork.`,
+            cut.edge_solid > 3
+              ? `${cut.edge_solid}% of the rim is still solid, so the background did not come away cleanly. Look at it before drawing with it, and try again with a different tolerance.`
+              : "The rim came away clean.",
+          ];
+          return {
+            content: [{ type: "text", text: notes.join("\n") }],
+            structuredContent: cut,
+          };
+        },
+      );
       server.registerTool(
         "create_drawing",
         {

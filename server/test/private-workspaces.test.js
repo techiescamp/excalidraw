@@ -2514,6 +2514,153 @@ test("private workspace backend", async (t) => {
     },
   );
   await t.test(
+    "an icon is cut out of a picture and kept, background and all",
+    async () => {
+      const key = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Cut key", scope: "write" },
+        })
+      ).body.token;
+      const rpc = async (name, args, id = 1) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        });
+        const text = await response.text();
+        return text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : JSON.parse(text);
+      };
+      // A page with one solid shape on it, which is what a diagram looks like
+      // to this: flat background, artwork sitting on top of it.
+      const { writePng } = await import("../lib/png.js");
+      const width = 80;
+      const height = 80;
+      const pixels = Buffer.alloc(width * height * 4);
+      for (let y = 0; y < height; y += 1)
+        for (let x = 0; x < width; x += 1) {
+          const inside = x >= 30 && x < 50 && y >= 30 && y < 50;
+          const at = (y * width + x) * 4;
+          pixels[at] = inside ? 200 : 250;
+          pixels[at + 1] = inside ? 40 : 250;
+          pixels[at + 2] = inside ? 40 : 250;
+          pixels[at + 3] = 255;
+        }
+      const image = `data:image/png;base64,${writePng({
+        width,
+        height,
+        pixels,
+      }).toString("base64")}`;
+
+      const cut = await rpc("add_icon_from_image", {
+        image,
+        crop: { x: 10, y: 10, w: 60, h: 60 },
+        name: "Cut Out Shape",
+        category: "Cutouts",
+      });
+      const made = cut.result.structuredContent;
+      assert.equal(made.width, 20, "trimmed to the shape, not the rectangle");
+      assert.equal(made.height, 20);
+      assert.equal(made.background, "#fafafa", "the page colour was worked out");
+      assert.ok(made.removed > 50, `most of it was page: ${made.removed}`);
+      assert.equal(made.kept, 100, "what is left is all artwork");
+      assert.match(made.ref, /^uploads\//);
+
+      // It is in the library, and a drawing can ask for it by name from now on.
+      const listed = await rpc("list_icons", { search: "cut out shape" }, 2);
+      assert.ok(
+        listed.result.structuredContent.icons.includes(made.ref),
+        `the cut icon is in the library: ${JSON.stringify(
+          listed.result.structuredContent.icons,
+        )}`,
+      );
+      const drawn = await rpc(
+        "create_drawing",
+        {
+          name: "Drawn with a cut icon",
+          nodes: [{ id: "a", label: "Shape", icon: "cut out shape" }],
+        },
+        3,
+      );
+      const scene = (
+        await call(`/scenes/${drawn.result.structuredContent.id}/export`, {
+          cookie: admin,
+        })
+      ).body;
+      const image_ = scene.elements.find((e) => e.type === "image");
+      assert.ok(image_, "the cut icon is drawn in the box");
+      assert.ok(
+        scene.files[image_.fileId]?.dataURL.startsWith("data:image/png"),
+        "and it travels with the drawing as a PNG",
+      );
+
+      // A rectangle with nothing but page in it is refused rather than stored.
+      const empty = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 0, y: 0, w: 20, h: 20 },
+          name: "Nothing At All",
+        },
+        4,
+      );
+      assert.ok(
+        empty.error || empty.result?.isError,
+        "an empty cut is refused",
+      );
+
+      // A read-only key cannot cut at all; the tool is not even offered.
+      const readOnly = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "No cut key", scope: "read" },
+        })
+      ).body.token;
+      const offered = await fetch(origin + "/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${readOnly}`,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      const text = await offered.text();
+      const body = text.startsWith("event:")
+        ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+        : JSON.parse(text);
+      assert.ok(
+        !body.result.tools.some((x) => x.name === "add_icon_from_image"),
+        "a read-only key is not offered the cutting tool",
+      );
+
+      // Put the library back as it was, so what this test cut out does not
+      // show up in another test's idea of the workspace.
+      await db.query(
+        "DELETE FROM icons WHERE workspace_id=$1 AND category='Cutouts'",
+        [workspace],
+      );
+    },
+  );
+  await t.test(
     "the same picture is one icon, however many names it is given",
     async () => {
       // A library that shows the same image four times is not a library. The

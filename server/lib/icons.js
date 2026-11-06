@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { fail, uuid, audit } from "./core.js";
+import { cutIcon } from "./cutout.js";
 
 // Icons live in the workspace's own library. Anything fetched from the internet
 // is stored here on first use, so drawings never depend on a site staying up and
@@ -879,5 +880,39 @@ export function installIcons(
     res.json({ imported: imported.length, failed, icons: imported });
   });
 
-  return { iconData, findIcon, matchIcons, settings, REF };
+  // Take an icon out of a picture and keep it. The editor gives a person a
+  // mouse and a background-remove button; this is the same for an assistant
+  // copying a reference, so the icons in a drawing come from the picture it is
+  // copying rather than from somewhere else entirely.
+  const iconFromPicture = async (
+    workspace,
+    { file, crop, name, category, tolerance, background, actor },
+  ) => {
+    const cut = cutIcon(file, crop, { tolerance, background });
+    const display = displayNameValue(name);
+    if (!display) fail(400, "Give the icon a name.");
+    const icon = await store(
+      workspace,
+      "uploads",
+      safeIconName(display),
+      cut.png,
+      "image/png",
+      { source: "cut from a picture", license: null },
+      actor || null,
+      categoryValue(category),
+      display,
+    );
+    return {
+      ref: `${icon.set_name}/${icon.name}`,
+      existing: Boolean(icon.existing),
+      width: cut.width,
+      height: cut.height,
+      background: cut.background,
+      removed: cut.removed,
+      kept: cut.kept,
+      edge_solid: cut.edge_solid,
+    };
+  };
+
+  return { iconData, findIcon, matchIcons, iconFromPicture, settings, REF };
 }

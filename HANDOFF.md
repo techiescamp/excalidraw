@@ -95,6 +95,42 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: an icon can be cut out of the picture being copied
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+Copying somebody's diagram needs the icons that diagram used, and they are
+often not in the library. The editor already lets a person cut one out and drop
+the background with a mouse; `add_icon_from_image` is the same thing for an
+assistant. Give it the picture, the rectangle an icon sits in and a name: the
+flat background behind it is removed, the result is trimmed to the artwork, and
+it is kept in the workspace library to be used by name from then on.
+
+The server had no image library and still does not need one. `server/lib/png.js`
+reads and writes 8-bit PNG with Node's own zlib — colour types 0, 2, 3, 4 and 6,
+refusing interlaced or 16-bit by name rather than producing a wrong result
+quietly. `server/lib/cutout.js` does the cut: flood fill inwards from the edges
+at a tolerance, which is what suits a diagram's flat page, then trim. A
+photograph is a different problem and this does not pretend to solve it.
+
+**It reports whether it worked**, which is the point. The answer carries the
+background colour it found, how much of the rectangle was background, how much
+of what is left is artwork, and how much of the rim is still solid. A rim above
+a few per cent means the background did not come away and the caller is told to
+look and cut again rather than draw with it. Proven on the reader's own
+picture: the first three rectangles tried came back at 19%, 17% and 11% solid
+and the fourth at 2%, and the pictures matched those numbers.
+
+The tool is write-only — a read-only key is not even offered it.
+
+Known limit: PNG in, PNG out. A picture sent as WEBP or JPEG has to be
+converted first; the tool says so rather than guessing.
+
+Checks: server suite 117 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run. Nine tests over the PNG reader and the cutter, and an end-to-end one
+through the MCP: the icon is cut, kept, listed, then drawn with by name; an
+empty rectangle is refused; a read-only key cannot see the tool.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: corners everywhere, and icons come from the library, not the internet
 
 Same branch and PR #15. Not released; nothing on production has changed.
