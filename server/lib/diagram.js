@@ -92,7 +92,7 @@ export const ROLES = {
 // levels is the practical ceiling; past that a diagram reads as one blob.
 const LEVELS = [
   { fill: "transparent", opacity: 100, stroke: "#757575", strokeWidth: 1 },
-  { fill: "#dbe4ff", opacity: 25, stroke: "#4a9eed", strokeWidth: 2 },
+  { fill: "#dbe4ff", opacity: 25, stroke: "#4a9eed", strokeWidth: 1 },
   { fill: "#fff3bf", opacity: 40, stroke: "#f59e0b", strokeWidth: 1 },
   {
     fill: "#e5dbff",
@@ -104,11 +104,14 @@ const LEVELS = [
 ];
 
 // An edge says what kind of connection it is; the drawing follows from that.
+// Every weight here is the editor's own thin default except the primary path,
+// which is one step up: a published architecture diagram is read at a glance,
+// and uniformly heavy lines make the boxes compete with what connects them.
 const EDGE_KINDS = {
-  sync: { color: "#1e1e1e", strokeWidth: 2, strokeStyle: "solid" },
+  sync: { color: "#1e1e1e", strokeWidth: 1, strokeStyle: "solid" },
   async: { color: "#757575", strokeWidth: 1, strokeStyle: "dashed" },
-  primary: { color: null, strokeWidth: 4, strokeStyle: "solid" },
-  bidirectional: { color: "#1e1e1e", strokeWidth: 2, strokeStyle: "solid" },
+  primary: { color: null, strokeWidth: 2, strokeStyle: "solid" },
+  bidirectional: { color: "#1e1e1e", strokeWidth: 1, strokeStyle: "solid" },
 };
 
 // Average advance width per font size unit. Close enough for box sizing; the
@@ -154,7 +157,7 @@ const element = (type, props) => ({
   strokeColor: "#1e1e1e",
   backgroundColor: "transparent",
   fillStyle: "solid",
-  strokeWidth: 2,
+  strokeWidth: 1,
   strokeStyle: "solid",
   roughness: 1,
   opacity: 100,
@@ -274,27 +277,59 @@ const bounds = (boxes) => {
   return { width: snap(width), height: snap(height) };
 };
 
-// A boundary holds its own nodes and any boundaries inside it, stacked along the
-// flow direction, with the padding that keeps a diagram from reading as one blob.
+// A boundary holds its own nodes and any boundaries inside it. Both are laid
+// out together, by the same layering: a boundary stands in for everything
+// inside it, so an arrow into one puts it after whatever feeds it. Stacking the
+// boundaries after the loose nodes instead is what used to leave a database at
+// the top of a diagram and the servers that write to it underneath.
+const ZONE_MARGIN = Math.max(0, ZONE_GAP - SIBLING_GAP);
+const zoneItem = (id) => `\u0000zone:${id}`;
+
 const layoutGroup = (zoneId, context) => {
   const own = context.nodesByZone.get(zoneId) || [];
   const children = context.zonesByParent.get(zoneId) || [];
+  const inners = new Map(
+    children.map((child) => [child.id, layoutGroup(child.id, context)]),
+  );
+
+  // One item per loose node and one per boundary, each with a size: to the
+  // layering a boundary is just a large box.
+  const items = [
+    ...own.map((node) => ({ id: node.id })),
+    ...children.map((child) => ({ id: zoneItem(child.id) })),
+  ];
+  const sizes = new Map();
+  for (const node of own) sizes.set(node.id, context.sizes.get(node.id));
+  for (const child of children) {
+    const inner = inners.get(child.id);
+    sizes.set(zoneItem(child.id), {
+      width: inner.width + ZONE_MARGIN,
+      height: inner.height + ZONE_MARGIN,
+    });
+  }
+
+  // Which item in this group each node belongs to: itself if it is loose here,
+  // otherwise the boundary of this group that holds it, however deep it sits.
+  const itemFor = new Map(own.map((node) => [node.id, node.id]));
+  for (const child of children)
+    for (const id of context.nodesUnder.get(child.id) || [])
+      itemFor.set(id, zoneItem(child.id));
+  const edges = [];
+  for (const edge of context.edges) {
+    const from = itemFor.get(edge.from);
+    const to = itemFor.get(edge.to);
+    if (from && to && from !== to) edges.push({ from, to });
+  }
+
+  const block = layoutNodes(items, edges, context.down, sizes);
   const boxes = new Map();
   const rects = [];
-  let width = 0;
-  let height = 0;
-  let cursor = 0;
-  if (own.length) {
-    const block = layoutNodes(own, context.edges, context.down, context.sizes);
-    for (const [id, box] of block.boxes) boxes.set(id, box);
-    width = block.width;
-    height = block.height;
-    cursor = (context.down ? block.height : block.width) + ZONE_GAP;
-  }
+  for (const node of own) boxes.set(node.id, block.boxes.get(node.id));
   for (const child of children) {
-    const inner = layoutGroup(child.id, context);
-    const dx = context.down ? 0 : cursor;
-    const dy = context.down ? cursor : 0;
+    const slot = block.boxes.get(zoneItem(child.id));
+    const inner = inners.get(child.id);
+    const dx = snap(slot.x + ZONE_MARGIN / 2);
+    const dy = snap(slot.y + ZONE_MARGIN / 2);
     for (const [id, box] of inner.boxes)
       boxes.set(id, { ...box, x: box.x + dx, y: box.y + dy });
     for (const rect of inner.rects)
@@ -306,12 +341,12 @@ const layoutGroup = (zoneId, context) => {
       width: inner.width,
       height: inner.height,
     });
-    width = Math.max(width, dx + inner.width);
-    height = Math.max(height, dy + inner.height);
-    cursor += (context.down ? inner.height : inner.width) + ZONE_GAP;
   }
-  if (zoneId === null)
-    return { boxes, rects, width: snap(width), height: snap(height) };
+  const { width, height } = bounds([
+    ...boxes.values(),
+    ...rects.map((rect) => ({ ...rect })),
+  ]);
+  if (zoneId === null) return { boxes, rects, width, height };
   // Inside a boundary everything moves in by the padding, and the boundary
   // itself is the content plus that padding on all four sides.
   for (const [id, box] of boxes)
@@ -601,6 +636,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     sizes,
     nodesByZone: new Map(),
     zonesByParent: new Map(),
+    nodesUnder: new Map(),
   };
   for (const node of nodes) {
     const key = zoneOf.get(node.id) || null;
@@ -611,6 +647,18 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const key = zone.parent || null;
     if (!context.zonesByParent.has(key)) context.zonesByParent.set(key, []);
     context.zonesByParent.get(key).push(zone);
+  }
+  // Every node a boundary holds, however deep. The layering of a boundary's
+  // parent needs it to tell whether an arrow leads into that boundary.
+  for (const node of nodes) {
+    let key = zoneOf.get(node.id) || null;
+    const seen = new Set();
+    while (key && !seen.has(key)) {
+      seen.add(key);
+      if (!context.nodesUnder.has(key)) context.nodesUnder.set(key, new Set());
+      context.nodesUnder.get(key).add(node.id);
+      key = zones.get(key)?.parent || null;
+    }
   }
 
   const layout = layoutGroup(null, context);
@@ -675,7 +723,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       height: placed.height,
       strokeColor: node.stroke || colors.stroke,
       backgroundColor: fill,
-      strokeWidth: 2,
+      strokeWidth: 1,
       roughness: sketchy ? 1 : 0,
       roundness: shape === "rectangle" ? { type: 3 } : null,
     });
@@ -767,7 +815,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         Math.min(...path.points.map(([, y]) => y)),
       points: path.points,
       strokeColor: stroke,
-      strokeWidth: kind?.strokeWidth || 2,
+      strokeWidth: kind?.strokeWidth || 1,
       backgroundColor: "transparent",
       strokeStyle:
         edge.style === "dashed" ? "dashed" : kind?.strokeStyle || "solid",
@@ -1040,7 +1088,7 @@ export const styleGuide = () => ({
     "Use zones for anything with an inside and an outside: a cloud, an account, a cluster, a node.",
     "Number the steps of a request with `step` on the edges, starting at 1.",
     "Say what a connection is with `kind`: sync, async, primary or bidirectional.",
-    "Name an icon from this workspace's library on the nodes that are products.",
+    "Name a product on the nodes that are products: write what it is, and the picture is found here or fetched.",
     "Keep to six fill colours; past that the colours stop meaning anything.",
   ],
   limits: {

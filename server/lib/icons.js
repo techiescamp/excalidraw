@@ -4,7 +4,9 @@ import { fail, uuid, audit } from "./core.js";
 // Icons live in the workspace's own library. Anything fetched from the internet
 // is stored here on first use, so drawings never depend on a site staying up and
 // the same icon is never downloaded twice.
-const SOURCE = "https://api.iconify.design";
+// One host, fixed. The override exists so a test can point at a stub instead
+// of the real site; nothing a request carries can change where this points.
+const SOURCE = process.env.ICON_SOURCE_URL || "https://api.iconify.design";
 const MAX_BYTES = 256 * 1024;
 const MAX_WORKSPACE_ICON_BYTES = 5 * 1024 * 1024;
 // Icon bytes live in PostgreSQL, which is the expensive storage and the one
@@ -31,6 +33,19 @@ const WORKSPACE_ICON_MIMES = new Set([
 ]);
 const REF = /^[a-z0-9][a-z0-9_-]{0,59}\/[a-z0-9][a-z0-9._-]{0,79}$/i;
 const TIMEOUT_MS = 8000;
+// Sets that draw a product the way the product draws itself. When the source
+// offers the same picture from several sets, one of these is taken first, so a
+// diagram gets the real logo rather than a monochrome outline of it.
+const PREFERRED_SETS = [
+  "logos",
+  "devicon",
+  "skill-icons",
+  "vscode-icons",
+  "simple-icons",
+];
+// Icons the library did not have and this server went and found are filed
+// together, so whoever looks after the library can see what arrived on its own.
+const FETCHED_CATEGORY = "Found online";
 
 // Matching an icon by meaning rather than by name. An assistant describing a
 // diagram knows it wants "a database" or "the queue"; it does not know that this
@@ -103,12 +118,12 @@ const meaningful = (list) => list.filter((word) => word.length > 1);
 // says besides. Strength is the match; the penalty only separates two icons that
 // match equally, so it is kept apart rather than folded in.
 function weigh(query, icon) {
-  const none = { strength: 0, penalty: 0 };
+  const none = { strength: 0, penalty: 0, direct: 0 };
   const asked = meaningful(words(query));
   if (!asked.length) return none;
   const ref = `${icon.set_name}/${icon.name}`.toLowerCase();
   if (query.trim().toLowerCase().replace(":", "/") === ref)
-    return { strength: 100, penalty: 0 };
+    return { strength: 100, penalty: 0, direct: asked.length };
   const name = words(icon.name);
   const shown = words(icon.display_name);
   const own = new Set([...name, ...shown]);
@@ -119,8 +134,16 @@ function weigh(query, icon) {
   const set = words(icon.set_name);
   const category = words(icon.category);
   let strength = 0;
+  // How many of the asked words are in the icon's own name or label, rather
+  // than reached through a word that means something similar. An icon actually
+  // called what was asked for is a different kind of answer from one that only
+  // belongs to the same idea, and callers need to tell them apart.
+  let direct = 0;
   for (const word of asked) {
-    if (own.has(word)) strength += 300;
+    if (own.has(word)) {
+      strength += 300;
+      direct += 1;
+    }
     else if (near.has(word)) strength += 120;
     else if ([...own].some((had) => had.includes(word) || word.includes(had)))
       strength += 90;
@@ -134,7 +157,11 @@ function weigh(query, icon) {
   if (!strength) return none;
   // Of two icons that answer equally well, the one whose own name says less
   // besides is the closer match: "redis" over "redis-cluster-failover".
-  return { strength, penalty: Math.min(99, own.size * 2 + ref.length) };
+  return {
+    strength,
+    direct,
+    penalty: Math.min(99, own.size * 2 + ref.length),
+  };
 }
 
 // One number for how well an icon answers the words. Higher is better; 0 means
@@ -171,6 +198,11 @@ export function rankIcons(query, rows, limit = 8, hint = "") {
     .slice(0, limit)
     .map((hit) => ({
       ref: `${hit.icon.set_name}/${hit.icon.name}`,
+      // How much of what was asked for this icon is actually named after,
+      // out of how many words were asked. A caller deciding between this and
+      // somewhere else needs the fraction, not just that something matched.
+      covers: hit.direct,
+      of: Math.max(1, meaningful(words(query)).length),
       name: hit.icon.display_name || hit.icon.name,
       category: hit.icon.category,
       score: hit.strength * 100 - hit.penalty,
@@ -465,6 +497,61 @@ export function installIcons(
   const matchIcons = async (workspace, query, limit = 8, hint = "") =>
     rankIcons(String(query || ""), await libraryFor(workspace), limit, hint);
 
+  // Ask the icon source what it has for these words. Only the one host is ever
+  // contacted, and only for a list of names; nothing is downloaded here.
+  const searchSource = async (query) => {
+    const response = await fetch(
+      `${SOURCE}/search?query=${encodeURIComponent(query)}&limit=48`,
+      { signal: AbortSignal.timeout(TIMEOUT_MS) },
+    );
+    if (!response.ok) return [];
+    const body = await response.json();
+    return (Array.isArray(body.icons) ? body.icons : [])
+      .map((entry) => normal(entry))
+      .filter((ref) => REF.test(ref));
+  };
+
+  // The library did not have it, so go and find it. The same scoring decides
+  // what the source offered, which is what stops a search for words that mean
+  // nothing from dragging an unrelated picture into the drawing. What arrives
+  // is saved in the library, so the next drawing needs no network at all.
+  const fetchFromSource = async (workspace, wanted, hint, better_than = 0) => {
+    if (!(await settings()).fetch_enabled) return null;
+    const refs = await searchSource(wanted);
+    if (!refs.length) return null;
+    const preferred = refs.filter((ref) =>
+      PREFERRED_SETS.includes(ref.split("/")[0]),
+    );
+    const rows = (preferred.length ? preferred : refs).map((ref) => ({
+      set_name: ref.split("/")[0],
+      name: ref.split("/")[1],
+      display_name: null,
+      // The set a source files an icon under says nothing about what the icon
+      // is, so it is not allowed to count towards the match.
+      category: "",
+    }));
+    // The source is asked for words, so it answers with whatever shares one.
+    // Only an icon that is actually named what was asked for is worth
+    // downloading, and only if it is named after more of it than whatever the
+    // library was ready to offer; anything looser is a guess made on someone
+    // else's index.
+    const [best] = rankIcons(String(wanted), rows, 1, hint);
+    if (!best || best.covers / best.of <= better_than) return null;
+    const [set, name] = best.ref.split("/");
+    const body = await download(set, name);
+    const saved = await store(
+      workspace,
+      set,
+      name,
+      body,
+      "image/svg+xml",
+      { source: `${SOURCE}/${set}/${name}.svg`, license: "see source" },
+      null,
+      FETCHED_CATEGORY,
+    );
+    return iconData(workspace, `${saved.set_name}/${saved.name}`);
+  };
+
   // One icon ready to embed, found by exact name or, failing that, by meaning.
   // The reference actually used is reported back, because a diagram that
   // quietly swapped one picture for another is worse than one that says so.
@@ -484,9 +571,34 @@ export function installIcons(
     // A weak match is worse than no icon. Standing in for what was asked for
     // takes a real hit on the icon's own name or on a word that means the same;
     // sharing a set or a category is not enough.
-    if (!best || best.score < MIN_MATCH) return null;
-    const art = await iconData(workspace, best.ref);
-    return art ? { ...art, matched: true, asked } : null;
+    const usable = best && best.score >= MIN_MATCH ? best : null;
+    // How much of what was asked for this library icon is actually named
+    // after. All of it, and the search is over: an icon called what was asked
+    // for is the answer. Short of that it is a stand-in, and a stand-in must
+    // not beat the real logo sitting at the source — that is how a box
+    // labelled Terraform ends up wearing Ansible's badge, because the two
+    // mean the same thing, and how every AWS box ends up with Route 53's,
+    // because they all begin with the word "aws".
+    const covered = usable ? usable.covers / usable.of : 0;
+    if (covered >= 1) {
+      const art = await iconData(workspace, usable.ref);
+      if (art) return { ...art, matched: true, asked };
+    }
+    // What is here is a stand-in at best, so look outside for something named
+    // after more of what was asked. A drawing is better with the real logo
+    // than with an empty box, and the source failing is not a reason for the
+    // drawing to fail: the box is simply drawn plain.
+    try {
+      const found = await fetchFromSource(workspace, words, hint, covered);
+      if (found) return { ...found, matched: true, fetched: true, asked };
+    } catch {
+      // fall through to whatever the library could offer
+    }
+    if (usable) {
+      const art = await iconData(workspace, usable.ref);
+      if (art) return { ...art, matched: true, asked };
+    }
+    return null;
   };
 
   app.get("/api/workspaces/:workspace/icons", auth, async (req, res) => {

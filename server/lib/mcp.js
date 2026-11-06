@@ -192,6 +192,7 @@ export function installMcp(
     const found = new Map();
     const missing = new Set();
     const swapped = [];
+    const fetched = [];
     if (!icons) return found;
     for (const node of spec?.nodes || []) {
       if (!node?.icon || found.has(node.icon) || missing.has(node.icon))
@@ -202,7 +203,8 @@ export function installMcp(
         const art = await icons.findIcon(workspace, node.icon, node.label);
         if (art) {
           found.set(node.icon, art);
-          if (art.matched) swapped.push([node.icon, art.ref]);
+          if (art.matched)
+            (art.fetched ? fetched : swapped).push([node.icon, art.ref]);
         } else missing.add(node.icon);
       } catch {
         // a missing icon never fails the drawing; the box is simply drawn plain
@@ -213,12 +215,18 @@ export function installMcp(
     // can fix on its next call, but only if it is told.
     for (const name of missing)
       warnings.push(
-        `Nothing in this workspace's icon library means "${name}". That box was drawn without an icon; list_icons searches the library by meaning.`,
+        `No icon could be found for "${name}", here or online. That box was drawn without one; list_icons searches the library by meaning.`,
       );
     // A substitution is not a fault, but the caller asked for one picture and
     // got another, so it is told which — it may know a better word to use.
     for (const [asked, used] of swapped)
       warnings.push(`Used ${used} for "${asked}".`);
+    // Something the library did not have was found online and kept. Saying so
+    // is how a reviewer learns a new icon arrived without anyone importing it.
+    for (const [asked, used] of fetched)
+      warnings.push(
+        `No icon here meant "${asked}", so ${used} was found online and added to this workspace's library.`,
+      );
     return found;
   };
 
@@ -476,7 +484,7 @@ export function installMcp(
                 "3. Give every node a role rather than a colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. One role always looks the same, which is what lets a reader learn the drawing in two seconds.",
                 "4. Say what each connection is with kind: sync for a request, async for a watch or a background flow, primary for the main data path, bidirectional for both ways.",
                 "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
-                "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; list_icons searches the same way if you want to see the choices first.",
+                "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
                 "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know.",
                 "",
                 "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",

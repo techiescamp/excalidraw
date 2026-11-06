@@ -7,6 +7,7 @@ import pg from "pg";
 import { io as socketClient } from "socket.io-client";
 import { JSDOM } from "jsdom";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { once } from "node:events";
 import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +34,8 @@ control.on("error", ignoreTeardownNoise);
 const database = "excalidraw_test_" + process.pid;
 const origin = "http://127.0.0.1:55440";
 const password = "A private orchard under moonlight 742!";
+const iconRequests = [];
+let iconSource;
 let db,
   server,
   storage,
@@ -180,10 +183,34 @@ before(async () => {
   otherWorkspace = workspaces.rows[1].id;
   storage = await mkdtemp(path.join(tmpdir(), "excalidraw-storage-"));
   cacheStorage = await mkdtemp(path.join(tmpdir(), "excalidraw-canvas-cache-"));
+  // A stand-in for the icon source. The server is a separate process, so the
+  // only honest way to test what it downloads is to give it somewhere else to
+  // download from.
+  iconSource = createServer((req, res) => {
+    iconRequests.push(req.url);
+    if (req.url.startsWith("/search")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      // Deliberately in the wrong order: the outline set first and the real
+      // logo second, so this proves which one is taken.
+      return res.end(
+        JSON.stringify({
+          icons: ["simple-icons:jenkins", "logos:jenkins", "mdi:cog"],
+        }),
+      );
+    }
+    res.writeHead(200, { "Content-Type": "image/svg+xml" });
+    res.end(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#d33833"/></svg>',
+    );
+  });
+  // Port 0: the operating system picks a free one. A fixed number here is a
+  // test that fails because the last run has not finished letting go of it.
+  await new Promise((done) => iconSource.listen(0, "127.0.0.1", done));
   server = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
+      ICON_SOURCE_URL: `http://127.0.0.1:${iconSource.address().port}`,
       DATABASE_URL: url.href,
       PORT: "55440",
       APP_ORIGIN: origin,
@@ -215,6 +242,7 @@ before(async () => {
 });
 after(async () => {
   tearingDown = true;
+  if (iconSource) await new Promise((done) => iconSource.close(done));
   if (server) {
     server.kill();
     await once(server, "exit");
@@ -2407,6 +2435,76 @@ test("private workspace backend", async (t) => {
         ).body.elements.filter((e) => e.type === "image").length,
         0,
       );
+      // What the library does not have, the server goes and finds. The source
+      // is a stub on this machine: a test must not depend on a website being
+      // up, and this is checking which name was chosen and that it was kept,
+      // not that the internet works.
+      await db.query(
+        `INSERT INTO app_settings(key,value) VALUES('icons','{"fetch_enabled":true}'::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`,
+      );
+      try {
+        const online = await rpc(
+          "create_drawing",
+          {
+            name: "Found online",
+            nodes: [{ id: "a", label: "Jenkins", icon: "jenkins" }],
+          },
+          7,
+        );
+        const fetchedScene = (
+          await call(`/scenes/${online.result.structuredContent.id}/export`, {
+            cookie: admin,
+          })
+        ).body;
+        assert.equal(
+          fetchedScene.elements.filter((e) => e.type === "image").length,
+          1,
+          "an icon the library never had still reaches the box",
+        );
+        assert.ok(
+          iconRequests.includes("/logos/jenkins.svg"),
+          `the real logo is preferred over an outline of it: ${iconRequests.join(
+            " ",
+          )}`,
+        );
+        assert.ok(
+          online.result.structuredContent.warnings.some(
+            (line) =>
+              line.includes("logos/jenkins") && line.includes("found online"),
+          ),
+          "and the drawing says the icon came from outside",
+        );
+        const nowListed = await rpc("list_icons", {}, 8);
+        assert.ok(
+          nowListed.result.structuredContent.icons.includes("logos/jenkins"),
+          "what was fetched is kept in the library",
+        );
+        const before = iconRequests.length;
+        await rpc(
+          "create_drawing",
+          {
+            name: "Found online again",
+            nodes: [{ id: "a", label: "Jenkins", icon: "jenkins" }],
+          },
+          9,
+        );
+        assert.equal(
+          iconRequests.length,
+          before,
+          "and the second drawing uses the stored copy instead of asking again",
+        );
+      } finally {
+        await db.query(
+          `UPDATE app_settings SET value='{"fetch_enabled":false}'::jsonb WHERE key='icons'`,
+        );
+        // Put the library back as it was, so what this test downloaded does
+        // not show up in another test's idea of the workspace.
+        await db.query(
+          "DELETE FROM icons WHERE workspace_id=$1 AND category='Found online'",
+          [workspace],
+        );
+      }
     },
   );
   await t.test(

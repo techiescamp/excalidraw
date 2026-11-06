@@ -95,6 +95,54 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: icons fetched when the library has none, and boundaries laid out in the flow
+
+Same branch and PR #15 as the entry below. Not released; nothing on production
+has changed.
+
+Drawn against a reference image a reader sent, which is what turned up all three
+faults below.
+
+- **An icon the library does not have is fetched and kept.** A library match
+  only wins outright when the icon is actually named after everything that was
+  asked for. Short of that it is a stand-in, and the icon source is asked for
+  something named after more of it; what comes back is stored in the workspace
+  library and used, so the next drawing needs no network. Without that rule a
+  box labelled Terraform wore Ansible's badge, because the two mean the same
+  thing, and every AWS box wore Route 53's, because they all begin with "aws".
+  Unchanged: one host only, SVG only, 256 KB ceiling, scripting rejected, and
+  only when an administrator has turned fetching on — it is off by default. The
+  drawing's warnings name every icon that arrived this way.
+- **`ICON_SOURCE_URL`** overrides the icon host. It exists so a test can point
+  at a stub; nothing a request carries can change where it points.
+- **Boundaries are laid out in the flow.** A boundary now stands in for
+  everything inside it when its parent is laid out, instead of being stacked
+  after the parent's loose nodes. Before this, a database that only an app
+  inside a cluster writes to sat at the top of the diagram with the cluster
+  below it.
+- **Lines are the editor's own thin weight**, except the primary data path at
+  one step up. They were all a step heavier, which made the boxes compete with
+  what connects them.
+
+Checks: server suite 85 pass / 0 fail, run twice (the stub icon source listens
+on an ephemeral port; a fixed one failed intermittently against a port the last
+run had not released). `yarn test:typecheck` clean. `yarn fix` run.
+
+Red before green: the fetch test fails without the fallback (2 subtests), and
+the whole thing was found by eye on the local fixture before any of it was
+written.
+
+By hand on the local fixture, drawing a reader's reference architecture through
+the MCP: nineteen icons, every one asked for in plain words, every one fetched
+from the source and kept; checked in the editor and against the exported scene —
+all text in the font that was asked for, every stroke thin except the primary
+path, no arrow segment crossing a tile it does not belong to, every boundary
+inside its parent.
+
+Left undone: the engine still has one flow direction for the whole drawing, so a
+diagram whose two halves read in different directions (left to right between
+clouds, top to bottom inside one) can only have one of them.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the MCP draws blueprints, and finds its own icons
 
 Branch off `main`, PR #15. Not released; nothing on production has changed.
