@@ -2634,6 +2634,24 @@ test("private workspace backend", async (t) => {
         "and says so plainly",
       );
 
+      // Saying so cuts from the picture anyway, for when the library's icon is
+      // not the one wanted.
+      const insisted = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 10, y: 10, w: 60, h: 60 },
+          name: "Cut Out Shape From Picture",
+          category: "Cutouts",
+          force: true,
+        },
+        11,
+      );
+      const forced = insisted.result.structuredContent;
+      assert.equal(forced.reused, false, "it cut rather than reusing");
+      assert.equal(forced.width, 20, "and the cut is the real thing");
+      assert.equal(forced.leftover, 0);
+
       // A rectangle with nothing but page in it is refused rather than stored.
       const empty = await rpc(
         "add_icon_from_image",
