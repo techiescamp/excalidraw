@@ -95,6 +95,43 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: the icon path verified locally, which clears the gate's step 2
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+The one thing standing unverified was the icon path: the local library was
+empty, so no drawing had ever come out of this engine with a real uploaded
+icon in it, and the official icons existed only on production. The cut-out tool
+removes that problem — icons can be made locally from a picture instead of
+copied from production.
+
+Done, on the local instance, from the reader's own picture:
+
+1. Four icons cut out of it through the MCP. One came back `reused` because it
+   was already in the library, which is the library-first rule doing its job
+   without being asked. One was refused with "every piece ran off the edge of
+   it", which is the error being useful rather than producing a bad icon. Two
+   were cut at 0% leftover.
+2. The stored icons read back out of the library and looked at: a database
+   cylinder and a rocket, cleanly cut, no page behind them.
+3. A drawing made asking for them by plain name — "data store", "jev brain",
+   "rocket" — and all three were found in the library and placed. The exported
+   scene carries them as PNGs at their own proportions, with no overlapping
+   text and no rounded corners.
+
+So the chain holds end to end locally: cut from a picture, keep, find by name,
+draw with. That is section 7a step 2 satisfied and written down.
+
+Step 3 does not apply: no migration, no schema change, no query changed. Only
+`server/lib/` and tests and docs are touched.
+
+Still outstanding before production, and they are the owner's calls:
+- PR #15 targets `main` directly. Section 2a wants `feature → develop → main`,
+  so this skips `develop`.
+- The deploy itself is the pipeline's job with a human approving, and the
+  after-deploy check in step 8 has to be done by someone who can reach the
+  server.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the library first, and the logo on its own
 
 Same branch and PR #15. Not released; nothing on production has changed.
