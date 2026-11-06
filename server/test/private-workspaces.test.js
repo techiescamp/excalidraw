@@ -7,6 +7,7 @@ import pg from "pg";
 import { io as socketClient } from "socket.io-client";
 import { JSDOM } from "jsdom";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { once } from "node:events";
 import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +34,8 @@ control.on("error", ignoreTeardownNoise);
 const database = "excalidraw_test_" + process.pid;
 const origin = "http://127.0.0.1:55440";
 const password = "A private orchard under moonlight 742!";
+const iconRequests = [];
+let iconSource;
 let db,
   server,
   storage,
@@ -180,10 +183,34 @@ before(async () => {
   otherWorkspace = workspaces.rows[1].id;
   storage = await mkdtemp(path.join(tmpdir(), "excalidraw-storage-"));
   cacheStorage = await mkdtemp(path.join(tmpdir(), "excalidraw-canvas-cache-"));
+  // A stand-in for the icon source. The server is a separate process, so the
+  // only honest way to test what it downloads is to give it somewhere else to
+  // download from.
+  iconSource = createServer((req, res) => {
+    iconRequests.push(req.url);
+    if (req.url.startsWith("/search")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      // Deliberately in the wrong order: the outline set first and the real
+      // logo second, so this proves which one is taken.
+      return res.end(
+        JSON.stringify({
+          icons: ["simple-icons:jenkins", "logos:jenkins", "mdi:cog"],
+        }),
+      );
+    }
+    res.writeHead(200, { "Content-Type": "image/svg+xml" });
+    res.end(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#d33833"/></svg>',
+    );
+  });
+  // Port 0: the operating system picks a free one. A fixed number here is a
+  // test that fails because the last run has not finished letting go of it.
+  await new Promise((done) => iconSource.listen(0, "127.0.0.1", done));
   server = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
+      ICON_SOURCE_URL: `http://127.0.0.1:${iconSource.address().port}`,
       DATABASE_URL: url.href,
       PORT: "55440",
       APP_ORIGIN: origin,
@@ -215,6 +242,7 @@ before(async () => {
 });
 after(async () => {
   tearingDown = true;
+  if (iconSource) await new Promise((done) => iconSource.close(done));
   if (server) {
     server.kill();
     await once(server, "exit");
@@ -2172,10 +2200,22 @@ test("private workspace backend", async (t) => {
       const saved = (await call(`/scenes/${made.id}/data`, { cookie: admin }))
         .body.scene;
       const kinds = saved.elements.map((e) => e.type);
-      assert.equal(kinds.filter((k) => k === "rectangle").length, 3);
       assert.equal(kinds.filter((k) => k === "arrow").length, 2);
       assert.ok(kinds.filter((k) => k === "text").length >= 5);
-      const boxes = saved.elements.filter((e) => e.type === "rectangle");
+      // The title is set in plain words with a hand-drawn rule under them, so
+      // the page frame and the node boxes are the rectangles.
+      assert.ok(
+        saved.elements.some((e) => e.type === "line"),
+        "the title is underlined",
+      );
+      const frame = saved.elements.find(
+        (e) => e.type === "rectangle" && e.backgroundColor === "transparent",
+      );
+      assert.ok(frame, "the page has a frame around it");
+      const boxes = saved.elements.filter(
+        (e) => e.type === "rectangle" && e !== frame,
+      );
+      assert.equal(boxes.length, 3);
       assert.ok(
         boxes.every((box) => box.width > 0 && box.height > 0),
         "every shape has a size",
@@ -2224,7 +2264,8 @@ test("private workspace backend", async (t) => {
         .body.scene;
       assert.equal(
         after.elements.filter((e) => e.type === "rectangle").length,
-        1,
+        2,
+        "the one box, and the page frame around it",
       );
       // a read-only key cannot draw
       const refused = await rpc(readOnly, "create_drawing", {
@@ -2320,10 +2361,16 @@ test("private workspace backend", async (t) => {
         scene.files[image.fileId]?.dataURL.startsWith("data:image/svg+xml"),
         "the icon travels with the drawing",
       );
+      // The icon sits in from the left edge with the label beside it, the way a
+      // reference architecture names a product.
       const box = scene.elements.find(
-        (e) => e.type === "rectangle" && e.x === image.x - (e.width - 52) / 2,
+        (e) => e.type === "rectangle" && image.x === e.x + 20,
       );
       assert.ok(box, "the icon sits inside its box");
+      assert.ok(
+        image.y > box.y && image.y + image.height < box.y + box.height,
+        "and is held inside it top to bottom",
+      );
       // an unknown icon leaves the drawing intact rather than failing
       const plain = await rpc(
         "create_drawing",
@@ -2341,6 +2388,321 @@ test("private workspace backend", async (t) => {
           })
         ).body.scene.elements.filter((e) => e.type === "image").length,
         0,
+      );
+      // The point of matching by meaning: an assistant describing a diagram
+      // writes what a box is, not what this library happens to call the
+      // picture. Nothing here is named "virtual machine".
+      const found = await rpc("list_icons", { search: "virtual machine" }, 4);
+      assert.deepEqual(
+        found.result.structuredContent.icons,
+        ["testpack/server"],
+        "searching by meaning finds the icon under its own name",
+      );
+      const matched = await rpc(
+        "create_drawing",
+        {
+          name: "Icon by meaning",
+          nodes: [{ id: "a", label: "Host", icon: "compute instance" }],
+        },
+        5,
+      );
+      const drawnByMeaning = (
+        await call(`/scenes/${matched.result.structuredContent.id}/export`, {
+          cookie: admin,
+        })
+      ).body;
+      assert.equal(
+        drawnByMeaning.elements.filter((e) => e.type === "image").length,
+        1,
+        "plain words still put an icon in the box",
+      );
+      assert.ok(
+        matched.result.structuredContent.warnings.some((line) =>
+          line.includes("Used testpack/server"),
+        ),
+        "and the drawing says which picture it used",
+      );
+      // Words with nothing to do with the library leave the box plain rather
+      // than reaching for whatever is nearest.
+      const unrelated = await rpc(
+        "create_drawing",
+        {
+          name: "Nothing like it",
+          nodes: [{ id: "a", label: "Payroll", icon: "quarterly revenue" }],
+        },
+        6,
+      );
+      assert.equal(
+        (
+          await call(
+            `/scenes/${unrelated.result.structuredContent.id}/export`,
+            { cookie: admin },
+          )
+        ).body.elements.filter((e) => e.type === "image").length,
+        0,
+      );
+      // What the library does not have, the server goes and finds. The source
+      // is a stub on this machine: a test must not depend on a website being
+      // up, and this is checking which name was chosen and that it was kept,
+      // not that the internet works.
+      await db.query(
+        `INSERT INTO app_settings(key,value) VALUES('icons','{"fetch_enabled":true}'::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`,
+      );
+      try {
+        const online = await rpc(
+          "create_drawing",
+          {
+            name: "Found online",
+            nodes: [{ id: "a", label: "Jenkins", icon: "jenkins" }],
+          },
+          7,
+        );
+        const fetchedScene = (
+          await call(`/scenes/${online.result.structuredContent.id}/export`, {
+            cookie: admin,
+          })
+        ).body;
+        assert.equal(
+          fetchedScene.elements.filter((e) => e.type === "image").length,
+          1,
+          "an icon the library never had still reaches the box",
+        );
+        assert.ok(
+          iconRequests.includes("/logos/jenkins.svg"),
+          `the real logo is preferred over an outline of it: ${iconRequests.join(
+            " ",
+          )}`,
+        );
+        assert.ok(
+          online.result.structuredContent.warnings.some(
+            (line) =>
+              line.includes("logos/jenkins") && line.includes("found online"),
+          ),
+          "and the drawing says the icon came from outside",
+        );
+        const nowListed = await rpc("list_icons", {}, 8);
+        assert.ok(
+          nowListed.result.structuredContent.icons.includes("logos/jenkins"),
+          "what was fetched is kept in the library",
+        );
+        const before = iconRequests.length;
+        await rpc(
+          "create_drawing",
+          {
+            name: "Found online again",
+            nodes: [{ id: "a", label: "Jenkins", icon: "jenkins" }],
+          },
+          9,
+        );
+        assert.equal(
+          iconRequests.length,
+          before,
+          "and the second drawing uses the stored copy instead of asking again",
+        );
+      } finally {
+        await db.query(
+          `UPDATE app_settings SET value='{"fetch_enabled":false}'::jsonb WHERE key='icons'`,
+        );
+        // Put the library back as it was, so what this test downloaded does
+        // not show up in another test's idea of the workspace.
+        await db.query(
+          "DELETE FROM icons WHERE workspace_id=$1 AND category='Found online'",
+          [workspace],
+        );
+      }
+    },
+  );
+  await t.test(
+    "an icon is cut out of a picture and kept, background and all",
+    async () => {
+      const key = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "Cut key", scope: "write" },
+        })
+      ).body.token;
+      const rpc = async (name, args, id = 1) => {
+        const response = await fetch(origin + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        });
+        const text = await response.text();
+        return text.startsWith("event:")
+          ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+          : JSON.parse(text);
+      };
+      // A page with one solid shape on it, which is what a diagram looks like
+      // to this: flat background, artwork sitting on top of it.
+      const { writePng } = await import("../lib/png.js");
+      const width = 80;
+      const height = 80;
+      const pixels = Buffer.alloc(width * height * 4);
+      for (let y = 0; y < height; y += 1)
+        for (let x = 0; x < width; x += 1) {
+          const inside = x >= 30 && x < 50 && y >= 30 && y < 50;
+          const at = (y * width + x) * 4;
+          pixels[at] = inside ? 200 : 250;
+          pixels[at + 1] = inside ? 40 : 250;
+          pixels[at + 2] = inside ? 40 : 250;
+          pixels[at + 3] = 255;
+        }
+      const image = `data:image/png;base64,${writePng({
+        width,
+        height,
+        pixels,
+      }).toString("base64")}`;
+
+      const cut = await rpc("add_icon_from_image", {
+        image,
+        crop: { x: 10, y: 10, w: 60, h: 60 },
+        name: "Cut Out Shape",
+        category: "Cutouts",
+      });
+      assert.ok(
+        cut.result?.structuredContent,
+        `the cut came back: ${JSON.stringify(cut).slice(0, 400)}`,
+      );
+      const made = cut.result.structuredContent;
+      assert.equal(made.width, 20, "trimmed to the shape, not the rectangle");
+      assert.equal(made.height, 20);
+      assert.equal(made.background, "#fafafa", "the page colour was worked out");
+      assert.ok(made.removed > 50, `most of it was page: ${made.removed}`);
+      assert.equal(made.kept, 100, "what is left is all artwork");
+      assert.match(made.ref, /^uploads\//);
+
+      // It is in the library, and a drawing can ask for it by name from now on.
+      const listed = await rpc("list_icons", { search: "cut out shape" }, 2);
+      assert.ok(
+        listed.result.structuredContent.icons.includes(made.ref),
+        `the cut icon is in the library: ${JSON.stringify(
+          listed.result.structuredContent.icons,
+        )}`,
+      );
+      const drawn = await rpc(
+        "create_drawing",
+        {
+          name: "Drawn with a cut icon",
+          nodes: [{ id: "a", label: "Shape", icon: "cut out shape" }],
+        },
+        3,
+      );
+      const scene = (
+        await call(`/scenes/${drawn.result.structuredContent.id}/export`, {
+          cookie: admin,
+        })
+      ).body;
+      const image_ = scene.elements.find((e) => e.type === "image");
+      assert.ok(image_, "the cut icon is drawn in the box");
+      assert.ok(
+        scene.files[image_.fileId]?.dataURL.startsWith("data:image/png"),
+        "and it travels with the drawing as a PNG",
+      );
+
+      // The library comes first. Asked for the same thing again, it hands back
+      // what is already there instead of cutting a second copy.
+      const again = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 10, y: 10, w: 60, h: 60 },
+          name: "Cut Out Shape",
+          category: "Cutouts",
+        },
+        10,
+      );
+      assert.equal(
+        again.result.structuredContent.reused,
+        true,
+        "it reused the library's icon rather than cutting again",
+      );
+      assert.equal(again.result.structuredContent.ref, made.ref);
+      assert.match(
+        again.result.content[0].text,
+        /already has/,
+        "and says so plainly",
+      );
+
+      // Saying so cuts from the picture anyway, for when the library's icon is
+      // not the one wanted.
+      const insisted = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 10, y: 10, w: 60, h: 60 },
+          name: "Cut Out Shape From Picture",
+          category: "Cutouts",
+          force: true,
+        },
+        11,
+      );
+      const forced = insisted.result.structuredContent;
+      assert.equal(forced.reused, false, "it cut rather than reusing");
+      assert.equal(forced.width, 20, "and the cut is the real thing");
+      assert.equal(forced.leftover, 0);
+
+      // A rectangle with nothing but page in it is refused rather than stored.
+      const empty = await rpc(
+        "add_icon_from_image",
+        {
+          image,
+          crop: { x: 0, y: 0, w: 20, h: 20 },
+          name: "Nothing At All",
+        },
+        4,
+      );
+      assert.ok(
+        empty.error || empty.result?.isError,
+        "an empty cut is refused",
+      );
+
+      // A read-only key cannot cut at all; the tool is not even offered.
+      const readOnly = (
+        await call("/admin/mcp-keys", {
+          cookie: admin,
+          method: "POST",
+          body: { name: "No cut key", scope: "read" },
+        })
+      ).body.token;
+      const offered = await fetch(origin + "/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${readOnly}`,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      const text = await offered.text();
+      const body = text.startsWith("event:")
+        ? JSON.parse(text.slice(text.indexOf("data:") + 5).trim())
+        : JSON.parse(text);
+      assert.ok(
+        !body.result.tools.some((x) => x.name === "add_icon_from_image"),
+        "a read-only key is not offered the cutting tool",
+      );
+
+      // Put the library back as it was, so what this test cut out does not
+      // show up in another test's idea of the workspace.
+      await db.query(
+        "DELETE FROM icons WHERE workspace_id=$1 AND category='Cutouts'",
+        [workspace],
       );
     },
   );

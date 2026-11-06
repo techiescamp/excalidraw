@@ -53,38 +53,277 @@ const summarize = (scene, payload) => {
 const nodeSchema = z.object({
   id: z.string().describe("Short name used by edges, e.g. api"),
   label: z.string().optional().describe("Words shown inside the shape"),
-  shape: z.enum(["rectangle", "ellipse", "diamond"]).optional(),
+  role: z
+    .string()
+    .optional()
+    .describe(
+      "What this is, which decides its colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. Prefer this over picking a colour.",
+    ),
+  zone: z
+    .string()
+    .optional()
+    .describe("Id of the boundary this sits inside, from zones"),
+  shape: z
+    .enum(["rectangle", "ellipse", "diamond", "plain"])
+    .optional()
+    .describe(
+      "plain draws no box at all: a large icon with the label underneath. Most diagrams in this house style are drawn that way; use a box when the thing is a container or a region.",
+    ),
   color: z
     .string()
     .optional()
-    .describe("blue, green, red, orange, violet, teal, pink, grey, black"),
+    .describe(
+      "Only when no role fits: blue, green, red, orange, violet, teal, pink, grey, black",
+    ),
   fill: z.string().optional().describe("Exact background colour, e.g. #a5d8ff"),
   stroke: z.string().optional().describe("Exact outline colour, e.g. #1971c2"),
+  at: z
+    .object({
+      x: z.number().describe("Pixels from the left of the drawing"),
+      y: z.number().describe("Pixels from the top of the drawing"),
+      w: z.number().optional().describe("Width; left out, it fits the label"),
+      h: z.number().optional().describe("Height; left out, it fits the label"),
+    })
+    .optional()
+    .describe(
+      "Where to put this, for layout: manual only. Use it to copy a picture exactly; leave it out and the engine places everything.",
+    ),
+  label_at: z
+    .enum(["inside", "left", "right", "above", "below"])
+    .optional()
+    .describe(
+      "Which side of the picture the name goes, for shape: plain. Below unless you say.",
+    ),
   icon: z
     .string()
     .optional()
-    .describe("Icon drawn inside the box, as set/name, e.g. logos/kubernetes"),
+    .describe(
+      "Picture drawn inside the box. An exact name like logos/kubernetes, or plain words for what it is — database, message queue, load balancer — and the closest icon in the library is used.",
+    ),
 });
 const edgeSchema = z.object({
-  from: z.string(),
-  to: z.string(),
+  from: z.string().describe("A node id, or a boundary id to leave the region itself"),
+  to: z.string().describe("A node id, or a boundary id to enter the region itself"),
   label: z.string().optional().describe("Words shown on the arrow"),
+  kind: z
+    .enum(["sync", "async", "primary", "bidirectional"])
+    .optional()
+    .describe(
+      "What the connection is: a request (sync), a watch or background flow (async), the main data path (primary), or both ways (bidirectional)",
+    ),
+  step: z
+    .number()
+    .int()
+    .min(1)
+    .max(99)
+    .optional()
+    .describe("Step number in a request flow; drawn as a badge on the arrow"),
   style: z.enum(["solid", "dashed"]).optional(),
   color: z.string().optional(),
+  width: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .optional()
+    .describe("Line thickness. 1 is the default; use 3 or 4 for the main path of a workflow."),
+  route: z
+    .enum(["orthogonal", "straight", "curved"])
+    .optional()
+    .describe(
+      "straight draws a direct line instead of right angles — what a fan-out from one box to a row of them looks like. curved sweeps a callout line from a note to the thing it talks about.",
+    ),
+});
+const zoneSchema = z.object({
+  id: z.string().describe("Short name used by nodes and by nested boundaries"),
+  label: z
+    .string()
+    .optional()
+    .describe("The boundary's name, drawn in a pill on its top edge"),
+  label_at: z
+    .enum(["top-left", "top-center", "top-right"])
+    .optional()
+    .describe("Which corner of the top edge the name pill sits in"),
+  caption: z
+    .string()
+    .optional()
+    .describe("One small line under the boundary, e.g. the steps it contains"),
+  color: z
+    .string()
+    .optional()
+    .describe(
+      "Tints the boundary and its name pill together: blue, green, red, orange, violet, teal, pink, grey, yellow",
+    ),
+  style: z
+    .enum(["solid", "dashed", "dotted"])
+    .optional()
+    .describe(
+      "Dashed or dotted for something logical rather than physical — a Deployment, a namespace scope",
+    ),
+  label_style: z
+    .enum(["pill", "plain"])
+    .optional()
+    .describe(
+      "pill puts the name in a tag on the top edge; plain centres it in words over the region",
+    ),
+  badge: z
+    .string()
+    .optional()
+    .describe(
+      "A mark on the boundary's corner, named the same way a node's icon is, e.g. aws",
+    ),
+  badge_at: z.enum(["top-left", "top-right"]).optional(),
+  at: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number().optional(),
+      h: z.number().optional(),
+    })
+    .optional()
+    .describe("Where this boundary goes, for layout: manual only"),
+  parent: z.string().optional().describe("Id of the boundary this sits inside"),
+  level: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .optional()
+    .describe(
+      "1 is the outermost (a cloud or platform), 4 the innermost (a pod or process). Left out, it follows the nesting.",
+    ),
+  nodes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Node ids inside this boundary; a node's own zone field does the same",
+    ),
 });
 const specSchema = {
   title: z.string().optional().describe("Heading drawn above the diagram"),
-  layout: z.enum(["right", "down"]).optional().describe("Flow direction"),
+  layout: z
+    .enum(["right", "down", "lanes", "bands", "manual"])
+    .optional()
+    .describe(
+      "The shape of the whole drawing: right or down for a flow, lanes for full-height columns side by side (one per tier, arrows crossing between them), bands for full-width rows stacked down the page (one per topic, each with its own small flow), manual when you are copying a picture and every node and boundary carries its own at: {x, y}",
+    ),
   style: z
     .object({
       font: z.string().optional().describe("Font name, e.g. Inter"),
       color: z.string().optional().describe("Default colour for shapes"),
       background: z.string().optional().describe("Canvas colour, e.g. #ffffff"),
+      theme: z
+        .enum(["light", "dark"])
+        .optional()
+        .describe(
+          "dark gives a dark page with the tiles drawn as outlines in their own colour",
+        ),
+      title_style: z
+        .enum(["underline", "plain", "highlight", "bar", "banner"])
+        .optional()
+        .describe(
+          "How the title is set: underline (the default), plain, highlight for the words in a marker block, bar for a coloured bar beside them, banner for a filled box",
+        ),
+      corners: z
+        .enum(["sharp", "round"])
+        .optional()
+        .describe(
+          "Box corners. Sharp unless you ask for round — these diagrams draw boxes with corners.",
+        ),
+      frame: z
+        .boolean()
+        .optional()
+        .describe(
+          "The hairline border around the whole page. On unless you turn it off.",
+        ),
       sketchy: z.boolean().optional().describe("Hand-drawn look"),
+      brand: z
+        .string()
+        .optional()
+        .describe("Small mark in the corner, e.g. a site or author name"),
     })
     .optional(),
   nodes: z.array(nodeSchema).describe("The boxes"),
   edges: z.array(edgeSchema).optional().describe("Arrows between boxes"),
+  zones: z
+    .array(zoneSchema)
+    .optional()
+    .describe(
+      "Boundaries that hold nodes and other boundaries: a cloud, an account, a cluster, a node",
+    ),
+  extras: z
+    .array(
+      z.object({
+        kind: z
+          .enum([
+            "note",
+            "code",
+            "panel",
+            "grid",
+            "band",
+            "divider",
+            "measure",
+            "text",
+          ])
+          .describe(
+            "note: a card saying what something is. code: a terminal window with lines, and highlight to pick one out. panel: a key down the side, heading plus rows. grid: a block of small coloured chips in a box, for listing what belongs to one side of a comparison. band: a strip across the foot of the page. divider: a plain rule between two halves. measure: a span with a head at each end and its size above. text: words on their own.",
+          ),
+        id: z
+          .string()
+          .optional()
+          .describe("Name it and an edge can point an arrow at it"),
+        at: z.object({
+          x: z.number(),
+          y: z.number(),
+          w: z.number().optional(),
+          h: z.number().optional(),
+        }),
+        heading: z.string().optional(),
+        text: z.string().optional(),
+        label: z.string().optional().describe("For measure"),
+        title: z.string().optional().describe("For code, set inside the window"),
+        lines: z.array(z.string()).optional().describe("For code"),
+        highlight: z
+          .array(z.number().int())
+          .optional()
+          .describe("For code: line numbers to pick out, counting from 1"),
+        rows: z
+          .array(z.object({ chip: z.string().optional(), label: z.string() }))
+          .optional()
+          .describe("For panel"),
+        chips: z
+          .array(z.object({ color: z.string().optional(), label: z.string() }))
+          .optional()
+          .describe("For grid: the small coloured boxes inside it"),
+        columns: z
+          .number()
+          .int()
+          .min(1)
+          .max(6)
+          .optional()
+          .describe("For grid: how many chips across. Two unless you say."),
+        row_height: z.number().optional().describe("For grid"),
+        color: z.string().optional(),
+        fill: z.string().optional().describe("Exact background colour, e.g. #fff9db"),
+        stroke: z.string().optional().describe("Exact outline colour, e.g. #1e1e1e"),
+        style: z.enum(["solid", "dashed"]).optional(),
+        status: z
+          .enum(["ok", "bad"])
+          .optional()
+          .describe("For note: a tick or a cross on the card"),
+        size: z.enum(["small", "normal", "large"]).optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "The pieces that are not boxes: notes, code windows, side panels, a footer strip, a rule, a measured span, loose words. Each carries its own at: {x, y}.",
+    ),
+  legend: z
+    .boolean()
+    .optional()
+    .describe(
+      "Draw a key of the roles used. Left out, one appears when five or more roles are in the drawing.",
+    ),
 };
 
 export function installMcp(
@@ -125,18 +364,59 @@ export function installMcp(
 
   // Icons named by the model are looked up (and fetched once, if the workspace
   // allows it) before the diagram is built.
-  const artwork = async (workspace, spec) => {
+  const artwork = async (workspace, spec, warnings = []) => {
     const found = new Map();
+    const missing = new Set();
+    const swapped = [];
+    const fetched = [];
     if (!icons) return found;
-    for (const node of spec?.nodes || []) {
-      if (!node?.icon || found.has(node.icon)) continue;
+    // A boundary's corner badge is looked up exactly like a node's icon.
+    const wanted = [
+      ...(spec?.nodes || []).map((node) => ({
+        name: node?.icon,
+        hint: node?.label,
+      })),
+      ...(spec?.zones || []).map((zone) => ({
+        name: zone?.badge,
+        hint: zone?.label,
+      })),
+    ];
+    for (const node of wanted.map((item) => ({
+      icon: item.name,
+      label: item.hint,
+    }))) {
+      if (!node?.icon || found.has(node.icon) || missing.has(node.icon))
+        continue;
       try {
-        const art = await icons.iconData(workspace, node.icon);
-        if (art) found.set(node.icon, art);
+        // Plain words are accepted, not only exact names: a description asking
+        // for "the queue" gets whichever picture in the library means that.
+        const art = await icons.findIcon(workspace, node.icon, node.label);
+        if (art) {
+          found.set(node.icon, art);
+          if (art.matched)
+            (art.fetched ? fetched : swapped).push([node.icon, art.ref]);
+        } else missing.add(node.icon);
       } catch {
         // a missing icon never fails the drawing; the box is simply drawn plain
+        missing.add(node.icon);
       }
     }
+    // An icon that was asked for and not found is the kind of thing an assistant
+    // can fix on its next call, but only if it is told.
+    for (const name of missing)
+      warnings.push(
+        `No icon could be found for "${name}", here or online. That box was drawn without one; list_icons searches the library by meaning.`,
+      );
+    // A substitution is not a fault, but the caller asked for one picture and
+    // got another, so it is told which — it may know a better word to use.
+    for (const [asked, used] of swapped)
+      warnings.push(`Used ${used} for "${asked}".`);
+    // Something the library did not have was found online and kept. Saying so
+    // is how a reviewer learns a new icon arrived without anyone importing it.
+    for (const [asked, used] of fetched)
+      warnings.push(
+        `No icon here meant "${asked}", so ${used} was found online and added to this workspace's library.`,
+      );
     return found;
   };
 
@@ -293,26 +573,58 @@ export function installMcp(
     server.registerTool(
       "list_icons",
       {
-        title: "List available icons",
+        title: "Find icons",
         description:
-          "Icons this workspace can draw with, named set/name. Use one in a node's icon field.",
+          "Icons this workspace can draw with. Search in plain words — what the thing is, not what the file is called — and the closest icons come back best first: \"database\" finds postgresql, \"queue\" finds kafka. Put the answer in a node's icon field, or put the plain words there and the same search runs while drawing.",
         inputSchema: {
-          search: z.string().optional().describe("Filter by words in the name"),
+          search: z
+            .string()
+            .optional()
+            .describe(
+              "What you want a picture of, e.g. database, message queue, load balancer, user",
+            ),
         },
         outputSchema: {
           icons: z.array(z.string()),
+          matches: z
+            .array(
+              z.object({
+                ref: z.string(),
+                name: z.string(),
+                category: z.string(),
+              }),
+            )
+            .optional(),
           fetching_allowed: z.boolean(),
         },
       },
       async ({ search }) => {
         const workspace = await workspaceFor(context);
+        const allowed = icons ? (await icons.settings()).fetch_enabled : false;
+        // Without words, the library itself; with words, what they mean.
+        const matches =
+          search && icons ? await icons.matchIcons(workspace, search, 20) : [];
+        if (search && icons) {
+          const result = {
+            icons: matches.map((match) => match.ref),
+            matches: matches.map(({ ref, name, category }) => ({
+              ref,
+              name,
+              category,
+            })),
+            fetching_allowed: Boolean(allowed),
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+            structuredContent: result,
+          };
+        }
         const { rows } = await db.query(
           `SELECT set_name||'/'||name AS ref FROM icons
-           WHERE workspace_id=$1 AND ($2::text IS NULL OR name ILIKE '%'||$2||'%')
+           WHERE workspace_id=$1 OR shared
            ORDER BY set_name,name LIMIT 200`,
-          [workspace, search || null],
+          [workspace],
         );
-        const allowed = icons ? (await icons.settings()).fetch_enabled : false;
         const result = {
           icons: rows.map((row) => row.ref),
           fetching_allowed: Boolean(allowed),
@@ -328,7 +640,7 @@ export function installMcp(
       {
         title: "Drawing options",
         description:
-          "The fonts, colours, shapes and layouts this workspace can draw with. Read this before creating a drawing.",
+          "The roles, boundary levels, fonts, shapes, layouts and limits this workspace draws with, and the rules that make a diagram read well. Read this before creating a drawing.",
         inputSchema: {},
       },
       async () => {
@@ -339,13 +651,182 @@ export function installMcp(
         };
       },
     );
+    // The house rules, where an assistant can pick them up without being told.
+    // A tool description has to be short; this does not.
+    server.registerPrompt(
+      "diagram_rules",
+      {
+        title: "How to draw here",
+        description:
+          "The rules this workspace draws by, including how to turn a picture somebody sends you into a drawing.",
+      },
+      () => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: [
+                "Before drawing in this workspace, work out the structure, then describe it.",
+                "",
+                "1. Name the one thing the drawing explains. That is the title.",
+                "2. Write the boundaries outermost first, for example: cloud > account > cluster > node. Send them as zones, and put each node in the zone that holds it.",
+                "3. Give every node a role rather than a colour: control-plane, data-plane, storage, external, gateway, error, observability, neutral. One role always looks the same, which is what lets a reader learn the drawing in two seconds.",
+                "4. Say what each connection is with kind: sync for a request, async for a watch or a background flow, primary for the main data path, bidirectional for both ways.",
+                "5. If the drawing explains a request from start to finish, number the edges with step, beginning at 1, in the order they happen.",
+                "6. Put an icon on every node that is a named product. Write what the thing is — postgres, message queue, load balancer, user — and the closest icon in this workspace's library is used; when the library has nothing named that and this workspace allows it, the icon is fetched from the icon source and kept. list_icons searches the same way if you want to see the choices first.",
+                "7. Ask for a legend when the drawing uses five or more roles or introduces words the reader may not know, or build your own with an extras panel.",
+                "6b. Icons come from the library first. Search it with list_icons for every icon the picture needs, and only for the ones it truly has none of, cut them out of the picture itself with add_icon_from_image: give the rectangle each one sits in and a name, and it is kept in the library and used by name from then on. Leave room around the icon, pass drop_edges so the caption above it and the border below it go, and keep: main so you get the logo and nothing else. Then check the answer: leftover above a per cent or two means the page did not come away, so cut again before you draw with it.",
+                "7b. A workflow or an explainer is rarely boxes alone. extras carries the rest: a code window with one line picked out, a note hung off a dashed arrow, a key panel down the side, a strip along the foot of the page, a rule between two halves, a measured span. Each takes its own at: {x, y}, and one with an id can have an arrow pointed at it.",
+                "",
+                "Positions, sizes, colours, arrow routes and the grid are decided by the server. Do not try to place anything yourself.",
+                "",
+                "When somebody gives you a picture and asks for one like it: read the picture and write down what it contains, then send that as the description. List the boundaries you can see, what sits inside each one, which way the arrows point, and what the numbers on them say. Name the roles from what each box is, not from the colour it happens to have in the picture. Name an icon for every box that is a product, using the words on the box. The result will be a clean redrawing of the same structure, not a copy of the image.",
+                "",
+                "Whoever asked may want a particular look. Pass it in style: font for the lettering (drawing_style_guide lists the fonts), background for the canvas, sketchy for the hand-drawn look, brand for a small mark in the corner. Leave these out and the workspace default is used; set them when you have been told what to use, and keep them the same across a set of drawings that belong together.",
+                "",
+                "Every create_drawing and update_drawing answers with any warnings. Read them: they say what could not be done, such as an icon this workspace does not have. Fix the description and call update_drawing on the same drawing rather than making a second one.",
+              ].join("\n"),
+            },
+          },
+        ],
+      }),
+    );
     if (context.scope === "write") {
+      server.registerTool(
+        "add_icon_from_image",
+        {
+          title: "Take an icon out of a picture",
+          description:
+            "A last resort, not a first move. Look in the library first with list_icons: a logo somebody drew and uploaded is better than one cut out of a screenshot of it, and this tool checks again and hands back the library's own icon rather than cutting when it finds one. Only when the library really has nothing, cut the icon out of the picture being copied. Give the picture and a name; give a rectangle too, or leave it out if the picture is already cropped to the icon. The flat page behind the icon is removed — including the page showing through gaps in the artwork — and the result is trimmed. The answer says how much of the old page is still left in the icon: anything above a per cent or two means it did not come away, so look at it and cut again rather than drawing with it.",
+          inputSchema: {
+            image: z
+              .string()
+              .describe("The whole picture, as a data URL (PNG)"),
+            crop: z
+              .object({
+                x: z.number().describe("Pixels from the left of the picture"),
+                y: z.number().describe("Pixels from the top of the picture"),
+                w: z.number().describe("Width of the rectangle"),
+                h: z.number().describe("Height of the rectangle"),
+              })
+              .optional()
+              .describe(
+                "The rectangle the icon sits in. Leave it out when the picture is already cropped to the icon.",
+              ),
+            name: z.string().describe("What to call it in the library"),
+            category: z
+              .string()
+              .optional()
+              .describe("Which shelf of the library it goes on"),
+            tolerance: z
+              .number()
+              .min(0)
+              .max(100)
+              .optional()
+              .describe(
+                "How far from the page colour still counts as page. 12 unless you say; raise it when some is left behind, lower it when the artwork loses its own edges.",
+              ),
+            background: z
+              .string()
+              .optional()
+              .describe(
+                "The background colour, e.g. #ffffff. Worked out from the corners unless you say.",
+              ),
+            drop_edges: z
+              .boolean()
+              .optional()
+              .describe(
+                "Throw away anything that runs off the edge of the rectangle — the caption above the icon, the panel border below it. Use it when the rectangle has room around the icon; leave it off when the crop is tight, or the artwork goes with them.",
+              ),
+            keep: z
+              .enum(["all", "main"])
+              .optional()
+              .describe(
+                "main keeps only the logo itself and drops whatever is not joined to it — a stray tick, the end of a line. Use it when you want the logo and nothing else. all is the default, for a logo genuinely made of separate parts.",
+              ),
+            force: z
+              .boolean()
+              .optional()
+              .describe(
+                "Cut even when the library already has something by this name. Only when you have looked and the library's one is worse.",
+              ),
+          },
+          outputSchema: {
+            ref: z.string(),
+            existing: z.boolean(),
+            reused: z.boolean(),
+            width: z.number(),
+            height: z.number(),
+            background: z.string(),
+            removed: z.number(),
+            kept: z.number(),
+            leftover: z.number(),
+          },
+        },
+        async ({
+          image,
+          crop,
+          name,
+          category,
+          tolerance,
+          background,
+          drop_edges,
+          keep,
+          force,
+        }) => {
+          if (!icons)
+            throw new Error("This workspace has no icon library.");
+          const workspace = await workspaceFor(context);
+          const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(
+            String(image || "").trim(),
+          );
+          if (!match)
+            throw new Error("Send the picture as a PNG data URL.");
+          const file = Buffer.from(match[1], "base64");
+          if (file.length > 12 * 1024 * 1024)
+            throw new Error("That picture is larger than 12 MB.");
+          const cut = await icons.iconFromPicture(workspace, {
+            file,
+            crop,
+            name,
+            category,
+            tolerance,
+            background,
+            drop_edges,
+            keep,
+            force,
+            actor: context.user.id,
+          });
+          if (cut.reused)
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `The library already has ${cut.ref} for that. Nothing was cut; use that one. Pass force only if you have looked at it and it is worse than what is in the picture.`,
+                },
+              ],
+              structuredContent: cut,
+            };
+          const notes = [
+            `Kept ${cut.ref} at ${cut.width}x${cut.height}.`,
+            `${cut.removed}% of it was page (${cut.background}); ${cut.kept}% of what is left is artwork.`,
+            cut.leftover > 2
+              ? `${cut.leftover}% of the icon is still the old page colour, so it did not come away cleanly. Look at it before drawing with it: raise the tolerance, or crop closer.`
+              : "The page came away clean.",
+          ];
+          return {
+            content: [{ type: "text", text: notes.join("\n") }],
+            structuredContent: cut,
+          };
+        },
+      );
       server.registerTool(
         "create_drawing",
         {
           title: "Create a drawing",
           description:
-            "Draw a new diagram from a description. Say which boxes exist and what connects to what; positions are worked out here.",
+            "Draw a new diagram. Say which boxes exist, what connects to what, which boundary each box sits in, and what each box is (its role); every position, colour and arrow route is worked out here, on a grid. Read drawing_style_guide first for the roles and boundary levels.",
           inputSchema: {
             name: z.string().describe("Name of the drawing"),
             collection: z
@@ -357,7 +838,12 @@ export function installMcp(
         },
         async ({ name, collection, ...spec }) => {
           const workspace = await workspaceFor(context);
-          const payload = buildDiagram(spec, await artwork(workspace, spec));
+          const warnings = [];
+          const payload = buildDiagram(
+            spec,
+            await artwork(workspace, spec, warnings),
+            warnings,
+          );
           const scene = await transaction(db, (tx) =>
             drawings.create(
               {
@@ -378,12 +864,16 @@ export function installMcp(
             name: scene.name,
             url: editorUrl(scene.id),
             elements: payload.elements.length,
+            warnings,
           };
           return {
             content: [
               {
                 type: "text",
-                text: `Drew "${scene.name}" with ${result.elements} elements: ${result.url}`,
+                text: [
+                  `Drew "${scene.name}" with ${result.elements} elements: ${result.url}`,
+                  ...warnings.map((warning) => `- ${warning}`),
+                ].join("\n"),
               },
             ],
             structuredContent: result,
@@ -395,14 +885,16 @@ export function installMcp(
         {
           title: "Redraw a drawing",
           description:
-            "Replace the contents of an existing drawing with a new diagram. The old version stays in its history.",
+            "Replace the contents of an existing drawing with a new diagram, using the same description as create_drawing. The old version stays in its history, so this is how you correct a drawing after looking at it.",
           inputSchema: { id: z.string().describe("Drawing id"), ...specSchema },
         },
         async ({ id, ...spec }) => {
           const scene = await sceneRow(context, id);
+          const warnings = [];
           const payload = buildDiagram(
             spec,
-            await artwork(scene.workspace_id, spec),
+            await artwork(scene.workspace_id, spec, warnings),
+            warnings,
           );
           const saved = await drawings.saveScene(
             context.user,
@@ -414,12 +906,16 @@ export function installMcp(
             version: saved.version,
             url: editorUrl(scene.id),
             elements: payload.elements.length,
+            warnings,
           };
           return {
             content: [
               {
                 type: "text",
-                text: `Redrew "${scene.name}" (version ${saved.version}): ${result.url}`,
+                text: [
+                  `Redrew "${scene.name}" (version ${saved.version}): ${result.url}`,
+                  ...warnings.map((warning) => `- ${warning}`),
+                ].join("\n"),
               },
             ],
             structuredContent: result,
