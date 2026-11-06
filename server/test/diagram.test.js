@@ -810,6 +810,27 @@ describe("blueprint diagrams", () => {
     assert.equal(down.points[1][0], 0, "the line down is plumb");
   });
 
+  it("never curves a corner unless asked to", () => {
+    // Boxes, not curves. Every rectangle in a drawing takes corners, the title
+    // block and the boundary name pill and the terminal window included.
+    const scene = buildDiagram({
+      title: "Corners",
+      layout: "manual",
+      style: { title_style: "highlight" },
+      zones: [{ id: "z", label: "Cloud", at: { x: 0, y: 200, w: 600, h: 400 } }],
+      nodes: [{ id: "a", label: "A", zone: "z", at: { x: 80, y: 300 } }],
+      extras: [
+        { kind: "code", at: { x: 700, y: 200, w: 500 }, lines: ["one", "two"] },
+        { kind: "panel", at: { x: 700, y: 600, w: 400 }, heading: "Key", rows: [] },
+      ],
+      legend: true,
+    });
+    const curved = scene.elements.filter(
+      (e) => e.type === "rectangle" && e.roundness,
+    );
+    assert.deepEqual(curved, []);
+  });
+
   it("never lets one piece of writing land on another", () => {
     // Every heading, row and caption is placed from where the line above
     // actually landed. Working the next position out and snapping it

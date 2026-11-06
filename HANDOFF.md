@@ -95,6 +95,40 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-06 — Claude — `feature/diagram-blueprint`: corners everywhere, and icons come from the library, not the internet
+
+Same branch and PR #15. Not released; nothing on production has changed.
+
+Three faults, all found by a reader looking at a drawing beside their own:
+
+- **Curves were still being drawn.** Tiles and boundaries took corners, but the
+  name pill, the note, the panel, the terminal window, the title block and the
+  page frame were all still rounded. Every rectangle now takes corners and a
+  test asserts that none of them is rounded unless `corners: "round"` asks.
+- **The lettering was half-size.** The picture being copied was placed at twice
+  its own coordinates while the text stayed at its own size, which left small
+  words sitting in big empty boxes. Placed at the reference's own scale, a note
+  comes out 280x40 around 20px words instead of 560x80 around the same words.
+- **Icons were being pulled off the internet.** Fetching is off by default and
+  the workspace library comes first; it had been switched on in the local
+  fixture, so every box got whatever the icon source offered. Switched off. The
+  drawing now says plainly which icons it could not find instead of reaching
+  for a poor substitute.
+
+Production's own library was read (listing and per-icon GETs, nothing opened or
+changed) and holds 300 curated icons under categories such as People,
+Networking, Containers and GPU & Hardware — `Developer at Laptop`,
+`Server Rack`, `Network` among them. Those are the ones a drawing should use.
+
+Left undone, and it needs a decision: the local fixture's icon library is
+empty, so a drawing checked locally has no icons in it. The official icons
+exist only as uploads on production. Either they are copied into the local
+instance, or drawings are made on production where they already are — and
+production is read-only by the owner's instruction, so this is their call.
+
+Checks: server suite 107 pass / 0 fail, `yarn test:typecheck` clean, `yarn fix`
+run.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: a straight line between two boxes is level, not sloped
 
 Same branch and PR #15. Not released; nothing on production has changed.

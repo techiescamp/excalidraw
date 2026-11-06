@@ -74,7 +74,9 @@ Nearly every diagram is one of three shapes:
 
 ## Boxes
 
-Square corners. The rounded rectangle is the editor's default and it is not
+Square corners, everywhere and without exception — tiles, boundaries, name
+pills, notes, panels, the terminal window, the title block and the page frame.
+A curve appears only when `corners: "round"` asks for one. The rounded rectangle is the editor's default and it is not
 what these diagrams use, so the engine draws corners unless asked for
 `corners: "round"`.
 

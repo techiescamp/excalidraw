@@ -1204,7 +1204,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         strokeColor: paint.stroke,
         strokeWidth: 1,
         roughness: 0,
-        roundness: { type: 3 },
+        roundness: corners,
       });
       const name = label(text, tag, fontFamily, ink, ZONE_LABEL_SIZE);
       tag.boundElements = [{ id: name.id, type: "text" }];
@@ -1428,7 +1428,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         strokeColor: CODE_PAPER,
         strokeWidth: 1,
         roughness: 0,
-        roundness: { type: 3 },
+        roundness: corners,
       });
       elements.push(panel);
       remember(panel);
@@ -1525,7 +1525,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         strokeWidth: 1,
         strokeStyle: extra.style === "dashed" ? "dashed" : "solid",
         roughness: 0,
-        roundness: { type: 3 },
+        roundness: corners,
       });
       elements.push(panel);
       remember(panel);
@@ -2078,7 +2078,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         fillStyle: "solid",
         strokeColor: muted,
         strokeWidth: 1,
-        roundness: { type: 3 },
+        roundness: corners,
       }),
       element("rectangle", {
         x,
@@ -2089,7 +2089,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         fillStyle: "solid",
         strokeColor: "#757575",
         strokeWidth: 1,
-        roundness: { type: 3 },
+        roundness: corners,
       }),
       plainText(
         "Key Components",
@@ -2157,7 +2157,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         strokeColor: "#1e1e1e",
         strokeWidth: 1,
         roughness: 0,
-        roundness: { type: 3 },
+        roundness: corners,
       });
       const bannerText = label(text, banner, fontFamily, "#1e1e1e", TITLE_SIZE);
       banner.boundElements = [{ id: bannerText.id, type: "text" }];
@@ -2175,7 +2175,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         strokeColor: "transparent",
         strokeWidth: 1,
         roughness: 0,
-        roundness: { type: 3 },
+        roundness: corners,
       });
       elements.unshift(
         block,
@@ -2258,7 +2258,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           strokeColor: dark ? "#495057" : "#ced4da",
           strokeWidth: 1,
           roughness: 0,
-          roundness: { type: 3 },
+          roundness: corners,
         }),
       );
     }
