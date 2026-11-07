@@ -912,4 +912,123 @@ describe("blueprint diagrams", () => {
     assert.ok(guide.edge_kinds.includes("primary"));
     assert.ok(guide.how_to_make_it_read_well.length >= 4);
   });
+
+  // ── copying a picture exactly ────────────────────────────────────────────
+  // Everything below exists because a hand-placed copy is a different job from
+  // a laid-out drawing: it is measured off a picture, and anything the engine
+  // rounds, caps or re-wraps on the way is a place the copy stops matching.
+
+  it("holds a hand-placed drawing to the fine grid, not the coarse one", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        { id: "a", label: "", at: { x: 97, y: 17, w: 285, h: 78 } },
+        { id: "b", label: "", at: { x: 243, y: 226, w: 108, h: 102 } },
+      ],
+    });
+    const boxes = scene.elements.filter((e) => e.type === "rectangle");
+    const a = boxes.find((e) => e.width === 285);
+    assert.ok(a, "a width read off a picture survives to the pixel-ish");
+    assert.deepEqual([a.x, a.y], [95, 15], "rounded to 5, not to 20");
+    const b = boxes.find((e) => e.width === 110);
+    assert.deepEqual([b.x, b.y], [245, 225]);
+  });
+
+  it("saves the canvas at 100%, so an export is the size it was drawn", () => {
+    const scene = buildDiagram(spec());
+    assert.deepEqual(scene.appState.zoom, { value: 1 });
+    // And scrolled so the drawing is in view rather than off the corner.
+    assert.ok(Number.isFinite(scene.appState.scrollX));
+    assert.ok(Number.isFinite(scene.appState.scrollY));
+  });
+
+  it("letters at the editor's own four steps, xlarge included", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [{ id: "a", label: "", at: { x: 0, y: 0, w: 40, h: 40 } }],
+      extras: [
+        { kind: "text", text: "S", size: "small", at: { x: 0, y: 100 } },
+        { kind: "text", text: "M", size: "normal", at: { x: 0, y: 200 } },
+        { kind: "text", text: "L", size: "large", at: { x: 0, y: 300 } },
+        { kind: "text", text: "XL", size: "xlarge", at: { x: 0, y: 400 } },
+      ],
+    });
+    const at = (text) =>
+      scene.elements.find((e) => e.type === "text" && e.text === text).fontSize;
+    assert.deepEqual(
+      [at("S"), at("M"), at("L"), at("XL")],
+      [16, 20, 28, 36],
+      "a heading in a reference picture is usually XL",
+    );
+    assert.equal(styleGuide().text_sizes.xlarge, 36);
+  });
+
+  it("turns an elbow once, and leaves a line that is in line alone", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        // One above the other, sharing a column: a straight drop, no corner.
+        { id: "top", label: "", at: { x: 100, y: 100, w: 100, h: 60 } },
+        { id: "under", label: "", at: { x: 110, y: 300, w: 100, h: 60 } },
+        // Off to the side and out of line both ways: one turn.
+        { id: "aside", label: "", at: { x: 400, y: 400, w: 100, h: 60 } },
+      ],
+      edges: [
+        { from: "top", to: "under" },
+        { from: "top", to: "aside" },
+      ],
+    });
+    const [drop, bend] = scene.elements.filter((e) => e.type === "arrow");
+    assert.equal(drop.points.length, 2, "boxes in a column are joined straight");
+    assert.equal(drop.points[0][0], drop.points[1][0], "and vertically");
+    // Every segment of the bend is horizontal or vertical: no diagonals.
+    bend.points.forEach(([x, y], at) => {
+      if (!at) return;
+      const [px, py] = bend.points[at - 1];
+      assert.ok(x === px || y === py, `segment ${at} runs diagonally`);
+    });
+    assert.equal(bend.roundness, null, "square corners, not rounded elbows");
+    assert.equal(bend.endArrowhead, "triangle");
+  });
+
+  it("says when it had to leave extras out instead of dropping them quietly", () => {
+    const warnings = [];
+    const many = Array.from({ length: 260 }, (_, at) => ({
+      kind: "text",
+      text: `line ${at}`,
+      at: { x: 0, y: at * 40 },
+    }));
+    buildDiagram(
+      { layout: "manual", nodes: [{ id: "a", label: "", at: { x: 0, y: 0 } }], extras: many },
+      new Map(),
+      warnings,
+    );
+    assert.match(warnings.join("\n"), /260 extras/);
+    assert.match(warnings.join("\n"), /only the first 200/);
+  });
+
+  it("says when a box was captioned with its own id", () => {
+    const warnings = [];
+    buildDiagram({ nodes: [{ id: "card3" }, { id: "b", label: "" }] }, new Map(), warnings);
+    assert.match(warnings.join("\n"), /"card3" has no label/);
+    assert.ok(
+      !warnings.join("\n").includes('"b" has no label'),
+      "an empty label is a decision, not an omission",
+    );
+  });
+
+  it("wraps a hand-placed label to the box it was given, not to 24 letters", () => {
+    const scene = buildDiagram({
+      layout: "manual",
+      nodes: [
+        { id: "a", label: "Ask a question in plain text", at: { x: 0, y: 0, w: 200, h: 80 } },
+      ],
+    });
+    const text = scene.elements.find((e) => e.type === "text");
+    const widest = Math.max(...text.text.split("\n").map((line) => line.length));
+    assert.ok(
+      widest <= 14,
+      `wrapped to ${widest} letters, which does not fit a 200px box`,
+    );
+  });
 });

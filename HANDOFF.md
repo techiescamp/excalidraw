@@ -95,6 +95,111 @@ is tagged and on its way through it.
 
 ## Log
 
+### 2026-11-07 — `feature/exact-copy`: drawing a picture back the way it came
+
+**Why.** The engine could draw in the house style but could not copy a picture
+handed to it. Measured against the original, panel by panel, the worst piece
+landed 6.8% of a panel's size from where it belonged, and the owner would not
+sign it off. Each miss was a number the engine rounded, capped or re-wrapped.
+
+**Changed** — all in `server/lib/diagram.js` unless noted.
+
+1. **Canvas saved at 100%.** `appState` now carries `zoom: {value: 1}` and a
+   scroll that puts the drawing in view. A scene saved at some other zoom
+   exports at that zoom, so a picture measured to the pixel came back scaled.
+2. **A fine grid for hand-placed drawings.** `FINE_GRID = 5`. `layout: "manual"`
+   rounds to 5; everything else still rounds to 20. Threaded through as `place`
+   so one drawing is held to one grid end to end.
+3. **`plainText` no longer snaps.** It was snapping x and y to 20 a second time
+   after the caller had already placed them, which both defeated the fine grid
+   and pulled a card's heading down onto the line under it.
+4. **XL lettering.** `TEXT_SIZES` is the editor's own four steps — 16 / 20 / 28
+   / 36. `extras.size` takes `xlarge`, and `style.title_size` sets the heading.
+   Headings were coming out a fifth too small.
+5. **`route: "elbow"`**, and the default for a hand-placed drawing. Turns once,
+   just *after* the box it leaves, and joins two boxes that line up with a plain
+   straight line. The old `orthogonal` turned just before the target, so a
+   fan-out ran across the row at its own height and ploughed through whatever
+   sat in between; `straight` drew a diagonal.
+6. **`extras` cap 40 → 200, and says when it truncates.** Forty ran out halfway
+   through the first real picture and the rest vanished with no warning.
+7. **A node with no label still draws its id, and now warns.** Boxes were coming
+   out captioned `card3`.
+8. **A hand-placed box wraps its label to its own width** instead of to a fixed
+   24 letters, which had labels running out past the edge of their box. Plain
+   nodes are exempt: their name sits beside the picture, not inside a box.
+
+Schema and guide: `server/lib/mcp.js` gained `route: elbow`, `size: xlarge`,
+`style.title_size`; `styleGuide()` reports `text_sizes`, both grids and the
+canvas zoom; the house rules now say to measure a picture rather than judge it
+by eye. `docs/specs/diagram-house-style.md` has a new section on copying.
+
+**Checked.**
+- `server/test/diagram.test.js` — 36 pass, 0 fail, including 7 new ones
+  covering the fine grid, 100% zoom, the four letter sizes, elbow vs straight,
+  the extras warning, the id-label warning and wrapping to the given width.
+- Whole server suite: 75 pass. The one failure is
+  `test/private-workspaces.test.js`, which needs `TEST_DATABASE_URL` and did
+  not run; unrelated to this change.
+- End to end by hand: the three-panel reference picture the owner supplied was
+  measured out of its own pixels and rebuilt through the engine. Worst piece
+  now lands **1.4%** of a panel's size from the original, down from 6.8%.
+
+**Not done.**
+- Not merged, not released, not deployed. The owner decides when this goes to
+  production.
+- Production still has `fetching_allowed: false`, so official brand logos
+  cannot be pulled from an icon set; a logo the library lacks has to be cut out
+  of the supplied picture. Unresolved — the owner wants official icons.
+- A fan-out still draws one line per edge. The reference diagrams share a spine
+  between them. Not attempted.
+
+
+### 2026-11-06 — Claude — v5.4.0 released and deployed to production
+
+`feature/diagram-blueprint` → `dev` (PR #15) → `main` (PR #16) → tag `v5.4.0` →
+release artifact → production, by the pipeline, approved by the owner.
+
+The route was the one section 2a asks for, not the shortcut: PR #15 originally
+pointed at `main` and was retargeted to `dev` first. One thing had to be fixed
+on the way — the semantic title check rejects the scope `mcp`, so the pull
+request title was changed to `feat(server)`.
+
+Deploy run: every step succeeded, the pipeline's own health check passed, the
+"put the previous release back" step was skipped because nothing failed.
+
+Checked by hand afterwards, all read-only:
+
+- `/healthz` returns `{"ok":true}`, three times, around 30 ms each.
+- The dashboard loads signed in. Every request on it returned 200 — no 4xx, no
+  5xx — and the browser console has no errors at all.
+- The new code is live and not just installed: `drawing_style_guide` on
+  production now lists `manual`, `lanes` and `bands`, the `extras`, the curved
+  route, `plain` nodes and the new fonts. The old deployment listed none of
+  these.
+- Icon search answers with ranked matches by meaning, and
+  `fetching_allowed: false` — the internet is still off there, as it should be.
+- A saved drawing reads back: 122 elements, 767 ms. Existing work is intact.
+- `/api/me`, `/api/scenes`, `/api/workspaces/.../icons` and the collections
+  endpoint all 200 in 12–110 ms.
+
+**Two things are still unchecked, and both need the owner.**
+
+1. **No drawing has been made on production.** Creating one is a write to a
+   shared resource and was refused here, so the new drawing path has not run
+   against the real icon library. Everything about it was proven locally
+   instead. Either grant the permission or make one drawing by hand to close
+   this.
+2. **An MCP client that was connected before the deploy still holds the old
+   tool list.** This session's cached `create_drawing` has no `layout: manual`,
+   no `extras`, no `at`. The server has them — the style guide proves it — but
+   a client has to reconnect to see them. Anyone using the drawing tools should
+   reconnect before expecting the new options.
+
+Server logs were not read: there is no shell access to the box from here. The
+pipeline's health check and the endpoint checks above are what stands in for
+them.
+
 ### 2026-11-06 — Claude — `feature/diagram-blueprint`: the icon path verified locally, which clears the gate's step 2
 
 Same branch and PR #15. Not released; nothing on production has changed.
