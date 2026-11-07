@@ -231,3 +231,29 @@ beside the published one, and the reference architecture from the last round
 redrawn in the house style. Both checked against the exported scene — every
 element inside the page frame, no two pieces of text overlapping, every icon
 placed.
+
+## Copying a picture to the pixel
+
+Everything above is about drawing in this house's style. This section is about
+the other job: being handed a picture and giving it back.
+
+The engine was close and kept missing, and each miss had the same shape — a
+number the engine rounded, capped or re-wrapped on the way through.
+
+| What went wrong | Why | What it does now |
+|---|---|---|
+| Every small piece up to 10px out | One 20px grid for everything | A hand-placed drawing sits on a 5px grid; a laid-out one still sits on 20 |
+| Headings a fifth too small | Text stopped at L (28) | XL (36) exists, and `style.title_size` picks it |
+| Half a drawing silently missing | `extras` capped at 40, no warning | The cap is 200 and going over it is reported |
+| Boxes captioned `card3` | A node with no label drew its id | It still does, and now says so |
+| A label out past the edge of its own box | Labels wrapped at a fixed 24 letters | A hand-placed box wraps to the width it was given |
+| A heading sitting on the line under it | Loose text was snapped twice, once by the caller and again on the way out | Snapped once, by the caller, on the drawing's own grid |
+| Exports came back at the wrong size | The scene was saved at whatever zoom | Every scene is saved at 100% |
+| Lines ploughing through the box in between | `straight` drew a diagonal; the router turned just before the target | `elbow` turns just after the box it leaves, and two boxes in line are joined straight |
+
+**Measure, do not judge by eye.** Read the picture's pixels and take the real
+box of every piece: each panel, pill, bubble, icon, box, bar and line of text.
+Placing from a glance is what put a pill 20px low and a document 40px tall.
+
+Measured against the picture it was copied from, panel by panel, the worst
+piece now lands 1.4% of a panel's size from where it sits in the original.

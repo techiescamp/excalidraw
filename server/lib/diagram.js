@@ -75,6 +75,13 @@ const PLAIN_GAP = 8;
 // of making a diagram look deliberate rather than placed by hand.
 const GRID = 20;
 const snap = (value) => Math.round(value / GRID) * GRID;
+// Copying a picture is a different job from laying one out. A layout wants the
+// coarse grid, because that is what makes it look deliberate; a copy wants the
+// coordinates that were read off the original, and rounding those to the
+// nearest 20 moves every small piece by up to ten pixels. So a hand-placed
+// drawing is held to a fine grid instead.
+const FINE_GRID = 5;
+const fine = (value) => Math.round(value / FINE_GRID) * FINE_GRID;
 
 const ZONE_PADDING = 40; // between a boundary and anything inside it
 const SIBLING_GAP = 40; // between tiles in the same boundary
@@ -83,9 +90,24 @@ const BADGE = 36; // numbered step
 const TITLE_SIZE = 28;
 const ZONE_LABEL_SIZE = 20;
 const SMALL_SIZE = 16; // arrow labels, legend rows, the brand mark
+// The editor's own four steps, S M L XL. A heading in a reference picture is
+// usually XL, and an engine that stopped at L drew every title a fifth too
+// small beside the original.
+const XLARGE_SIZE = 36;
+const TEXT_SIZES = {
+  small: SMALL_SIZE,
+  normal: FONT_SIZE,
+  medium: FONT_SIZE,
+  large: TITLE_SIZE,
+  xlarge: XLARGE_SIZE,
+};
+const textSize = (name) =>
+  TEXT_SIZES[String(name || "").toLowerCase()] ?? FONT_SIZE;
 const LEGEND_WIDTH = 280;
 const LEGEND_ROW = 32;
 const MAX_FILLS = 6; // more than this and two roles are really one role
+const MAX_EXTRAS = 200; // a copied picture needs one per loose word, dot and rule
+const VIEW_MARGIN = 40; // where the drawing sits when the canvas opens at 100%
 
 // Colour means role, never decoration. A reader learns "violet is the control
 // plane" once and carries it through the whole diagram.
@@ -423,16 +445,16 @@ const fitArt = (area, aspect) => {
   };
 };
 
-const besideBox = (area, measured, place) => {
-  const middleY = snap(area.y + (area.height - measured.height) / 2);
-  const middleX = snap(area.x + (area.width - measured.width) / 2);
+const besideBox = (area, measured, place, step = snap) => {
+  const middleY = step(area.y + (area.height - measured.height) / 2);
+  const middleX = step(area.x + (area.width - measured.width) / 2);
   if (place === "left")
-    return { x: snap(area.x - LABEL_GAP - measured.width), y: middleY };
+    return { x: step(area.x - LABEL_GAP - measured.width), y: middleY };
   if (place === "right")
-    return { x: snap(area.x + area.width + LABEL_GAP), y: middleY };
+    return { x: step(area.x + area.width + LABEL_GAP), y: middleY };
   if (place === "above")
-    return { x: middleX, y: snap(area.y - LABEL_GAP - measured.height) };
-  return { x: middleX, y: snap(area.y + area.height + LABEL_GAP) };
+    return { x: middleX, y: step(area.y - LABEL_GAP - measured.height) };
+  return { x: middleX, y: step(area.y + area.height + LABEL_GAP) };
 };
 
 const layoutGroup = (zoneId, context) => {
@@ -622,6 +644,70 @@ const tidy = (points) =>
       point[1] !== points[index - 1][1],
   );
 
+// One corner, and only one. A line that leaves its box along the wider gap,
+// turns once, and comes square into the other box: the L these diagrams draw
+// between a thing and the row of things under it. The router below takes two
+// corners when it has to step round something, which reads as a detour; a copy
+// of a picture wants the plain elbow.
+const elbowRoute = (from, to) => {
+  // Boxes that share a band are joined by a plain straight line through it.
+  // Bending a line that is already lined up puts a corner where the eye
+  // expects none, and that is most of what makes a copy look redrawn.
+  const band = (lowA, highA, lowB, highB) => {
+    const low = Math.max(lowA, lowB);
+    const high = Math.min(highA, highB);
+    return high - low >= GRID ? (low + high) / 2 : null;
+  };
+  const column = band(from.x, from.x + from.width, to.x, to.x + to.width);
+  const row = band(from.y, from.y + from.height, to.y, to.y + to.height);
+  if (column !== null && row === null) {
+    const down = to.y >= from.y + from.height;
+    const startY = down ? from.y + from.height : from.y;
+    const endY = down ? to.y : to.y + to.height;
+    return {
+      start: { x: column, y: startY },
+      end: { x: column, y: endY },
+      points: [
+        [0, 0],
+        [0, endY - startY],
+      ],
+    };
+  }
+  if (row !== null) return straightRoute(from, to);
+  // Out of line both ways, so it turns. The turn goes just after the box it
+  // leaves, not just before the one it arrives at: a line that runs the whole
+  // way across at its own height first and only turns at the end is the one
+  // that ploughs through whatever else is sitting in that row — which is
+  // exactly what a fan-out from one box to a column of them does.
+  const across = to.x >= from.x + from.width || from.x >= to.x + to.width;
+  const forward = across
+    ? to.x >= from.x + from.width
+    : to.y >= from.y + from.height;
+  const start = across
+    ? { x: forward ? from.x + from.width : from.x, y: from.y + from.height / 2 }
+    : { x: from.x + from.width / 2, y: forward ? from.y + from.height : from.y };
+  const end = across
+    ? { x: forward ? to.x : to.x + to.width, y: to.y + to.height / 2 }
+    : { x: to.x + to.width / 2, y: forward ? to.y : to.y + to.height };
+  const turn = across
+    ? (forward ? STUB : -STUB)
+    : (forward ? STUB : -STUB);
+  const du = across ? end.x - start.x : end.y - start.y;
+  const dv = across ? end.y - start.y : end.x - start.x;
+  const step = Math.abs(turn) < Math.abs(du) ? turn : du / 2;
+  const at = (u, v) => (across ? [u, v] : [v, u]);
+  return {
+    start,
+    end,
+    points: tidy([
+      at(0, 0),
+      at(step, 0),
+      at(step, dv),
+      at(du, dv),
+    ]),
+  };
+};
+
 // A hand-drawn callout curve: the line these diagrams sweep from a note to the
 // thing it is talking about. Three points with the middle one pushed off to
 // the side, and the editor's own curve setting does the rest.
@@ -784,8 +870,11 @@ const plainText = (
     verticalAlign: "top",
     containerId: null,
     strokeColor,
-    x: snap(x),
-    y: snap(y),
+    // Taken as given. Every caller has already put this on whichever grid the
+    // drawing is held to, and snapping a second time here to the coarse one is
+    // what pulled a heading down onto the line under it.
+    x,
+    y,
     width: size.width,
     height: size.height,
     lineHeight: LINE_HEIGHT,
@@ -798,7 +887,17 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
   const edges = Array.isArray(spec?.edges) ? spec.edges : [];
   const zoneList = Array.isArray(spec?.zones) ? spec.zones : [];
-  const extras = Array.isArray(spec?.extras) ? spec.extras.slice(0, 40) : [];
+  // A copy of a real picture needs a piece for every loose word, dot and rule
+  // in it, and forty ran out halfway through the first one. The cap is still
+  // here to stop a runaway request, but going over it is now said out loud:
+  // dropping half a drawing without a word is how a picture came back missing
+  // its last three sections and nobody knew why.
+  const asked_extras = Array.isArray(spec?.extras) ? spec.extras : [];
+  const extras = asked_extras.slice(0, MAX_EXTRAS);
+  if (asked_extras.length > MAX_EXTRAS)
+    warnings.push(
+      `This drawing asks for ${asked_extras.length} extras; only the first ${MAX_EXTRAS} were drawn. Split it, or leave some out.`,
+    );
   if (!nodes.length) fail(400, "Describe at least one node.");
   if (nodes.length > MAX_NODES)
     fail(400, `Up to ${MAX_NODES} nodes per drawing.`);
@@ -856,6 +955,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   // what a lane is.
   const down = archetype === "flow" ? asked.startsWith("down") : false;
   const manual = archetype === "manual";
+  // Where a coordinate is allowed to land. A laid-out drawing is held to the
+  // coarse grid, which is what makes it read as deliberate. A hand-placed copy
+  // is held to a fine one, because its coordinates were read off a picture and
+  // rounding them to the nearest 20 shifts every small piece by up to ten
+  // pixels — which is exactly what stops a copy looking like the original.
+  const place = manual ? fine : snap;
   // Square corners unless asked otherwise. The rounded rectangle is the
   // editor's default; the diagrams this follows draw boxes with corners.
   const corners =
@@ -963,8 +1068,26 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       // An empty label is a decision, not an omission: many logos carry their
       // own name, and repeating it under the picture is what makes a copy of
       // a reference diagram look wrong.
+      // No label means the id is drawn, which is a convenience when the id is
+      // a word like "api" and a trap when it is "card3". Say which happened,
+      // because a box captioned with its own id is never what was wanted.
       const named = node.label === undefined ? node.id : String(node.label);
-      const text = wrap(named, plain ? 20 : art ? 18 : 24);
+      if (node.label === undefined)
+        warnings.push(
+          `Node "${node.id}" has no label, so its id was drawn as its name. Pass label: "" to draw no text.`,
+        );
+      // A box placed by hand wraps to the width it was given. Wrapping to a
+      // fixed count instead is how a label ran out past the edge of the very
+      // box it was supposed to sit in. A plain node is not a box — its name
+      // sits beside or under the picture with the whole canvas to spread into
+      // — so the width it was given says nothing about where its name may go.
+      const room = plain ? NaN : Number(node?.at?.w);
+      const inside = art ? room - ICON_GAP * 2 - ICON - 16 : room - PADDING * 2;
+      const fits =
+        Number.isFinite(inside) && inside > 0
+          ? Math.max(4, Math.floor(inside / (FONT_SIZE * WIDTH_RATIO)))
+          : null;
+      const text = wrap(named, fits ?? (plain ? 20 : art ? 18 : 24));
       const size = measure(text, FONT_SIZE);
       if (plain)
         return [
@@ -1038,7 +1161,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const x = read(at.x);
     const y = read(at.y);
     if (x === null || y === null) return null;
-    return { x: snap(x), y: snap(y), w: read(at.w), h: read(at.h) };
+    return { x: place(x), y: place(y), w: read(at.w), h: read(at.h) };
   };
   const layout = manual
     ? (() => {
@@ -1054,8 +1177,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           boxes.set(node.id, {
             x: spot?.x ?? 0,
             y: spot?.y ?? 0,
-            width: snap(spot?.w ?? size.width),
-            height: snap(spot?.h ?? size.height),
+            width: place(spot?.w ?? size.width),
+            height: place(spot?.h ?? size.height),
           });
         }
         // Outermost boundaries first, so a nested one draws on top of the one
@@ -1074,8 +1197,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
             zone,
             x: spot.x,
             y: spot.y,
-            width: snap(spot.w ?? 200),
-            height: snap(spot.h ?? 200),
+            width: place(spot.w ?? 200),
+            height: place(spot.h ?? 200),
           }));
         return { boxes, rects, width: 0, height: 0 };
       })()
@@ -1262,7 +1385,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         : null;
       const area = art
         ? {
-            x: snap(placed.x + (placed.width - art.width) / 2),
+            x: place(placed.x + (placed.width - art.width) / 2),
             y: placed.y,
             width: art.width,
             height: art.height,
@@ -1290,9 +1413,9 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           }),
         );
       const spot = size.art
-        ? besideBox(area, measured, outside === "inside" ? "below" : outside)
+        ? besideBox(area, measured, outside === "inside" ? "below" : outside, place)
         : {
-            x: snap(area.x + (area.width - measured.width) / 2),
+            x: place(area.x + (area.width - measured.width) / 2),
             y: area.y,
           };
       if (size.text.trim())
@@ -1396,8 +1519,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const area = {
       x: spot.x,
       y: spot.y,
-      width: snap(spot.w ?? 320),
-      height: snap(spot.h ?? 120),
+      width: place(spot.w ?? 320),
+      height: place(spot.h ?? 120),
     };
     const remember = (box) => {
       if (extra.id) boxes.set(String(extra.id), box);
@@ -1412,10 +1535,10 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         .map((line) => String(line).slice(0, 200));
       const body = lines.join("\n");
       const measured = measure(body, FONT_SIZE);
-      const height = snap(
+      const height = place(
         spot.h ?? CODE_BAR + CODE_PAD * 2 + Math.max(measured.height, 40),
       );
-      const width = snap(
+      const width = place(
         spot.w ?? Math.max(360, measured.width + CODE_PAD * 2),
       );
       const panel = element("rectangle", {
@@ -1435,8 +1558,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       CODE_LIGHTS.forEach((colour, index) => {
         elements.push(
           element("ellipse", {
-            x: snap(area.x + CODE_PAD + index * 28),
-            y: snap(area.y + 16),
+            x: place(area.x + CODE_PAD + index * 28),
+            y: place(area.y + 16),
             width: 16,
             height: 16,
             backgroundColor: colour,
@@ -1455,8 +1578,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           plainText(
             headline,
-            snap(area.x + (width - size.width) / 2),
-            snap(top),
+            place(area.x + (width - size.width) / 2),
+            place(top),
             fontFamily,
             TITLE_SIZE,
             "#ffffff",
@@ -1474,12 +1597,12 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         if (!(at >= 1 && at <= lines.length)) continue;
         elements.push(
           element("rectangle", {
-            x: snap(area.x + CODE_PAD - 8),
-            y: snap(top + (at - 1) * lineHeight - 2),
-            width: snap(
+            x: place(area.x + CODE_PAD - 8),
+            y: place(top + (at - 1) * lineHeight - 2),
+            width: place(
               measure(lines[at - 1], FONT_SIZE).width + 16,
             ),
-            height: snap(lineHeight),
+            height: place(lineHeight),
             backgroundColor: CODE_MARK,
             fillStyle: "solid",
             strokeColor: CODE_MARK,
@@ -1493,8 +1616,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           plainText(
             body,
-            snap(area.x + CODE_PAD),
-            snap(top),
+            place(area.x + CODE_PAD),
+            place(top),
             FONTS.monospace,
             FONT_SIZE,
             CODE_INK,
@@ -1507,8 +1630,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       // A key down the side: a heading, then a coloured chip and a line of
       // words for each entry.
       const rows = (Array.isArray(extra.rows) ? extra.rows : []).slice(0, 20);
-      const width = snap(spot.w ?? LEGEND_WIDTH);
-      const height = snap(
+      const width = place(spot.w ?? LEGEND_WIDTH);
+      const height = place(
         spot.h ??
           32 +
             (extra.heading ? ZONE_LABEL_SIZE * LINE_HEIGHT + 12 : 0) +
@@ -1532,27 +1655,27 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       // Rows are placed from where the row above actually landed. Working out
       // the next position and snapping it separately is how a heading and the
       // first row under it ended up overlapping.
-      let row = snap(area.y + 16);
+      let row = place(area.y + 16);
       if (extra.heading) {
         const headline = String(extra.heading).slice(0, MAX_LABEL);
         elements.push(
           plainText(
             headline,
-            snap(area.x + 16),
+            place(area.x + 16),
             row,
             fontFamily,
             ZONE_LABEL_SIZE,
             named?.stroke || ink,
           ),
         );
-        row = snap(row + measure(headline, ZONE_LABEL_SIZE).height + 12);
+        row = place(row + measure(headline, ZONE_LABEL_SIZE).height + 12);
       }
       for (const entry of rows) {
         const chip = COLORS[String(entry?.chip || "").toLowerCase()];
         if (chip)
           elements.push(
             element("rectangle", {
-              x: snap(area.x + 16),
+              x: place(area.x + 16),
               y: row,
               width: 20,
               height: 20,
@@ -1567,14 +1690,14 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           plainText(
             String(entry?.label || "").slice(0, MAX_LABEL),
-            snap(area.x + (chip ? 48 : 16)),
+            place(area.x + (chip ? 48 : 16)),
             row,
             fontFamily,
             SMALL_SIZE,
             ink,
           ),
         );
-        row = snap(row + LEGEND_ROW);
+        row = place(row + LEGEND_ROW);
       }
       continue;
     }
@@ -1585,11 +1708,11 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       const chips = (Array.isArray(extra.chips) ? extra.chips : []).slice(0, 24);
       const across = Math.max(1, Math.min(6, Number(extra.columns) || 2));
       const down = Math.ceil(chips.length / across) || 1;
-      const width = snap(spot.w ?? 440);
-      const cellWidth = snap((width - GRID * (across + 1)) / across);
-      const cellHeight = snap(Number(extra.row_height) || 60);
+      const width = place(spot.w ?? 440);
+      const cellWidth = place((width - GRID * (across + 1)) / across);
+      const cellHeight = place(Number(extra.row_height) || 60);
       const header = extra.heading ? ZONE_LABEL_SIZE + 16 : 0;
-      const height = snap(
+      const height = place(
         spot.h ?? header + GRID + down * (cellHeight + GRID),
       );
       const holder = element("rectangle", {
@@ -1612,8 +1735,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           plainText(
             words,
-            snap(area.x + (width - size.width) / 2),
-            snap(area.y + 12),
+            place(area.x + (width - size.width) / 2),
+            place(area.y + 12),
             fontFamily,
             ZONE_LABEL_SIZE,
             ink,
@@ -1626,8 +1749,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         const column = index % across;
         const row = Math.floor(index / across);
         const cell = element("rectangle", {
-          x: snap(area.x + GRID + column * (cellWidth + GRID)),
-          y: snap(area.y + header + GRID + row * (cellHeight + GRID)),
+          x: place(area.x + GRID + column * (cellWidth + GRID)),
+          y: place(area.y + header + GRID + row * (cellHeight + GRID)),
           width: cellWidth,
           height: cellHeight,
           backgroundColor: paint.fill,
@@ -1653,8 +1776,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     if (kind === "band") {
       // A strip across the foot of the page, which is where these diagrams put
       // the one line everybody is meant to leave with.
-      const width = snap(spot.w ?? 600);
-      const height = snap(spot.h ?? 56);
+      const width = place(spot.w ?? 600);
+      const height = place(spot.h ?? 56);
       const strip = element("rectangle", {
         x: area.x,
         y: area.y,
@@ -1684,7 +1807,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       // A plain rule between two halves of a page. Two columns compared side
       // by side are separated by one of these, not by two boxes.
       const across = (spot.w ?? 0) >= (spot.h ?? 0);
-      const length = snap(across ? spot.w ?? 400 : spot.h ?? 400);
+      const length = place(across ? spot.w ?? 400 : spot.h ?? 400);
       elements.push(
         element("line", {
           x: area.x,
@@ -1712,7 +1835,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     if (kind === "measure") {
       // A span with a head at each end and its size written above: how these
       // diagrams label a stretch of time on a bar.
-      const length = snap(spot.w ?? 200);
+      const length = place(spot.w ?? 200);
       const arrow = element("arrow", {
         x: area.x,
         y: area.y,
@@ -1739,8 +1862,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         elements.push(
           plainText(
             words,
-            snap(area.x + (length - size.width) / 2),
-            snap(area.y - size.height - 8),
+            place(area.x + (length - size.width) / 2),
+            place(area.y - size.height - 8),
             fontFamily,
             SMALL_SIZE,
             named?.stroke || ink,
@@ -1752,12 +1875,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
 
     if (kind === "text") {
       const words = String(extra.text || "").slice(0, MAX_LABEL);
-      const size =
-        extra.size === "large"
-          ? TITLE_SIZE
-          : extra.size === "small"
-          ? SMALL_SIZE
-          : FONT_SIZE;
+      const size = textSize(extra.size);
       const written = plainText(
         words,
         area.x,
@@ -1782,10 +1900,10 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     const words = wrap(String(extra.text || "").slice(0, MAX_LABEL), room);
     const headSize = heading ? measure(heading, FONT_SIZE) : { height: 0 };
     const bodySize = measure(words, FONT_SIZE);
-    const width = snap(
+    const width = place(
       spot.w ?? Math.max(200, Math.max(headSize.width || 0, bodySize.width) + 32),
     );
-    const height = snap(
+    const height = place(
       spot.h ?? headSize.height + bodySize.height + (heading ? 44 : 24),
     );
     const card = element("rectangle", {
@@ -1806,25 +1924,25 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     // Each line is placed from where the one above actually landed. Working out
     // the next position and snapping it separately is how a heading and the
     // words under it ended up overlapping by a few pixels.
-    let line = snap(area.y + 10);
+    let line = place(area.y + 10);
     if (heading) {
       elements.push(
         plainText(
           heading,
-          snap(area.x + (width - headSize.width) / 2),
+          place(area.x + (width - headSize.width) / 2),
           line,
           fontFamily,
           FONT_SIZE,
           named?.stroke || ink,
         ),
       );
-      line = snap(line + headSize.height + 12);
+      line = place(line + headSize.height + 12);
     }
     if (words.trim())
       elements.push(
         plainText(
           words,
-          snap(area.x + (width - bodySize.width) / 2),
+          place(area.x + (width - bodySize.width) / 2),
           line,
           fontFamily,
           FONT_SIZE,
@@ -1837,8 +1955,8 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     if (mark === "ok" || mark === "bad") {
       const good = mark === "ok";
       const dot = element("ellipse", {
-        x: snap(area.x + width - 44),
-        y: snap(area.y + (height - 28) / 2),
+        x: place(area.x + width - 44),
+        y: place(area.y + (height - 28) / 2),
         width: 28,
         height: 28,
         backgroundColor: good ? COLORS.green.fill : COLORS.red.fill,
@@ -1876,11 +1994,17 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         )}. Drawn as a plain arrow.`,
       );
     // Every other box is something this arrow must go around.
+    const asked_route = String(edge.route || "").toLowerCase();
     const path =
-      edge.route === "curved"
+      asked_route === "curved"
         ? curvedRoute(from, to)
-        : edge.route === "straight"
+        : asked_route === "straight"
         ? straightRoute(from, to)
+        : asked_route === "elbow" || (manual && !asked_route)
+        ? // A copy of a picture joins its boxes with a plain L. The dodging
+          // router below is for a drawing this engine laid out itself, where
+          // it knows what it put in the way.
+          elbowRoute(from, to)
         : route(
             from,
             to,
@@ -2133,7 +2257,10 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
   // most common of them, so a drawing that says nothing gets that one.
   if (spec.title) {
     const text = String(spec.title).slice(0, MAX_LABEL);
-    const size = measure(text, TITLE_SIZE);
+    // A heading in a reference picture is usually the editor's XL. L stays the
+    // default so existing drawings keep their proportions.
+    const headSize = textSize(style.title_size || "large");
+    const size = measure(text, headSize);
     const wanted = String(style.title_style || "").toLowerCase();
     const treatment = TITLE_STYLES.includes(wanted) ? wanted : "underline";
     if (style.title_style && !TITLE_STYLES.includes(wanted))
@@ -2159,7 +2286,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
         roughness: 0,
         roundness: corners,
       });
-      const bannerText = label(text, banner, fontFamily, "#1e1e1e", TITLE_SIZE);
+      const bannerText = label(text, banner, fontFamily, "#1e1e1e", headSize);
       banner.boundElements = [{ id: bannerText.id, type: "text" }];
       elements.unshift(banner, bannerText);
     } else if (treatment === "highlight") {
@@ -2179,7 +2306,7 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
       });
       elements.unshift(
         block,
-        plainText(text, left, top + 16, fontFamily, TITLE_SIZE, "#1e1e1e"),
+        plainText(text, left, place(top + 16), fontFamily, headSize, "#1e1e1e"),
       );
     } else if (treatment === "bar") {
       elements.unshift(
@@ -2195,15 +2322,15 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
           roughness: 0,
           roundness: null,
         }),
-        plainText(text, left, top + 12, fontFamily, TITLE_SIZE, ink),
+        plainText(text, left, place(top + 12), fontFamily, headSize, ink),
       );
     } else {
       const head = plainText(
         text,
         left,
-        top + 12,
+        place(top + 12),
         fontFamily,
-        TITLE_SIZE,
+        headSize,
         ink,
       );
       elements.unshift(head);
@@ -2264,12 +2391,24 @@ export function buildDiagram(spec, icons = new Map(), warnings = []) {
     }
   }
 
+  // The canvas opens at 100%. A scene saved at some other zoom exports at that
+  // zoom, and a picture measured to the pixel then comes back scaled, which is
+  // the one thing a copy must not do. The scroll puts the drawing's top-left
+  // just inside the corner so the whole thing is in view at 1:1.
+  const whole = extent(elements);
+  const appState = {
+    viewBackgroundColor: paper,
+    zoom: { value: 1 },
+    scrollX: whole ? Math.round(VIEW_MARGIN - whole.left) : 0,
+    scrollY: whole ? Math.round(VIEW_MARGIN - whole.top) : 0,
+    gridSize: null,
+  };
   return {
     type: "excalidraw",
     version: 2,
     source: "self-hosted",
     elements,
-    appState: { viewBackgroundColor: paper },
+    appState,
     files,
   };
 }
@@ -2292,7 +2431,8 @@ export const styleGuide = () => ({
       "nothing is placed for you: every node and boundary carries at: {x, y, w, h} in pixels. Use this to copy a picture exactly.",
   },
   node_label_places: LABEL_PLACES,
-  edge_routes: ["orthogonal", "straight", "curved"],
+  edge_routes: ["elbow", "orthogonal", "straight", "curved"],
+  text_sizes: TEXT_SIZES,
   extras: {
     note: "a card saying what something is, with an optional tick or cross",
     code: "a terminal window with lines, and highlight to pick one out",
@@ -2314,8 +2454,13 @@ export const styleGuide = () => ({
   },
   grid: {
     unit: GRID,
+    placed_by_hand: FINE_GRID,
     tile: `${MIN_WIDTH} x ${MIN_HEIGHT}`,
-    note: "The server places everything on this grid; you do not send coordinates.",
+    note: `A drawing this engine lays out sits on a ${GRID}px grid and you send no coordinates. A drawing placed by hand sits on a ${FINE_GRID}px one, so coordinates read off a picture land where you read them.`,
+  },
+  canvas: {
+    zoom: "100%",
+    note: "Every drawing is saved at 100% zoom, so what is exported is the size it was drawn.",
   },
   how_to_make_it_read_well: [
     "Give every node a role rather than a colour. One role looks the same everywhere.",
@@ -2327,7 +2472,9 @@ export const styleGuide = () => ({
     "Draw a node with shape plain — a big icon and its name underneath, no box — unless the thing really is a container or a region. Most diagrams here are drawn that way.",
     "Name every boundary. The name is drawn in a pill on its top edge; label_at says which corner.",
     "Use layout lanes when the diagram is tiers side by side, and bands when it is one topic per row.",
-    "Copying a picture somebody sent? Use layout manual and give every node and boundary at: {x, y, w, h} read off that picture, in pixels. Nothing is moved for you, so what you send is what is drawn.",
+    "Copying a picture somebody sent? Measure it, do not judge it by eye. Use layout manual and give every node, boundary and extra at: {x, y, w, h} read off that picture in pixels. Those land on a 5px grid, not the 20px one a laid-out drawing uses, so what you measured is what is drawn.",
+    "In a hand-placed drawing an edge turns once and comes in square unless you say otherwise, and two boxes that line up are joined straight. Ask for route straight only when the line really is a straight one.",
+    "Match the lettering to the picture: small 16, normal 20, large 28, xlarge 36. A heading in a reference picture is usually xlarge, and setting it at large draws it a fifth too small.",
     "A workflow or an explainer is rarely boxes alone. Reach for extras: a code window with the one line picked out, a note hung off a dashed line, a key panel down the side, a strip along the foot, a rule between two halves.",
     "Give the one path the picture is about a thicker line with width 3 or 4, and leave everything else at 1.",
   ],

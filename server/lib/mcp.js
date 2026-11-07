@@ -128,10 +128,10 @@ const edgeSchema = z.object({
     .optional()
     .describe("Line thickness. 1 is the default; use 3 or 4 for the main path of a workflow."),
   route: z
-    .enum(["orthogonal", "straight", "curved"])
+    .enum(["orthogonal", "straight", "curved", "elbow"])
     .optional()
     .describe(
-      "straight draws a direct line instead of right angles — what a fan-out from one box to a row of them looks like. curved sweeps a callout line from a note to the thing it talks about.",
+      "elbow turns once and comes square into the other box — the plain L these diagrams draw, and what a hand-placed drawing uses unless you say otherwise. orthogonal is the router that steps round whatever is in the way, for a drawing this engine laid out. straight draws a direct line. curved sweeps a callout from a note to the thing it talks about.",
     ),
 });
 const zoneSchema = z.object({
@@ -217,6 +217,12 @@ const specSchema = {
         .optional()
         .describe(
           "dark gives a dark page with the tiles drawn as outlines in their own colour",
+        ),
+      title_size: z
+        .enum(["small", "normal", "large", "xlarge"])
+        .optional()
+        .describe(
+          "How big the title is set: large (the default) or xlarge, which is what a heading in a reference picture usually is",
         ),
       title_style: z
         .enum(["underline", "plain", "highlight", "bar", "banner"])
@@ -311,7 +317,12 @@ const specSchema = {
           .enum(["ok", "bad"])
           .optional()
           .describe("For note: a tick or a cross on the card"),
-        size: z.enum(["small", "normal", "large"]).optional(),
+        size: z
+          .enum(["small", "normal", "medium", "large", "xlarge"])
+          .optional()
+          .describe(
+            "Letter size, the editor's own four steps: small 16, normal (medium) 20, large 28, xlarge 36",
+          ),
       }),
     )
     .optional()
