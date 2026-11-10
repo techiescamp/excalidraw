@@ -18,14 +18,46 @@ const at = (pixels, index) => [
 ];
 const apart = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
+/**
+ * The page colour, however the caller wrote it.
+ *
+ * Everything in here works on [r, g, b], but a colour is written `#ffffff`
+ * everywhere else in these tools and that is what a caller passes. Handed the
+ * string, the old code compared a number against `"#"`, got NaN, quietly
+ * removed nothing at all, and then fell over on `colour.map` at the very end.
+ * So both forms are read here, and anything else is refused by name rather
+ * than failing somewhere further on.
+ */
+const rgbOf = (value) => {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    if (value.length !== 3 || value.some((part) => !Number.isFinite(part)))
+      throw new Error(
+        "A background colour given as a list must be three numbers: red, green and blue.",
+      );
+    return value.map((part) => Math.max(0, Math.min(255, Math.round(part))));
+  }
+  const text = String(value).trim().replace(/^#/, "");
+  // Both the long form and the three-letter shorthand a person types.
+  const full =
+    text.length === 3
+      ? text
+          .split("")
+          .map((part) => part + part)
+          .join("")
+      : text;
+  if (!/^[0-9a-fA-F]{6}$/.test(full))
+    throw new Error(
+      `"${value}" is not a colour. Write it as #rrggbb, or leave it out and the corners are read instead.`,
+    );
+  return [0, 2, 4].map((start) => parseInt(full.slice(start, start + 2), 16));
+};
+
 /** The colour the four corners agree on, which is the page behind the icon. */
 const backgroundOf = ({ width, height, pixels }) => {
-  const corners = [
-    0,
-    width - 1,
-    (height - 1) * width,
-    height * width - 1,
-  ].map((index) => at(pixels, index));
+  const corners = [0, width - 1, (height - 1) * width, height * width - 1].map(
+    (index) => at(pixels, index),
+  );
   const counts = corners.map(
     (corner) => corners.filter((other) => apart(corner, other) <= 12).length,
   );
@@ -234,12 +266,7 @@ const trim = ({ width, height, pixels }) => {
 export function cutIcon(
   file,
   box,
-  {
-    tolerance = 12,
-    background = null,
-    drop_edges = false,
-    keep = "all",
-  } = {},
+  { tolerance = 12, background = null, drop_edges = false, keep = "all" } = {},
 ) {
   const picture = readPng(file);
   // No rectangle means the picture is already cropped to the icon, which is
@@ -252,7 +279,7 @@ export function cutIcon(
   // used for the removal: told the wrong colour, the removal does nothing and
   // a check against that same wrong colour would cheerfully report success.
   const page = backgroundOf(cut);
-  const colour = background || page;
+  const colour = rgbOf(background) || page;
   const edged = clearEdgeBackground(cut, colour, tolerance);
   const trapped = clearTrappedBackground(edged.picture, colour, tolerance);
   const cleared = edged.cleared + trapped.cleared;

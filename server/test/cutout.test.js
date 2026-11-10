@@ -34,7 +34,9 @@ test("reading and writing a PNG", async (t) => {
     assert.equal(read.width, 120);
     assert.equal(read.height, 120);
     // The shape is where it was put, and the page is around it.
-    const at = (x, y) => [...read.pixels.subarray((y * 120 + x) * 4, (y * 120 + x) * 4 + 4)];
+    const at = (x, y) => [
+      ...read.pixels.subarray((y * 120 + x) * 4, (y * 120 + x) * 4 + 4),
+    ];
     assert.deepEqual(at(50, 50), [80, 40, 200, 255]);
     assert.deepEqual(at(5, 5), [240, 240, 240, 255]);
     assert.deepEqual(readPng(writePng(read)).pixels, read.pixels);
@@ -55,7 +57,10 @@ test("cutting an icon out of a picture", async (t) => {
     assert.equal(cut.kept, 100, "what is left is all artwork");
     assert.equal(cut.leftover, 0, "none of the page is still in it");
     // The page around it is gone.
-    assert.ok(cut.removed > 50, `most of the rectangle was page: ${cut.removed}`);
+    assert.ok(
+      cut.removed > 50,
+      `most of the rectangle was page: ${cut.removed}`,
+    );
     const art = readPng(cut.png);
     assert.equal(art.width, 40);
     assert.deepEqual(
@@ -93,6 +98,54 @@ test("cutting an icon out of a picture", async (t) => {
     assert.equal(cut.width, 40);
   });
 
+  await t.test(
+    "the colour can be written the way it is written everywhere else",
+    () => {
+      // #rrggbb is how a colour is given in every other tool here, so it is what
+      // a caller passes. It used to be compared against as a string: every
+      // distance came out NaN, nothing was removed, and the cut then fell over
+      // on colour.map at the very end.
+      const cut = cutIcon(
+        picture(),
+        { x: 0, y: 0, w: 120, h: 120 },
+        { background: "#f0f0f0" },
+      );
+      assert.equal(cut.background, "#f0f0f0");
+      assert.equal(
+        cut.width,
+        40,
+        "the page came away and it trimmed to the shape",
+      );
+      assert.equal(cut.leftover, 0);
+    },
+  );
+
+  await t.test("the three-letter shorthand is read too", () => {
+    const cut = cutIcon(
+      picture(),
+      { x: 0, y: 0, w: 120, h: 120 },
+      { background: "#f0f" },
+    );
+    // Nothing matches that colour, so nothing comes away — but it is read as a
+    // colour rather than throwing.
+    assert.equal(cut.background, "#ff00ff");
+    assert.equal(cut.removed, 0);
+  });
+
+  await t.test(
+    "something that is not a colour is named, not guessed at",
+    () => {
+      assert.throws(
+        () => cutIcon(picture(), null, { background: "mauve" }),
+        /not a colour/,
+      );
+      assert.throws(
+        () => cutIcon(picture(), null, { background: [12, 34] }),
+        /three numbers/,
+      );
+    },
+  );
+
   await t.test("a region that is all background is refused", () => {
     assert.throws(
       () => cutIcon(picture(), { x: 0, y: 0, w: 20, h: 20 }),
@@ -123,10 +176,11 @@ test("cutting an icon out of a picture", async (t) => {
     assert.equal(cut.leftover, 0, "the middle of the ring came away as well");
     const art = readPng(cut.png);
     assert.equal(
-      art.pixels[(Math.floor(art.height / 2) * art.width +
-        Math.floor(art.width / 2)) *
-        4 +
-        3],
+      art.pixels[
+        (Math.floor(art.height / 2) * art.width + Math.floor(art.width / 2)) *
+          4 +
+          3
+      ],
       0,
       "the middle of the icon is transparent",
     );
