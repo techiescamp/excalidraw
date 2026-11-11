@@ -18,7 +18,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import pg from "pg";
+import { createPool } from "./lib/database.js";
+import { STORAGE_TIMEOUTS } from "./lib/storage-timeouts.js";
 import {
   S3Client,
   PutObjectCommand,
@@ -41,7 +42,9 @@ const {
   COOKIE_SECURE = "true",
 } = process.env;
 
-const db = new pg.Pool({ connectionString: DATABASE_URL, max: 10 });
+// Held to the limits in lib/database.js — read the note there before loosening
+// any of them.
+const db = createPool(DATABASE_URL);
 
 // ── storage driver ───────────────────────────────────────────────────────────
 // S3/Spaces when credentials are present; local disk otherwise, so the instance
@@ -99,6 +102,8 @@ const store = {
   keyId: null,
 };
 
+// The bucket is written to while a drawing's row lock is held, so a request
+// that never answers must not wait forever — see lib/storage-timeouts.js.
 const buildClient = (cfg) =>
   new S3Client({
     region: cfg.region,
@@ -106,6 +111,7 @@ const buildClient = (cfg) =>
       ? { endpoint: cfg.endpoint, forcePathStyle: cfg.forcePathStyle === true }
       : {}),
     credentials: { accessKeyId: cfg.keyId, secretAccessKey: cfg.secret },
+    requestHandler: { ...STORAGE_TIMEOUTS },
   });
 
 const applyStorage = (cfg) => {
