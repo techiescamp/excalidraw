@@ -74,11 +74,18 @@ jobs:
       - name: Health check
         id: health
         run: |
+          site="https://${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}"
           for attempt in 1 2 3 4 5 6; do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' \
-              "https://${{ secrets.DEPLOY_HOST_NAME || 'draw.devopsproject.dev' }}/api/me" || echo 000)
-            # 401 is a healthy answer here: the endpoint replies, we are not signed in.
-            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
+            # /api/me never touches the database — it refuses an unsigned
+            # request before that — so on its own it passed on 11 Nov 2026
+            # while every save on the site hung. /healthz runs a query, so it
+            # only answers 200 when the database is answering too. Both carry
+            # a time limit: a hung endpoint is a failure, not a stuck job.
+            me=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$site/api/me" || echo 000)
+            db=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$site/healthz" || echo 000)
+            echo "attempt $attempt: /api/me $me, /healthz $db"
+            # 401 is a healthy answer from /api/me: it replies, we are not signed in.
+            if { [ "$me" = "401" ] || [ "$me" = "200" ]; } && [ "$db" = "200" ]; then
               echo "ok=true" >> "$GITHUB_OUTPUT"; exit 0
             fi
             sleep 5
